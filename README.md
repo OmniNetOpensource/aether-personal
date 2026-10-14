@@ -38,7 +38,7 @@
 - Main Runtime：`messageList` 上下文，按用户串行处理。
 - Main 的四个工具：`assign_subagents`、`send_message`、`search_message`、`read_message`。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。
-- Subagent 补充消息，以及携带 `task_id` 的进度、完成、失败回报。
+- Subagent 补充消息，以及携带 `subagent_id` 的进度、完成、失败回报。
 - 按用户权限搜索和读取历史消息。
 - 通过 OpenRouter 调用模型。
 - 搜索、HTTP API、MCP 等外部服务调用。

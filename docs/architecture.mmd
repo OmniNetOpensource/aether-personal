@@ -15,7 +15,7 @@ flowchart TD
             SEARCH["search_message"]
             READ["read_message"]
 
-            MAIN <-->|"任务说明 / task_id"| ASSIGN
+            MAIN <-->|"任务说明 / subagent_id"| ASSIGN
             MAIN <-->|"发送消息 / 投递回执"| SEND
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
@@ -33,13 +33,13 @@ flowchart TD
         MESSAGES -->|"消息保存后直接触发 main"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
-        ASSIGN <-->|"记录任务后异步启动 / 立即返回 task_id"| SUB
+        ASSIGN <-->|"记录 Subagent 后异步启动 / 立即返回 subagent_id"| SUB
         SEND <-->|"投递给用户或指定 subagent / 回执"| MESSAGES
         SEARCH <-->|"按用户权限搜索历史"| DB
         READ <-->|"按 ID 和消息归属读取"| DB
 
         MESSAGES -->|"投递给 sub 的补充消息"| SUB
-        SUB -.->|"进度 / 完成 / 失败回报，携带 task_id"| MESSAGES
+        SUB -.->|"进度 / 完成 / 失败回报，携带 subagent_id"| MESSAGES
         SUB <-->|"保存 Run 状态与执行轨迹"| DB
     end
 
