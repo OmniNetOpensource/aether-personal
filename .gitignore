@@ -1,0 +1,14 @@
+# 系统文件
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/
+
+# 环境变量与密钥
+.env
+.env.*
+!.env.example
+
+# Go 构建产物
+/backend/bin/
