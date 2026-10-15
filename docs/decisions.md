@@ -37,7 +37,7 @@
 | 维护者提交邮箱 | 使用 GitHub noreply 邮箱，避免在公开仓库中暴露真实邮箱 |
 | `.gitignore` | 忽略系统文件、编辑器目录、`.env` 类文件和 `/backend/bin/` |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`infra/`、`docs/` |
-| 数据库 | PostgreSQL 18 |
+| 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`） |
 | 本地 dev 数据库 | Docker Compose |
 | 后端配置来源 | 只读环境变量；dev 使用未提交的 `.env` 由启动命令加载，仓库提供 `.env.example` |
 | 运行环境标识 | 必填环境变量 `APP_ENV`，只允许 `dev` / `prod`，其他值启动报错 |
@@ -185,6 +185,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `report_type` | text | Subagent 汇报类型：`progress` / `completed` / `failed`；否则为空 |
 | `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |
 | `is_summary` | boolean | 是否为压缩摘要，默认 false |
+| `embedding` | vector(1536) | 消息的向量；为空表示尚未计算 |
 | `created_at` | timestamptz | 写入（到达）时间 |
 
 排序与待读规则：
@@ -204,6 +205,9 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 压缩不删除、不修改任何旧消息。`messages` 始终保存完整历史，`search_message` / `read_message` 在完整历史中检索，聊天界面也可回看全部记录。
 - 未采用单独的 `compactions` 表：摘要本身就是模型看到的一条消息，放在消息列表中最简单。
 - 历史检索采用混合搜索：关键词搜索（精确词、编号、人名）与向量搜索（意思相近）结合。向量由 OpenRouter 的 embedding 接口（`POST /api/v1/embeddings`）生成，与聊天模型共用同一个 Key。搜索方式封装在 `search_message` 内部；数据库侧均为增量改动（加列、加索引、加扩展），不修改已有字段。
+- embedding 模型固定为 `google/gemini-embedding-2`，请求时指定 `dimensions = 1536`，存为 `vector(1536)`，可使用 pgvector 的 HNSW 索引（普通向量上限 2000 维）。模型写死在代码中、不开放给部署者配置，因为列的维度与模型绑定。选择理由：多语言能力强，且文本与图片处于同一向量空间，便于将来检索图片。
+- 向量异步计算：消息保存时 `embedding` 为空，由后台补算；embedding 接口故障不影响消息保存与聊天。
+- 数据库镜像使用 `pgvector/pgvector:pg18`（官方 PostgreSQL 18 加装 pgvector 扩展）。
 
 ### `steps`
 
@@ -255,7 +259,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 新消息加入上下文时的并发入库规则。
 - Subagent 并发上限、补充消息处理、取消、超时、失败和恢复规则。
 - 压缩的触发时机与摘要写法。
-- 混合搜索的细节：embedding 模型与维度、向量计算时机、中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索；完整消息读取规则。
+- 混合搜索的细节：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；完整消息读取规则。
 - 消息持久化与触发执行之间的故障恢复规则。
 - SSE 事件类型、事件保存、断线续传和各平台的连接恢复行为。
 - 搜索服务、HTTP 工具、MCP 接入方式及执行权限。

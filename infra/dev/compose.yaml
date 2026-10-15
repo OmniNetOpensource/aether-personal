@@ -2,7 +2,7 @@ name: aether-personal-dev
 
 services:
   postgres:
-    image: postgres:18
+    image: pgvector/pgvector:pg18
     environment:
       POSTGRES_DB: aether
       POSTGRES_USER: aether

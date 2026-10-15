@@ -18,7 +18,7 @@
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1`：手写 SQL，生成带类型的 Go 调用代码 |
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
-| 数据库 | PostgreSQL 18；本地 dev 使用 Docker Compose |
+| 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
 | 模型服务 | OpenRouter；具体模型待定 |
 | 密钥与费用 | OpenRouter / Resend Key 由每个部署者自行配置，费用自理 |
 | 登录 | 邮箱验证码 |
