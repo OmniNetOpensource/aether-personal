@@ -140,6 +140,9 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 主键使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）。
 - 参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
 - 不建 `runs` 表。Main 可能持续运行，“一轮”的边界不清晰；执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，Subagent 状态记在 `subagents.status`，按用户串行处理用 PostgreSQL 咨询锁（advisory lock），重启恢复依据待读消息和未得到结果的工具调用判断。
+- Subagent 与 Main 之间只有消息，没有单独的“汇报”类型：Subagent 用 `send_message` 发消息给 Main，进度与结果都只是消息内容。
+- `subagents.status` 由运行时维护，不依赖消息内容。Subagent 因错误无法继续时，运行时向 Main 的列表写入一条 `sender = system`、`sender_subagent_id` 为该 Subagent 的通知。
+- Subagent 停下后再收到 Main 的消息，会被重新唤醒继续工作。
 - `subagents` 不保存任务说明：Main 给出的任务说明是该 Subagent 列表中的第一条消息，之后的补充与修改是后续消息；单独保存会重复且会过时。若界面需要简短名称，届时再加。
 - `steps` 记录每一次模型请求的元信息，不重复保存请求内容；某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
 
@@ -180,9 +183,8 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `sequence` | bigint | 全局递增序号，用于排序；为空表示待读 |
 | `role` | text | `system` / `user` / `assistant` / `tool` |
 | `content` | jsonb | 按 OpenRouter 格式保存的内容 |
-| `sender` | text | 别人发来的消息填发送方：`user` / `main` / `subagent`；否则为空 |
-| `sender_subagent_id` | uuid | 发送方是 Subagent 时填 |
-| `report_type` | text | Subagent 汇报类型：`progress` / `completed` / `failed`；否则为空 |
+| `sender` | text | 别人发来的消息填发送方：`user` / `main` / `subagent` / `system`；否则为空 |
+| `sender_subagent_id` | uuid | 发送方是 Subagent 时填；`system` 发出的与某个 Subagent 相关的通知也填该 Subagent |
 | `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |
 | `is_summary` | boolean | 是否为压缩摘要，默认 false |
 | `embedding` | vector(1536) | 消息的向量；为空表示尚未计算 |
@@ -237,7 +239,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - Main 提供 `assign_subagents`、`send_message`、`search_message`、`read_message` 四个工具。
 - `assign_subagents` 记录 Subagent 后异步启动，立即返回 `subagent_id`。
 - Subagent 按任务创建，使用独立上下文，后台执行，限额并行。
-- Subagent 接收补充消息，并以 `subagent_id` 关联进度、完成和失败回报。
+- Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知（按用户确认，替代原图中的“进度 / 完成 / 失败回报”）。
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。

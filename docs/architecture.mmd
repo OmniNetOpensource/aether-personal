@@ -39,7 +39,7 @@ flowchart TD
         READ <-->|"按 ID 和消息归属读取"| DB
 
         MESSAGES -->|"投递给 sub 的补充消息"| SUB
-        SUB -.->|"进度 / 完成 / 失败回报，携带 subagent_id"| MESSAGES
+        SUB -.->|"send_message 发给 main；失败时由运行时代发通知"| MESSAGES
         SUB <-->|"保存 Run 状态与执行轨迹"| DB
     end
 
