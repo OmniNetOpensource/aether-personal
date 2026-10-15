@@ -169,7 +169,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | --- | --- | --- |
 | `id` | uuid | 主键，即 `subagent_id` |
 | `user_id` | uuid | 所属用户 |
-| `status` | text | `running` / `completed` / `failed` |
+| `status` | text | `running`（正在工作）/ `idle`（停下，等待新消息）/ `failed`（因错误停下） |
 | `created_at` | timestamptz | 创建时间 |
 | `finished_at` | timestamptz | 结束时间，未结束时为空 |
 
