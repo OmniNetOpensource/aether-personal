@@ -34,7 +34,7 @@
 - Flutter 聊天与任务界面，HTTP、SSE 和断线恢复。
 - Go API：认证、收发消息、SSE。
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
-- PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；具体数据结构待确认。
+- PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[决策记录](docs/decisions.md#数据结构)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
 - Main 的四个工具：`assign_subagents`、`send_message`、`search_message`、`read_message`。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。

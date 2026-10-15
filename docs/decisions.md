@@ -124,7 +124,91 @@ HTTP 层已选择 Go 标准库 `net/http`。
 
 每个用户只有一条长期主对话，使用同一份 `messageList`。
 
-Main 处理期间收到用户新消息时，当前模型请求或工具调用继续执行；待该请求或调用结束，在下一次模型调用前将新消息加入上下文。具体消息排序、工具调用记录的完整性以及并发入库规则仍待确认。
+Main 处理期间收到用户新消息时，当前模型请求或工具调用继续执行；待该请求或调用结束，在下一次模型调用前将新消息加入上下文。排序方式见下节“数据结构”；并发入库规则仍待确认。
+
+## 数据结构
+
+用户原话：
+
+> 任何消息列表，本质上都是一个 agent 的上下文列表。用户的是 main，其他 subagent 是他们自己的。
+
+因此：
+
+- 只有 Agent 拥有消息列表：每个用户的 Main 一份，每个 Subagent 各一份。用户没有独立列表，用户与 Main 的对话就是 Main 的列表，聊天界面读取 Main 的列表。
+- 不建 agents 表：Main 由 `user_id` 确定，Subagent 由 `subagents` 表确定。
+- 通信消息与模型上下文存在同一张 `messages` 表中。A 发给 B 的消息作为一行写入 B 的列表，记录发送方；发送方一侧已有对应的工具调用记录，同一内容允许在两侧各存一份。
+- 主键使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）。
+- 参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
+- 不建 `runs` 表。Main 可能持续运行，“一轮”的边界不清晰；执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，Subagent 状态记在 `subagents.status`，按用户串行处理用 PostgreSQL 咨询锁（advisory lock），重启恢复依据待读消息和未得到结果的工具调用判断。
+- `steps` 记录每一次模型请求的元信息，不重复保存请求内容；某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
+
+共 4 张表：
+
+| 表 | 用途 |
+| --- | --- |
+| `users` | 用户；每个用户即一个 Main |
+| `subagents` | Main 派出的每个 Subagent |
+| `messages` | 每个 Agent 的上下文列表，即 `messageList` |
+| `steps` | 每一次模型请求的记录 |
+
+### `users`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键 |
+| `email` | text | 登录邮箱，唯一 |
+| `created_at` | timestamptz | 注册时间 |
+
+### `subagents`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键，即 `subagent_id` |
+| `user_id` | uuid | 所属用户 |
+| `instructions` | text | Main 创建时给的任务说明 |
+| `status` | text | `running` / `completed` / `failed` |
+| `created_at` | timestamptz | 创建时间 |
+| `finished_at` | timestamptz | 结束时间，未结束时为空 |
+
+### `messages`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键，`read_message` 使用的 ID |
+| `user_id` | uuid | 所属用户 |
+| `subagent_id` | uuid | 属于哪个 Agent 的列表：为空表示 Main，否则为该 Subagent |
+| `sequence` | bigint | 全局递增序号，用于排序；为空表示待读 |
+| `role` | text | `system` / `user` / `assistant` / `tool` |
+| `content` | jsonb | 按 OpenRouter 格式保存的内容 |
+| `sender` | text | 别人发来的消息填发送方：`user` / `main` / `subagent`；否则为空 |
+| `sender_subagent_id` | uuid | 发送方是 Subagent 时填 |
+| `report_type` | text | Subagent 汇报类型：`progress` / `completed` / `failed`；否则为空 |
+| `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |
+| `created_at` | timestamptz | 写入（到达）时间 |
+
+排序与待读规则：
+
+- `sequence` 由数据库序列发号，整张表共用一个递增计数器。
+- Agent 自己产生的内容（模型输出、工具结果）写入时直接取号。
+- 别人发来的消息到达时 `sequence` 为空，即待读；该 Agent 下一次调用模型前，按 `created_at` 顺序依次取号。
+- `messageList` 为该 Agent 列表中 `sequence` 不为空的行，按 `sequence` 排序；由此保证工具调用之后紧跟工具结果。
+
+### `steps`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键 |
+| `user_id` | uuid | 所属用户 |
+| `subagent_id` | uuid | 为空表示 Main 的请求，否则为该 Subagent 的请求 |
+| `model` | text | 使用的模型 |
+| `input_tokens` | integer | 输入 token 数 |
+| `output_tokens` | integer | 输出 token 数 |
+| `cost` | numeric | 费用 |
+| `error` | text | 失败原因，成功时为空 |
+| `started_at` | timestamptz | 开始时间 |
+| `finished_at` | timestamptz | 结束时间 |
+
+登录用的验证码与会话表、SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 
 ## 模型服务与费用
 
@@ -151,12 +235,12 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - sqlc 生成配置；Flutter 版本；其余后端和前端依赖选择。
 - 文档语言（中文、英文或双语）。
 - Main 与 Subagent 的具体模型及模型配置入口。
-- 用户数据与 Main 逻辑身份的表示方法。
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
 - 登录会话的有效期、存储方式、多设备行为和退出规则。
 - Resend 发信域名及发件人。
-- 消息、Subagent、Run 和执行轨迹的数据结构及关联关系。
-- 新消息加入 Main 上下文时的消息排序、工具调用记录完整性和并发入库规则。
+- 数据结构细节：状态与角色等字段用枚举类型还是 text 加约束；Subagent 是否需要“已取消”状态；索引；删除用户时的数据处理。
+- 聊天界面显示 Main 列表中的哪些内容。
+- 新消息加入上下文时的并发入库规则。
 - Subagent 并发上限、补充消息处理、取消、超时、失败和恢复规则。
 - 上下文增长、历史搜索和完整消息读取规则。
 - 消息持久化与触发执行之间的故障恢复规则。
