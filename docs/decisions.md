@@ -238,6 +238,10 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `started_at` | timestamptz | 开始时间 |
 | `finished_at` | timestamptz | 结束时间 |
 
+### 外键
+
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`。误删由“仅企业管理员可删除”与数据库备份防范。
+
 ### 索引
 
 只为已知的高频查询建索引；索引可随时增删，不影响已有数据。
@@ -284,7 +288,6 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
 - 登录会话的有效期、存储方式、多设备行为和退出规则。
 - Resend 发信域名及发件人。
-- 数据结构细节：删除用户时的数据处理（外键规则）。
 - 企业管理员：身份与权限如何表示、本仓库后端为管理后台提供哪些接口、管理后台仓库的技术选型。
 - 按用户的用量与费用控制（额度、频率限制、统计）。
 - 多实例部署下的 SSE 推送与后台向量计算。
