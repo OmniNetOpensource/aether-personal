@@ -227,6 +227,22 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `started_at` | timestamptz | 开始时间 |
 | `finished_at` | timestamptz | 结束时间 |
 
+### 索引
+
+只为已知的高频查询建索引；索引可随时增删，不影响已有数据。
+
+| 表 | 索引 | 服务的查询 |
+| --- | --- | --- |
+| `users` | `email` 唯一 | 登录时按邮箱查找；保证邮箱不重复 |
+| `subagents` | `(user_id)` | 列出某用户的 Subagent |
+| `messages` | `sequence` 唯一 | 保证序号不重复（待读消息为空值，不受限制） |
+| `messages` | `(user_id, subagent_id, sequence)` | 读取某 Agent 的 `messageList`，查找其待读消息 |
+| `messages` | `(user_id, subagent_id, sequence) WHERE is_summary` | 查找某 Agent 最新的摘要 |
+| `messages` | `(id) WHERE embedding IS NULL` | 后台查找尚未计算向量的消息 |
+| `messages` | `embedding` HNSW | 向量搜索 |
+
+`steps` 暂不建索引，待费用统计或执行轨迹展示时再加。关键词搜索所需索引在实现 `search_message` 时再定。
+
 登录用的验证码与会话表、SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 
 ## 模型服务与费用
@@ -257,7 +273,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
 - 登录会话的有效期、存储方式、多设备行为和退出规则。
 - Resend 发信域名及发件人。
-- 数据结构细节：索引；删除用户时的数据处理。
+- 数据结构细节：删除用户时的数据处理。
 - 聊天界面显示 Main 列表中的哪些内容。
 - 新消息加入上下文时的并发入库规则。
 - Subagent 并发上限、补充消息处理、取消、超时、失败和恢复规则。
