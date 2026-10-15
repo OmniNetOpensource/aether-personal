@@ -1,6 +1,6 @@
 # aether-personal
 
-开源的个人 Agent 项目，目标是让每个人都能部署自己的 personal agent，并欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 Flutter 六个平台、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
+企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 Flutter 六个平台、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
 
 当前已完成后端最小骨架：环境变量配置、`GET /healthz` 和本地 dev 数据库；业务功能仍待逐项确认和实现。任何微决策都须先询问用户，得到答复后再执行。
 
@@ -20,7 +20,7 @@
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
 | 模型服务 | OpenRouter；具体模型待定 |
-| 密钥与费用 | OpenRouter / Resend Key 由每个部署者自行配置，费用自理 |
+| 密钥与费用 | OpenRouter / Resend Key 由部署的企业配置，费用由该企业承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
