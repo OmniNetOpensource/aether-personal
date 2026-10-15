@@ -140,6 +140,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 主键使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）。
 - 参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
 - 不建 `runs` 表。Main 可能持续运行，“一轮”的边界不清晰；执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，Subagent 状态记在 `subagents.status`，按用户串行处理用 PostgreSQL 咨询锁（advisory lock），重启恢复依据待读消息和未得到结果的工具调用判断。
+- `subagents` 不保存任务说明：Main 给出的任务说明是该 Subagent 列表中的第一条消息，之后的补充与修改是后续消息；单独保存会重复且会过时。若界面需要简短名称，届时再加。
 - `steps` 记录每一次模型请求的元信息，不重复保存请求内容；某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
 
 共 4 张表：
@@ -165,7 +166,6 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | --- | --- | --- |
 | `id` | uuid | 主键，即 `subagent_id` |
 | `user_id` | uuid | 所属用户 |
-| `instructions` | text | Main 创建时给的任务说明 |
 | `status` | text | `running` / `completed` / `failed` |
 | `created_at` | timestamptz | 创建时间 |
 | `finished_at` | timestamptz | 结束时间，未结束时为空 |
