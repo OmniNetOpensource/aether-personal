@@ -138,11 +138,12 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 不建 agents 表：Main 由 `user_id` 确定，Subagent 由 `subagents` 表确定。
 - 通信消息与模型上下文存在同一张 `messages` 表中。A 发给 B 的消息作为一行写入 B 的列表，记录发送方；发送方一侧已有对应的工具调用记录，同一内容允许在两侧各存一份。
 - 主键使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）。
+- 只有固定几个取值的字段（如 `status`、`role`、`sender`）使用 `text` 加 `CHECK` 约束，不使用 PostgreSQL 枚举类型：取值仍在演变，`CHECK` 约束增删改名都容易；Go 代码中自行定义对应常量。
 - 参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
 - 不建 `runs` 表。Main 可能持续运行，“一轮”的边界不清晰；执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，Subagent 状态记在 `subagents.status`，按用户串行处理用 PostgreSQL 咨询锁（advisory lock），重启恢复依据待读消息和未得到结果的工具调用判断。
 - Subagent 与 Main 之间只有消息，没有单独的“汇报”类型：Subagent 用 `send_message` 发消息给 Main，进度与结果都只是消息内容。
 - `subagents.status` 由运行时维护，不依赖消息内容。Subagent 因错误无法继续时，运行时向 Main 的列表写入一条 `sender = system`、`sender_subagent_id` 为该 Subagent 的通知。
-- Subagent 停下后再收到 Main 的消息，会被重新唤醒继续工作。
+- Subagent 停下后再收到 Main 的消息，会被重新唤醒继续工作；无论上次是 `idle` 还是 `failed`，收到消息都会唤醒，`failed` 只表示上一次因错误停下。因此 `subagents` 不设结束时间，最后活动时间以其最后一条消息为准。
 - `subagents` 不保存任务说明：Main 给出的任务说明是该 Subagent 列表中的第一条消息，之后的补充与修改是后续消息；单独保存会重复且会过时。若界面需要简短名称，届时再加。
 - `steps` 记录每一次模型请求的元信息，不重复保存请求内容；某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
 
@@ -171,7 +172,6 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `user_id` | uuid | 所属用户 |
 | `status` | text | `running`（正在工作）/ `idle`（停下，等待新消息）/ `failed`（因错误停下） |
 | `created_at` | timestamptz | 创建时间 |
-| `finished_at` | timestamptz | 结束时间，未结束时为空 |
 
 ### `messages`
 
@@ -256,7 +256,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
 - 登录会话的有效期、存储方式、多设备行为和退出规则。
 - Resend 发信域名及发件人。
-- 数据结构细节：状态与角色等字段用枚举类型还是 text 加约束；Subagent 是否需要“已取消”状态；索引；删除用户时的数据处理。
+- 数据结构细节：Subagent 是否需要“已取消”状态；索引；删除用户时的数据处理。
 - 聊天界面显示 Main 列表中的哪些内容。
 - 新消息加入上下文时的并发入库规则。
 - Subagent 并发上限、补充消息处理、取消、超时、失败和恢复规则。
