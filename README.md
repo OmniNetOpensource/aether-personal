@@ -69,7 +69,11 @@
 | `backend/db/migrations/` | 表结构迁移 |
 | `backend/db/queries/` | 手写 SQL |
 
-数据库表已由 `backend/db/migrations/00001_create_core_tables.sql` 创建，sqlc 配置为 `backend/sqlc.yaml`。`backend/db/queries/` 与 `backend/internal/database/` 当前为空：sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。Flutter 工程尚未初始化。
+数据库表已由 `backend/db/migrations/00001_create_core_tables.sql` 创建，sqlc 配置为 `backend/sqlc.yaml`。`backend/db/queries/` 与 `backend/internal/database/` 当前为空：sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。
+
+生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
+
+Flutter 工程尚未初始化。
 
 ## 本地开发
 

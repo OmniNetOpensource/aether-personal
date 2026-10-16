@@ -249,6 +249,9 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 
 sqlc 配置为 `backend/sqlc.yaml`：读取 `db/migrations` 作为表结构、`db/queries` 中的手写查询，生成到 `internal/database`（包名 `database`，使用 pgx/v5）。sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。sqlc 会将 `vector` 映射为 `pgvector-go` 的 `pgvector.Vector`，届时需引入该依赖。
 
+- sqlc 单独安装，版本固定为 `v1.31.1`，不使用 `go tool`：sqlc 内含 PostgreSQL 的 C 语言解析器，`go tool` 需要本机 C 编译器（Windows 默认没有），并会大量增加 `go.mod` 依赖。生成的代码提交进仓库，只有修改 SQL 查询的人需要 sqlc，fork 部署者用不到。
+- UUID 映射为 `github.com/google/uuid` 的 `uuid.UUID`，可为空的列映射为 `*uuid.UUID`，在类型上区分能否为空；`pgtype.UUID` 不区分，`string` 失去类型检查。
+
 ### 外键
 
 所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`。误删由“仅企业管理员可删除”与数据库备份防范。
@@ -293,7 +296,7 @@ sqlc 配置为 `backend/sqlc.yaml`：读取 `db/migrations` 作为表结构、`d
 以下仅是待讨论事项，不构成已采用的方案；清单也不是完整的决策枚举。
 
 - Flutter 包标识、各平台应用标识和前端代码组织；后端目录内的具体实现组织。
-- sqlc 的安装方式（`go tool` 或单独安装）及生成代码的类型映射（如 UUID 使用 `pgtype.UUID` 还是其他库）；Flutter 版本；其余后端和前端依赖选择。
+- Flutter 版本；其余后端和前端依赖选择。
 - 文档语言（中文、英文或双语）。
 - Main 与 Subagent 的具体模型及模型配置入口。
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
