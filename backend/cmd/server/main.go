@@ -32,7 +32,7 @@ func main() {
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	if err := http.ListenAndServe(address, httpapi.NewHandler(databasePool)); err != nil {
+	if err := http.ListenAndServe(address, httpapi.NewHandler(databasePool, appConfig)); err != nil {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}

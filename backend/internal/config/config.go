@@ -6,9 +6,11 @@ import (
 )
 
 type Config struct {
-	AppEnv      string
-	Port        string
-	DatabaseURL string
+	AppEnv       string
+	Port         string
+	DatabaseURL  string
+	ResendAPIKey string
+	EmailFrom    string
 }
 
 func Load() (Config, error) {
@@ -27,9 +29,17 @@ func Load() (Config, error) {
 		port = "8080"
 	}
 
+	resendAPIKey := os.Getenv("RESEND_API_KEY")
+	emailFrom := os.Getenv("EMAIL_FROM")
+	if appEnv == "prod" && (resendAPIKey == "" || emailFrom == "") {
+		return Config{}, fmt.Errorf("RESEND_API_KEY and EMAIL_FROM are required in prod")
+	}
+
 	return Config{
-		AppEnv:      appEnv,
-		Port:        port,
-		DatabaseURL: databaseURL,
+		AppEnv:       appEnv,
+		Port:         port,
+		DatabaseURL:  databaseURL,
+		ResendAPIKey: resendAPIKey,
+		EmailFrom:    emailFrom,
 	}, nil
 }

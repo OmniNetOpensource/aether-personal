@@ -69,9 +69,7 @@
 | `backend/db/migrations/` | 表结构迁移 |
 | `backend/db/queries/` | 手写 SQL |
 
-数据库表已由 `backend/db/migrations/00001_create_core_tables.sql` 创建，sqlc 配置为 `backend/sqlc.yaml`。`backend/db/queries/` 与 `backend/internal/database/` 当前为空：sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。
-
-生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
+sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
 Flutter 工程尚未初始化。
 
@@ -95,6 +93,17 @@ make db-down   # 停止本地 PostgreSQL
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
+| `RESEND_API_KEY` | `prod` 必填，Resend 的 API Key |
+| `EMAIL_FROM` | `prod` 必填，验证码邮件发件人，如 `Aether <noreply@company.com>`；域名需先在 Resend 后台验证 |
+
+本地登录（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）：
+
+```sh
+curl -X POST localhost:8080/auth/code -d '{"email":"me@example.com"}'
+curl -X POST localhost:8080/auth/verify -d '{"email":"me@example.com","code":"<日志中的验证码>"}'
+# 返回 {"token":"..."}，之后的请求带上 Authorization: Bearer <token>
+curl -X POST localhost:8080/auth/logout -H "Authorization: Bearer <token>"
+```
 
 ## 项目资料
 
