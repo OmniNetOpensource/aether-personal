@@ -69,7 +69,7 @@
 | `backend/db/migrations/` | 表结构迁移 |
 | `backend/db/queries/` | 手写 SQL |
 
-`backend/internal/database/`、`backend/db/migrations/`、`backend/db/queries/` 当前为空，Git 不单独记录空目录。数据库表、SQL 查询和 sqlc 生成配置尚未实现；Flutter 工程尚未初始化。
+数据库表已由 `backend/db/migrations/00001_create_core_tables.sql` 创建，sqlc 配置为 `backend/sqlc.yaml`。`backend/db/queries/` 与 `backend/internal/database/` 当前为空：sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。Flutter 工程尚未初始化。
 
 ## 本地开发
 
@@ -79,6 +79,7 @@
 cd backend
 cp .env.example .env
 make db-up     # 启动本地 PostgreSQL，等到数据库可连接后才返回
+make migrate   # 执行数据库迁移（goose，已作为 Go 工具依赖固定版本）
 make run       # 加载 .env 运行后端
 curl localhost:8080/healthz
 make db-down   # 停止本地 PostgreSQL

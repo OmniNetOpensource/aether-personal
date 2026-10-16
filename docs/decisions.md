@@ -238,6 +238,17 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 | `started_at` | timestamptz | 开始时间 |
 | `finished_at` | timestamptz | 结束时间 |
 
+### 迁移
+
+- 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
+- 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。
+- 迁移文件位于 `backend/db/migrations/`，按顺序编号（`00001_...sql`），每个文件包含 Up 与 Down 两部分。
+- `00001_create_core_tables.sql` 创建 pgvector 扩展与 4 张表。已在本地验证：执行、回滚、再执行均成功；序号自动发号与待读补号、`CHECK` 约束、级联删除行为符合设计。
+- `message_sequence` 序列为 `messages.sequence` 的默认值：Agent 自己产生的内容写入时省略该列即自动取号；待读消息写入时显式置为空，加入上下文时用 `nextval('message_sequence')` 补号。
+- 向量索引使用余弦距离（`vector_cosine_ops`），因为 Gemini 向量截短到 1536 维后长度不再统一；查询时使用 `<=>` 运算符。
+
+sqlc 配置为 `backend/sqlc.yaml`：读取 `db/migrations` 作为表结构、`db/queries` 中的手写查询，生成到 `internal/database`（包名 `database`，使用 pgx/v5）。sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。sqlc 会将 `vector` 映射为 `pgvector-go` 的 `pgvector.Vector`，届时需引入该依赖。
+
 ### 外键
 
 所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`。误删由“仅企业管理员可删除”与数据库备份防范。
@@ -282,7 +293,7 @@ Main 处理期间收到用户新消息时，当前模型请求或工具调用继
 以下仅是待讨论事项，不构成已采用的方案；清单也不是完整的决策枚举。
 
 - Flutter 包标识、各平台应用标识和前端代码组织；后端目录内的具体实现组织。
-- sqlc 生成配置；Flutter 版本；其余后端和前端依赖选择。
+- sqlc 的安装方式（`go tool` 或单独安装）及生成代码的类型映射（如 UUID 使用 `pgtype.UUID` 还是其他库）；Flutter 版本；其余后端和前端依赖选择。
 - 文档语言（中文、英文或双语）。
 - Main 与 Subagent 的具体模型及模型配置入口。
 - 验证码格式、有效期、重发间隔、尝试次数和 dev/prod 发信行为。
