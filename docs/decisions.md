@@ -59,7 +59,7 @@
 | 本地数据库端口 | compose 中为 `${POSTGRES_PORT:-5432}`，可在 `.env` 覆盖 |
 | 日志 | `log/slog`；dev 输出文本，prod 输出 JSON |
 | 模型服务 | OpenRouter |
-| 具体模型 | 稍后确定 |
+| 具体模型 | Main：`anthropic/claude-haiku-5.5`（`MAIN_MODEL` 可改）；Subagent 稍后确定 |
 | OpenRouter / Resend Key | 部署的企业在自己的环境变量中配置 |
 | 模型与发信费用 | 由部署的企业承担 |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
@@ -274,8 +274,6 @@ sqlc 配置为 `backend/sqlc.yaml`：读取 `db/migrations` 作为表结构、`d
 
 `steps` 暂不建索引，待费用统计或执行轨迹展示时再加。关键词搜索所需索引在实现 `search_message` 时再定。
 
-SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
-
 ## 邮箱验证码登录
 
 流程：`POST /auth/code` 传入邮箱，后端生成验证码、存库并通过 Resend 发送；`POST /auth/verify` 传入邮箱和验证码，核对成功后（新邮箱自动创建用户）返回登录凭证；之后的请求都携带凭证，由中间件查出用户。
@@ -305,9 +303,150 @@ SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 - 邮箱去除首尾空格并转为小写后再使用。
 - 核对验证码时先原子地占用一次尝试机会再比对，并发请求也不会超过 5 次。
 
+## 最小对话（第 1 步）
+
+实现顺序：最小对话（含 WebSocket 收发完整消息）→ 边生成边显示 → 更多工具（`read_message`、`search_message`）→ 压缩与混合搜索 → Subagent。第 1 步：用户通过 WebSocket 发消息，Main 调用模型并通过 `send_message` 回复，推送完整消息与状态，不推送逐段生成的文字。
+
+用户原话：
+
+> 我希望给用户发的消息添加这么几个状态：sending，delivered，read；main 先用 haiku5.5；系统提示词就参考 anthropic 发布过的 blog 和我们的产品理念；模型调用失败，无需对用户显示任何内容，内部上报。
+
+### Main 如何回复用户
+
+Main 只有调用 `send_message` 才会发消息给用户；模型直接输出的文字是 Main 自己的思考，用户看不到。
+
+理由：Main 会被 Subagent 的消息唤醒，很多汇报只需记下、不必打扰用户；"什么时候该开口"是 Main 的能力之一。用户与 Subagent 都通过同一个工具联系，与架构图一致。因此第 1 步就需要实现工具调用（至少 `send_message`）。
+
+### 消息状态
+
+| 状态 | 含义 | 判断方式 |
+| --- | --- | --- |
+| `sending` | App 已发出，后端尚未确认 | 只存在于 App |
+| `failed` | 请求未发送成功（如断网），用户可点击重发 | 只存在于 App |
+| `delivered` | 已存入数据库，Main 尚未加入上下文 | `sequence` 为空 |
+| `read` | Main 已加入上下文 | `sequence` 有值 |
+
+不新增列，后端返回消息时由 `sequence` 算出 `delivered` / `read`。
+
+### 模型
+
+- Main 使用 `anthropic/claude-haiku-5.5`（OpenRouter，上下文 100 万 token）。
+- 模型名由环境变量 `MAIN_MODEL` 配置，默认 `anthropic/claude-haiku-5.5`，企业换模型无需改代码。
+- `OPENROUTER_API_KEY` 在 dev 与 prod 下都必填：本地开发也需要真实调用模型。
+
+### 系统提示词
+
+参考 Anthropic 的文章：
+
+- [The new rules of context engineering for Claude 5 generation models](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models)：系统提示词的核心是说明产品与所做的事；少写死规则，让模型凭上下文判断；不给示例；工具用法写在工具描述中，不在系统提示词重复。
+- [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)：提示词写在"合适的高度"，既不硬编码脆弱逻辑，也不空泛。
+- [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)：教主 agent 如何分派任务（目标、产出格式、工具建议、任务边界），在实现 Subagent 时加入。
+
+提示词用英文写，让模型用用户的语言回复；产品名暂为 Aether，企业 fork 后可改。第 1 步的提示词：
+
+```text
+You are Aether, a personal agent. Each person you work with has exactly one
+conversation with you, and it never resets: the same relationship continues
+across days, months, and years. Older parts of the conversation may appear as
+summaries; treat them as your own memory of what happened.
+
+You are deployed by an organization to serve its people. Your job is to
+understand what the person actually needs and help them get it done, the way a
+capable assistant who knows them well would.
+
+Reply in the language the person writes in. Match the length and depth of your
+reply to what they asked: a quick question gets a quick answer. Be direct and
+honest, including about what you don't know or can't do.
+```
+
+工具与 Subagent 加入后，再补充分派任务的部分。
+
+### 模型调用失败
+
+- 不向用户显示任何内容，内部上报：`slog.Error` 记录日志，并写入对应 `steps` 行的 `error`。
+- 临时性错误（超时、限流、服务端 5xx）自动重试 3 次，间隔逐渐拉长；仍失败则放弃。
+- 用户消息已为 `read`，留在上下文中；用户下次发消息时，Main 会一并看到之前未回复的消息。
+
+## 多实例与实时通信
+
+用户原话：
+
+> 我希望做成 web socket，即，一打开聊天页面，就建立起双向通信的通道。
+
+> 我想采取类似这样的架构：生产者、共享存储、消费者。
+
+> 把 messages 表里，没有发给用户的消息全部发给用户不就行了嘛？
+
+### 整体结构
+
+参考业界做法后，采用"实例无状态、状态放在共享存储"的结构（与 [LangGraph Agent Server](https://docs.langchain.com/langsmith/agent-server)、[DBOS](https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution) 同一思路），不采用把请求路由到固定实例的 Actor 模型（如 Cloudflare Durable Objects、Restate Virtual Objects），因为后者依赖专门的平台。
+
+- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文、待读消息、Subagent 状态等都在 PostgreSQL 中。
+- 用户请求不需要路由到"正在运行 agent 的机器"：收到消息的机器只负责存入数据库；同一用户的 Main 由数据库锁保证同一时间只有一台机器运行，正在运行的机器在下一次模型调用前会取到新消息。
+- 机器之间通过 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，通知只带用户 ID，数据始终以表为准。不引入 Redis。
+- 内存中只有两样东西：WebSocket 连接（断开后 App 重连到任意机器即可）与进行中的模型调用（机器崩溃后由其他机器重新调用）。
+- 第 1 步只部署一台，但代码按多台的要求编写。
+
+不单独建 `events` 表：用户能看到的消息本就在 `messages` 中，每条 WebSocket 连接自己记录推送位置，从 `messages` 中查出位置之后的消息即可。
+
+### WebSocket
+
+- 使用 `coder/websocket` 库。
+- WebSocket 负责发消息与实时推送；拉取历史消息与登录走 HTTP。
+- 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后由 App 发送的第一条消息验证登录：`{"type": "auth", "token": "...", "last_message_id": "..."}`，5 秒内未收到或验证失败即断开。不把令牌放在网址中，避免被写入访问日志。
+- 后端每 30 秒发送心跳；连接断开时 App 自动重连。
+- 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。
+
+### 用户发消息
+
+1. App 发送 `{"type": "send_message", "id": "...", "text": "..."}`，消息 ID 由 App 生成，App 显示 `sending`。
+2. 后端校验：`id` 为合法 UUID；只支持纯文本，`text` 非空且不超过 32,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。
+3. 存入 `messages`，`sequence` 为空；同一 ID 已存在时不重复保存（App 重发时幂等）。
+4. 在同一连接上回复 `{"type": "delivered", "id": "..."}`；App 超时未收到则显示 `failed`，可点击重发。
+5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
+6. 尝试获取该用户的锁：获取到则运行 Main；获取不到说明已有机器在运行，到此为止。
+
+`content` 按 OpenRouter 的消息格式存储，组装上下文时可直接使用。
+
+### Main 运行
+
+获取锁后循环：
+
+1. 为所有待读消息补上序号（变为已读），发送 NOTIFY。
+2. 组装上下文：系统提示词 + Main 的全部消息。
+3. 调用模型，提供 `send_message` 工具（第 1 步只能发给用户）。
+4. 保存模型输出，在 `steps` 记录 token 数与费用。
+5. 模型调用了 `send_message` 时保存该消息，发送 NOTIFY。
+6. 模型本轮调用了工具则回到第 1 步；未调用工具则结束（直接输出的文字是思考，不发给用户）。
+
+结束后释放锁，并在释放后再查一次待读消息，如有则重新尝试获取锁，避免释放前一瞬间到达的消息无人处理。
+
+### 推送
+
+- 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记"已发送"。
+- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息（用户自己发的、Main 用 `send_message` 发给用户的），以及当前已读位置，推送给 App。
+- 已读位置用一个值表示（最后一条已读的用户消息）：待读消息总是一次性按顺序补号，已读只会从前往后连续推进。
+- App 重连时在 `auth` 中带上最后收到的消息 ID，后端从其后补齐。
+
+### 其他
+
+- `GET /messages?before=<ID>&limit=50`：从最新往前翻页，只返回用户能看到的消息；以 UUIDv7 的消息 ID 作翻页位置（待读消息没有序号）。
+- 后端启动时找出所有仍有待读消息的用户，逐个尝试运行其 Main，防止重启时丢消息。
+
+### 业界做法中暂不采用、以后再评估的
+
+- 将"连接服务器"与"agent worker"拆成两组机器（LangGraph 的做法）：代码按两种角色分开编写，第 1 步在同一进程中运行。
+- 用租约代替 advisory lock：第 1 步使用 advisory lock，更简单且机器崩溃时立即释放。
+- 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
+
+### 待确认细节
+
+- "用户能看到的消息"在 `messages` 中如何标记与查询。
+- 用户消息与 Main 回复可能由两台机器同时写入，按"位置之后"查询可能漏掉晚提交的消息。
+
 ## 模型服务与费用
 
-项目开源、供企业 fork 部署，因此 OpenRouter 与 Resend 的 Key 由部署的企业在自己的环境变量中配置，费用由该企业承担。Main 与 Subagent 的具体模型稍后确定。
+项目开源、供企业 fork 部署，因此 OpenRouter 与 Resend 的 Key 由部署的企业在自己的环境变量中配置，费用由该企业承担。Main 使用 `anthropic/claude-haiku-5.5`（见上节），Subagent 的模型稍后确定。
 
 ## 原始架构中已给出的约束
 
@@ -320,7 +459,7 @@ SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。
-- Flutter 通过 HTTP/SSE 与后端交互，支持断线恢复。
+- Flutter 通过 HTTP/SSE 与后端交互，支持断线恢复（已按用户确认改为 HTTP + WebSocket）。
 
 ## 待确认问题
 
@@ -329,10 +468,10 @@ SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 - Flutter 包标识、各平台应用标识和前端代码组织；后端目录内的具体实现组织。
 - Flutter 版本；其余后端和前端依赖选择。
 - 文档语言（中文、英文或双语）。
-- Main 与 Subagent 的具体模型及模型配置入口。
+- Subagent 的具体模型及配置入口。
 - 企业管理员：身份与权限如何表示、本仓库后端为管理后台提供哪些接口、管理后台仓库的技术选型。
 - 按用户的用量与费用控制（额度、频率限制、统计）。
-- 多实例部署下的 SSE 推送与后台向量计算。
+- 多实例部署下的后台向量计算。
 - 企业统一登录（SSO）等登录方式扩展。
 - 聊天界面显示 Main 列表中的哪些内容。
 - 新消息加入上下文时的并发入库规则。
@@ -340,7 +479,7 @@ SSE 断线恢复可能需要的数据，在讨论对应功能时再定。
 - 压缩的触发时机与摘要写法。
 - 混合搜索的细节：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；完整消息读取规则。
 - 消息持久化与触发执行之间的故障恢复规则。
-- SSE 事件类型、事件保存、断线续传和各平台的连接恢复行为。
+- 边生成边显示的推送方式，以及各平台的 WebSocket 连接恢复行为。
 - 搜索服务、HTTP 工具、MCP 接入方式及执行权限。
 - 浏览器和代码隔离环境的实现、资源限制与生命周期。
 - 六个平台的界面、任务状态展示、发布和验证方式。

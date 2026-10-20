@@ -1,10 +1,10 @@
 flowchart TD
     subgraph L1["第一层：Flutter 前端"]
-        FLUTTER["聊天与任务界面：HTTP · SSE · 断线恢复"]
+        FLUTTER["聊天与任务界面：HTTP · WebSocket · 断线恢复"]
     end
 
     subgraph L2["第二层：Go 后端"]
-        API["API：认证 · 收发消息 · SSE"]
+        API["API：认证 · 收发消息 · WebSocket"]
         MESSAGES["消息服务：路由 · 保存消息 · 直接触发接收方"]
         DB[("PostgreSQL：agent 身份 · 消息历史 · Run 状态 · 执行轨迹")]
 
@@ -49,7 +49,7 @@ flowchart TD
         SANDBOX["隔离执行环境：浏览器 · 代码"]
     end
 
-    FLUTTER <-->|"HTTP 请求 / SSE 消息与任务事件"| API
+    FLUTTER <-->|"HTTP 历史记录 / WebSocket 收发消息与推送"| API
     MAIN <-->|"模型推理 / 四个消息工具的调用请求"| MODEL
     SUB <-->|"模型推理 / 执行工具的调用请求"| MODEL
     TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL

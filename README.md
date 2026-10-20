@@ -31,8 +31,8 @@
 
 ## 完整交付范围
 
-- Flutter 聊天与任务界面，HTTP、SSE 和断线恢复。
-- Go API：认证、收发消息、SSE。
+- Flutter 聊天与任务界面，HTTP、WebSocket 和断线恢复。
+- Go API：认证、收发消息、WebSocket。
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[决策记录](docs/decisions.md#数据结构)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
