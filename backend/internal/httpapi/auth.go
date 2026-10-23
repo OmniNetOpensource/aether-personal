@@ -137,23 +137,27 @@ func (s *server) requireSession(next http.Handler) http.Handler {
 			return
 		}
 
-		tokenHash := sha256.Sum256([]byte(token))
-		session, err := s.queries.GetActiveSession(r.Context(), tokenHash[:])
+		session, err := s.findSession(r.Context(), token)
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if err != nil {
-			internalError(w, "get session failed", err)
-			return
-		}
-		if err := s.queries.ExtendSession(r.Context(), session.ID); err != nil {
-			internalError(w, "extend session failed", err)
+			internalError(w, "find session failed", err)
 			return
 		}
 
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, session)))
 	})
+}
+
+func (s *server) findSession(ctx context.Context, token string) (database.GetActiveSessionRow, error) {
+	tokenHash := sha256.Sum256([]byte(token))
+	session, err := s.queries.GetActiveSession(ctx, tokenHash[:])
+	if err != nil {
+		return session, err
+	}
+	return session, s.queries.ExtendSession(ctx, session.ID)
 }
 
 func parseEmail(input string) (string, bool) {

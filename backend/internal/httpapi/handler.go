@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,21 +16,31 @@ type server struct {
 	queries      *database.Queries
 	appConfig    config.Config
 	httpClient   *http.Client
+	runner       *agent.Runner
+	connections  *chatConnections
 }
 
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config) http.Handler {
+func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
 		appConfig:    appConfig,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		runner:       runner,
+		connections:  newChatConnections(),
 	}
+	go s.listenForUserMessages()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /auth/code", s.requestLoginCode)
 	mux.HandleFunc("POST /auth/verify", s.verifyLoginCode)
 	mux.Handle("POST /auth/logout", s.requireSession(http.HandlerFunc(s.logout)))
+	mux.Handle("GET /messages", s.requireSession(http.HandlerFunc(s.listMessages)))
+	mux.HandleFunc("GET /ws", s.chatWebSocket)
+	if appConfig.FrontendDir != "" {
+		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
+	}
 	return mux
 }
 
