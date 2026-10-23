@@ -33,6 +33,7 @@ type Message struct {
 	IsSummary        bool
 	Embedding        *pgvector.Vector
 	CreatedAt        time.Time
+	ClientMessageID  *uuid.UUID
 }
 
 type Session struct {
@@ -61,6 +62,7 @@ type Subagent struct {
 	UserID    uuid.UUID
 	Status    string
 	CreatedAt time.Time
+	StartedAt *time.Time
 }
 
 type User struct {
