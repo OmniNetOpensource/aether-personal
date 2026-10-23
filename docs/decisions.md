@@ -1,486 +1,125 @@
-# 项目决策记录
+# 决策总览
 
-记录日期：2026-10-14（Asia/Shanghai）。
+所有已确认选择的一览表与待确认问题。每项选择的详细说明、理由与用户原话在 [架构 Wiki](wiki/README.md) 的对应主题页中。
 
-## 项目定位
-
-用户原话（2026-10-15 更新）：
-
-> 这是一个企业级的开源 personal agent 的项目，任何企业都可以 fork、部署，去服务他们的用户。
-
-因此：
-
-- 部署者是企业，一次部署服务该企业的众多终端用户；终端用户各自拥有自己的 Main 与 Subagent。
-- 部署、配置和本地开发流程都要让陌生的企业部署者和贡献者能够上手，不能依赖维护者本机的环境或私有资源。
-- 模型与发信的 Key 由部署的企业配置，费用由该企业承担。
-
-此前的定位为“让每个人都能部署自己的 personal agent”，已由上述定位取代。
-
-由此确认：
-
-- 支持删除用户，暂时只能由企业管理员删除，终端用户不能自行删除。
-- 管理后台是单独的前端仓库、单独部署，不放在本仓库的 Flutter 工程中。
+记录始于 2026-10-14（Asia/Shanghai）。
 
 ## 协作约束
 
-- 任何微决策都必须先询问用户，得到答复后再执行。
+- 技术实现由开发者判断；仅产品决策询问用户，一次讨论一个问题。用户在 2026-10-22 明确用此规则替代此前“任何微决策先询问”的要求，原话为“不要问我这种技术问题，问我产品决策问题就行”。
 - 交付范围是整张架构图的全部内容。
 - 实现逻辑时同时考虑 dev 和 prod 环境。
 - 变量名称必须直观，禁止使用抽象的变量名。
+- 禁止写任何测试文件。用户在 2026-10-23 明确要求记下此规则。
+- 提交时采用小规模、自包含的 commit。用户在 2026-10-23 明确要求记下此规则。
 
 ## 已确认选择
 
-| 事项 | 用户确认 |
-| --- | --- |
-| 项目名称 | `aether-personal` |
-| Flutter 目标平台 | Android + iOS + macOS + Windows + Linux + Web |
-| 后端 | Go |
-| 部署方式 | 项目提供通用 Docker 部署；阿里云新加坡仅为维护者自己实例的部署位置 |
-| Go 版本 | `1.27.2` |
-| Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
-| HTTP 层 | Go 标准库 `net/http` |
-| 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1`：手写 SQL，生成带类型的 Go 调用代码 |
-| 代码托管 | GitHub |
-| GitHub 仓库所有者 | `OmniNetOpensource`（个人账号） |
-| 许可协议 | Apache-2.0 |
-| GitHub 仓库名称 | `aether-personal` |
-| GitHub 仓库可见性 | 公开 |
-| 维护者提交邮箱 | 使用 GitHub noreply 邮箱，避免在公开仓库中暴露真实邮箱 |
-| `.gitignore` | 忽略系统文件、编辑器目录、`.env` 类文件和 `/backend/bin/` |
-| 仓库组织 | 同一仓库：`backend/`、`frontend/`、`infra/`、`docs/` |
-| 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`） |
-| 本地 dev 数据库 | Docker Compose |
-| 后端配置来源 | 只读环境变量；dev 使用未提交的 `.env` 由启动命令加载，仓库提供 `.env.example` |
-| 运行环境标识 | 必填环境变量 `APP_ENV`，只允许 `dev` / `prod`，其他值启动报错 |
-| 健康检查 | `GET /healthz`，同时检查数据库连接 |
-| 停止信号处理 | 收到停止信号直接退出 |
-| 本地常用命令 | `backend/Makefile` |
-| 监听端口 | 环境变量 `PORT`，默认 `8080` |
-| 本地数据库端口 | compose 中为 `${POSTGRES_PORT:-5432}`，可在 `.env` 覆盖 |
-| 日志 | `log/slog`；dev 输出文本，prod 输出 JSON |
-| 模型服务 | OpenRouter |
-| 具体模型 | Main：`anthropic/claude-haiku-5.5`（`MAIN_MODEL` 可改）；Subagent 稍后确定 |
-| OpenRouter / Resend Key | 部署的企业在自己的环境变量中配置 |
-| 模型与发信费用 | 由部署的企业承担 |
-| 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
-| Main 处理中收到新消息 | 当前模型请求或工具调用结束后，在下一次模型调用前加入新消息 |
-| 登录方式 | 邮箱验证码 |
-| 邮件服务 | Resend |
-| 新用户注册 | 新邮箱验证码验证成功后自动创建用户 |
-| 项目资料保存 | `README.md`、`docs/architecture.mmd`、`docs/decisions.md` |
+### 项目与工程
 
-## Main Agent 的语义澄清
-
-用户原话：
-
-> 自动创建用户。main agent只是一个逻辑概念。
-
-因此，“每用户固定一个 Main Agent”表示用户与 Main Agent 的逻辑关系。不能据此预设每用户拥有常驻进程、独立容器或独立服务。
-
-注册时创建哪些数据、Main 身份如何表示、Runtime 如何启动与恢复，均待用户确认。原始架构图不因这项澄清自动改动图中的节点或连线。架构图仅按用户确认，将第二层标题由“Go 后端 · 阿里云新加坡”改为“Go 后端”，以匹配通用部署定位。
-
-## 任务与 Subagent 的语义澄清
-
-用户原话：
-
-> 在我的设想里，没有任务这个实体概念（只是说有这个虚拟概念）。
-
-因此，“任务”只是 Main 交给 Subagent 的说明，不单独建模；实体是 Subagent 本身。数据库表命名为 `subagents`，其 ID 在数据库、代码、工具接口和架构图中统一称为 `subagent_id`，不再使用 `task_id`。架构图中的 `task_id` 已按用户确认改为 `subagent_id`。
-
-## 工程组织与组件选择
-
-- `backend/`：Go 后端。
-- `frontend/`：Flutter 六个平台共用工程。
-- `infra/`：dev/prod 环境和部署配置。
-- `docs/`：设计文档与决策记录。
-
-Go 版本为 `1.27.2`；较低版本的 Go 会按 `go.mod` 自动下载对应工具链。
-
-HTTP 层已选择 Go 标准库 `net/http`。
-
-数据库访问层已选择 `pgx + sqlc`：手写 SQL，使用 sqlc 生成带类型的 Go 调用代码，由 pgx 执行数据库操作。已固定 pgx `v5.11.0`、sqlc `v1.31.1`。
-
-后端内部目录已确认并创建：
-
-- `backend/cmd/server/`：程序入口。
-- `backend/internal/config/`：环境配置。
-- `backend/internal/httpapi/`：API。
-- `backend/internal/database/`：sqlc 生成代码。
-- `backend/db/migrations/`：表结构迁移。
-- `backend/db/queries/`：手写 SQL。
-
-`database/`、`migrations/`、`queries/` 目录当前为空，Git 不单独记录空目录；具体接口、数据字段和运行规则继续分别确认。
-
-## 后端最小骨架
-
-- `internal/config` 启动时一次性读取环境变量：`APP_ENV` 与 `DATABASE_URL` 必填，`PORT` 默认 `8080`，不满足即报错退出。
-- `GET /healthz` 每次请求 ping 数据库，正常返回 `200 ok`，失败返回 `503`。
-- 后端启动时不检查数据库连通性，避免数据库晚于后端就绪时出现崩溃重启循环；数据库状态由 `/healthz` 反映。
-- 等待数据库就绪由编排层负责：dev compose 使用 `pg_isready` 健康检查，`make db-up` 带 `--wait`，数据库可连接后才返回；将来的 Docker 部署中，后端使用 `depends_on: condition: service_healthy` 等待数据库。
-- dev compose 固定项目名 `aether-personal-dev`，避免与其他目录名为 `dev` 的 compose 项目冲突。
-- `.env` 位于 `backend/`，由 Makefile 加载并传给 compose；仓库提供 `backend/.env.example`。
-- 已验证：数据库正常时 `/healthz` 返回 200，停止数据库后返回 503，缺少 `APP_ENV` 时启动报错退出。
-
-当前尚无数据库表；sqlc 生成配置、SQL 查询及实际代码生成待确认。
-
-## GitHub 托管
-
-代码托管在 GitHub 个人账号 `OmniNetOpensource` 下的公开仓库 `aether-personal`，Go 模块路径相应为 `github.com/OmniNetOpensource/aether-personal/backend`。
-
-代码仓库托管位置与应用运行位置是独立事项：维护者自己的实例部署在阿里云新加坡。
-
-发布前已从文档和提交历史中移除维护者本机路径。
-
-## 主对话与新消息处理
-
-每个用户只有一条长期主对话，使用同一份 `messageList`。
-
-Main 处理期间收到用户新消息时，当前模型请求或工具调用继续执行；待该请求或调用结束，在下一次模型调用前将新消息加入上下文。排序方式见下节“数据结构”；并发入库规则仍待确认。
-
-## 数据结构
-
-用户原话：
-
-> 任何消息列表，本质上都是一个 agent 的上下文列表。用户的是 main，其他 subagent 是他们自己的。
-
-因此：
-
-- 只有 Agent 拥有消息列表：每个用户的 Main 一份，每个 Subagent 各一份。用户没有独立列表，用户与 Main 的对话就是 Main 的列表，聊天界面读取 Main 的列表。
-- 不建 agents 表：Main 由 `user_id` 确定，Subagent 由 `subagents` 表确定。
-- 通信消息与模型上下文存在同一张 `messages` 表中。A 发给 B 的消息作为一行写入 B 的列表，记录发送方；发送方一侧已有对应的工具调用记录，同一内容允许在两侧各存一份。
-- 主键使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）。
-- 只有固定几个取值的字段（如 `status`、`role`、`sender`）使用 `text` 加 `CHECK` 约束，不使用 PostgreSQL 枚举类型：取值仍在演变，`CHECK` 约束增删改名都容易；Go 代码中自行定义对应常量。
-- 参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
-- 不建 `runs` 表。Main 可能持续运行，“一轮”的边界不清晰；执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，Subagent 状态记在 `subagents.status`，按用户串行处理用 PostgreSQL 咨询锁（advisory lock），重启恢复依据待读消息和未得到结果的工具调用判断。
-- Subagent 与 Main 之间只有消息，没有单独的“汇报”类型：Subagent 用 `send_message` 发消息给 Main，进度与结果都只是消息内容。
-- `subagents.status` 由运行时维护，不依赖消息内容。Subagent 因错误无法继续时，运行时向 Main 的列表写入一条 `sender = system`、`sender_subagent_id` 为该 Subagent 的通知。
-- Subagent 停下后再收到 Main 的消息，会被重新唤醒继续工作；无论上次是 `idle` 还是 `failed`，收到消息都会唤醒，`failed` 只表示上一次因错误停下。因此 `subagents` 不设结束时间，最后活动时间以其最后一条消息为准。
-- 暂不提供强制中断（无 `cancelled` 状态、无 `stop_subagent` 工具）：让 Subagent 停下靠 Main 发消息；卡住或长时间运行的情况由之后的超时规则兜底，超时中断后状态为 `failed`。
-- `subagents` 不保存任务说明：Main 给出的任务说明是该 Subagent 列表中的第一条消息，之后的补充与修改是后续消息；单独保存会重复且会过时。若界面需要简短名称，届时再加。
-- `steps` 记录每一次模型请求的元信息，不重复保存请求内容；某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
-
-共 4 张表：
-
-| 表 | 用途 |
-| --- | --- |
-| `users` | 用户；每个用户即一个 Main |
-| `subagents` | Main 派出的每个 Subagent |
-| `messages` | 每个 Agent 的上下文列表，即 `messageList` |
-| `steps` | 每一次模型请求的记录 |
-
-### `users`
-
-| 字段 | 类型 | 说明 |
+| 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| `id` | uuid | 主键 |
-| `email` | text | 登录邮箱，唯一 |
-| `created_at` | timestamptz | 注册时间 |
+| 项目定位 | 企业级开源 personal agent，企业 fork、部署后服务其终端用户 | [01](wiki/01-overview.md#项目定位) |
+| 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
+| 用户删除 | 仅企业管理员可删除，终端用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
+| 管理后台 | 单独的前端仓库、单独部署 | [01](wiki/01-overview.md#项目定位) |
+| Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
+| 任务 | 虚拟概念，实体是 Subagent，统一称 `subagent_id` | [01](wiki/01-overview.md#任务是虚拟概念实体是-subagent) |
+| 仓库组织 | 同一仓库：`backend/`、`frontend/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
+| Flutter 目标平台 | Android + iOS + macOS + Windows + Linux + Web | [01](wiki/01-overview.md#第一层flutter-前端) |
+| 近期 Flutter 界面与验收 | 2026-10-23 改为 Poke 式 IM，按用户追加要求全屏只保留消息列表和输入框；白底灰色气泡，无联系人栏、菜单或外层卡片；先验收 Flutter Web，保留六平台目标 | [01](wiki/01-overview.md#第一层flutter-前端) |
+| 本地 Flutter SDK | 官方 stable 渠道，当前 Flutter `3.47.7`、Dart `3.13.5`，安装到 `$HOME/develop/flutter`，不修改全局 shell 配置 | [01](wiki/01-overview.md#第一层flutter-前端) |
+| Flutter 工程标识 | `aether_personal`，组织 `io.github.omninetopensource`，显示名称 Aether | [01](wiki/01-overview.md#第一层flutter-前端) |
+| 本地 Web 接入 | Go 用 `FRONTEND_DIR` 提供构建产物，与 HTTP API、WebSocket 同源；根目录 `make dev` 启动 | [01](wiki/01-overview.md#本地开发) |
+| 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
+| Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
+| 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
+| 配置来源 | 只读环境变量；`APP_ENV` 必填，只允许 `dev` / `prod` | [01](wiki/01-overview.md#配置) |
+| 健康检查 | `GET /healthz`，同时检查数据库连接；启动时不检查数据库 | [01](wiki/01-overview.md#后端骨架-已实现) |
+| 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
+| 本地 dev 数据库 | Docker Compose，端口 `${POSTGRES_PORT:-5432}` | [01](wiki/01-overview.md#后端骨架-已实现) |
+| 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
+| 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
+| 部署方式 | 通用 Docker 部署；阿里云新加坡仅为维护者实例位置 | [01](wiki/01-overview.md#部署) |
+| 模型与发信费用 | Key 由部署企业配置，费用由该企业承担 | [01](wiki/01-overview.md#模型服务与费用) |
+| 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |
 
-### `subagents`
+### 数据
 
-| 字段 | 类型 | 说明 |
+| 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| `id` | uuid | 主键，即 `subagent_id` |
-| `user_id` | uuid | 所属用户 |
-| `status` | text | `running`（正在工作）/ `idle`（停下，等待新消息）/ `failed`（因错误停下） |
-| `created_at` | timestamptz | 创建时间 |
+| 数据库 | PostgreSQL 18 + pgvector（`pgvector/pgvector:pg18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
+| 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions` | [02](wiki/02-data-model.md#表关系) |
+| 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
+| 排序与待读 | 全局序列 `sequence`，为空即待读，下次调用模型前补号 | [02](wiki/02-data-model.md#排序与待读规则) |
+| 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
+| 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息 | [02](wiki/02-data-model.md#压缩与上下文检索-仅设计) |
+| 历史检索 | 关键词 + 向量混合搜索 | [02](wiki/02-data-model.md#压缩与上下文检索-仅设计) |
+| embedding | `google/gemini-embedding-2`，1536 维，写死在代码中，异步计算，余弦距离 HNSW | [02](wiki/02-data-model.md#压缩与上下文检索-仅设计) |
+| 迁移 | goose `v3.29.0`（`go tool`），单独命令执行 | [02](wiki/02-data-model.md#迁移) |
+| sqlc | 单独安装；可空列用指针，UUID 用 `google/uuid`，`numeric` 用 `shopspring/decimal` | [02](wiki/02-data-model.md#代码生成sqlc) |
 
-### `messages`
+### 认证
 
-| 字段 | 类型 | 说明 |
+| 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| `id` | uuid | 主键，`read_message` 使用的 ID |
-| `user_id` | uuid | 所属用户 |
-| `subagent_id` | uuid | 属于哪个 Agent 的列表：为空表示 Main，否则为该 Subagent |
-| `sequence` | bigint | 全局递增序号，用于排序；为空表示待读 |
-| `role` | text | `system` / `user` / `assistant` / `tool` |
-| `content` | jsonb | 按 OpenRouter 格式保存的内容 |
-| `sender` | text | 别人发来的消息填发送方：`user` / `main` / `subagent` / `system`；否则为空 |
-| `sender_subagent_id` | uuid | 发送方是 Subagent 时填；`system` 发出的与某个 Subagent 相关的通知也填该 Subagent |
-| `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |
-| `is_summary` | boolean | 是否为压缩摘要，默认 false |
-| `embedding` | vector(1536) | 消息的向量；为空表示尚未计算 |
-| `created_at` | timestamptz | 写入（到达）时间 |
+| 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户 | [03](wiki/03-auth.md) |
+| 登录凭证 | 随机令牌 + `sessions` 表，不用 JWT；`Authorization: Bearer` | [03](wiki/03-auth.md#登录凭证) |
+| 过期 | 滑动过期，30 天不活跃失效；允许多设备 | [03](wiki/03-auth.md#登录凭证) |
+| 验证码 | 6 位、10 分钟、60 秒重发间隔、最多 5 次 | [03](wiki/03-auth.md#验证码) |
+| 凭证存储 | 只存哈希 | [03](wiki/03-auth.md#验证码) |
+| 邮件服务 | Resend，`net/http` 直接调用；dev 打印日志，prod 必须配置 | [03](wiki/03-auth.md#发信) |
 
-排序与待读规则：
+### 消息与实时通信
 
-- `sequence` 由数据库序列发号，整张表共用一个递增计数器。
-- Agent 自己产生的内容（模型输出、工具结果）写入时直接取号。
-- 别人发来的消息到达时 `sequence` 为空，即待读；该 Agent 下一次调用模型前，按 `created_at` 顺序依次取号。
-- `messageList` 为该 Agent 列表中最新一条摘要及其之后、`sequence` 不为空的行，按 `sequence` 排序；由此保证工具调用之后紧跟工具结果。
-
-### 压缩与上下文检索
-
-每个 Agent 对应一条无限长的上下文，采用“压缩（compact）+ 上下文检索”来近似：
-
-- 压缩：让模型把当前上下文总结为一段摘要，作为一条 `is_summary = true` 的消息追加到该 Agent 的列表中。摘要覆盖它之前的全部内容；再次压缩时，新摘要总结上一条摘要及其之后的消息。
-- 压缩本身是一次模型请求，记录一条 `steps`，摘要消息的 `step_id` 指向它。
-- 压缩只在两次模型调用之间、且没有未得到结果的工具调用时进行，避免拆开工具调用与工具结果。
-- 压缩不删除、不修改任何旧消息。`messages` 始终保存完整历史，`search_message` / `read_message` 在完整历史中检索，聊天界面也可回看全部记录。
-- 未采用单独的 `compactions` 表：摘要本身就是模型看到的一条消息，放在消息列表中最简单。
-- 历史检索采用混合搜索：关键词搜索（精确词、编号、人名）与向量搜索（意思相近）结合。向量由 OpenRouter 的 embedding 接口（`POST /api/v1/embeddings`）生成，与聊天模型共用同一个 Key。搜索方式封装在 `search_message` 内部；数据库侧均为增量改动（加列、加索引、加扩展），不修改已有字段。
-- embedding 模型固定为 `google/gemini-embedding-2`，请求时指定 `dimensions = 1536`，存为 `vector(1536)`，可使用 pgvector 的 HNSW 索引（普通向量上限 2000 维）。模型写死在代码中、不开放给部署者配置，因为列的维度与模型绑定。选择理由：多语言能力强，且文本与图片处于同一向量空间，便于将来检索图片。
-- 向量异步计算：消息保存时 `embedding` 为空，由后台补算；embedding 接口故障不影响消息保存与聊天。
-- 数据库镜像使用 `pgvector/pgvector:pg18`（官方 PostgreSQL 18 加装 pgvector 扩展）。
-
-### `steps`
-
-| 字段 | 类型 | 说明 |
+| 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| `id` | uuid | 主键 |
-| `user_id` | uuid | 所属用户 |
-| `subagent_id` | uuid | 为空表示 Main 的请求，否则为该 Subagent 的请求 |
-| `model` | text | 使用的模型 |
-| `input_tokens` | integer | 输入 token 数 |
-| `output_tokens` | integer | 输出 token 数 |
-| `cost` | numeric | 费用 |
-| `error` | text | 失败原因，成功时为空 |
-| `started_at` | timestamptz | 开始时间 |
-| `finished_at` | timestamptz | 结束时间 |
+| 整体结构 | 实例无状态、状态在 PostgreSQL；`LISTEN/NOTIFY` 互相唤醒，不引入 Redis | [04](wiki/04-messaging.md#整体结构) |
+| 实时通道 | WebSocket（`coder/websocket`），第一条消息验证登录；登录与历史走 HTTP | [04](wiki/04-messaging.md#websocket) |
+| 消息状态 | `sending` / `failed`（仅 App）、`delivered` / `read`（由 `sequence` 算出） | [04](wiki/04-messaging.md#消息状态) |
+| 用户可见消息 | 不加列，在 Go 代码中解析 `send_message` | [04](wiki/04-messaging.md#用户能看到的消息) |
+| 消息 ID | 数据库生成；`client_message_id` 只用于识别重发 | [04](wiki/04-messaging.md#消息-id-与重发) |
+| 写入顺序 | 同一用户的插入先取 `pg_advisory_xact_lock` | [04](wiki/04-messaging.md#写入顺序) |
+| 不合规则的消息 | 直接断开 WebSocket，不回错误消息 | [04](wiki/04-messaging.md#websocket) |
+| 重连位置 | 推送的消息带 `position`（所在行 ID），重连时 `auth` 带 `last_position`；不用 `sequence` | [04](wiki/04-messaging.md#websocket) |
 
-### 迁移
+### Main 运行时
 
-- 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
-- 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。
-- 迁移文件位于 `backend/db/migrations/`，按顺序编号（`00001_...sql`），每个文件包含 Up 与 Down 两部分。
-- `00001_create_core_tables.sql` 创建 pgvector 扩展与 4 张表。已在本地验证：执行、回滚、再执行均成功；序号自动发号与待读补号、`CHECK` 约束、级联删除行为符合设计。
-- `message_sequence` 序列为 `messages.sequence` 的默认值：Agent 自己产生的内容写入时省略该列即自动取号；待读消息写入时显式置为空，加入上下文时用 `nextval('message_sequence')` 补号。
-- 向量索引使用余弦距离（`vector_cosine_ops`），因为 Gemini 向量截短到 1536 维后长度不再统一；查询时使用 `<=>` 运算符。
-
-sqlc 配置为 `backend/sqlc.yaml`：读取 `db/migrations` 作为表结构、`db/queries` 中的手写查询，生成到 `internal/database`（包名 `database`，使用 pgx/v5）。sqlc 至少需要一条查询才能生成代码，查询随具体功能编写。sqlc 会将 `vector` 映射为 `pgvector-go` 的 `pgvector.Vector`，届时需引入该依赖。
-
-- sqlc 单独安装，版本固定为 `v1.31.1`，不使用 `go tool`：sqlc 内含 PostgreSQL 的 C 语言解析器，`go tool` 需要本机 C 编译器（Windows 默认没有），并会大量增加 `go.mod` 依赖。生成的代码提交进仓库，只有修改 SQL 查询的人需要 sqlc，fork 部署者用不到。
-- UUID 映射为 `github.com/google/uuid` 的 `uuid.UUID`，可为空的列映射为 `*uuid.UUID`，在类型上区分能否为空；`pgtype.UUID` 不区分，`string` 失去类型检查。
-- 生成代码统一规则：不能为空的列用普通类型（`string`、`int64`、`time.Time`、`uuid.UUID`），能为空的列加 `*`，`nil` 表示空；不使用 pgx 自带的 `pgtype.Text`、`pgtype.Int8` 等"值 + Valid 标记"类型。时间列映射为标准库 `time.Time`。
-- `numeric`（费用）映射为 `github.com/shopspring/decimal` 的 `decimal.Decimal`：Go 标准库没有精确小数，`float64` 有累积误差，不适合按用户统计费用和额度；pgx 无需额外注册即可读写。
-
-### 外键
-
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`。误删由“仅企业管理员可删除”与数据库备份防范。
-
-### 索引
-
-只为已知的高频查询建索引；索引可随时增删，不影响已有数据。
-
-| 表 | 索引 | 服务的查询 |
+| 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| `users` | `email` 唯一 | 登录时按邮箱查找；保证邮箱不重复 |
-| `subagents` | `(user_id)` | 列出某用户的 Subagent |
-| `messages` | `sequence` 唯一 | 保证序号不重复（待读消息为空值，不受限制） |
-| `messages` | `(user_id, subagent_id, sequence)` | 读取某 Agent 的 `messageList`，查找其待读消息 |
-| `messages` | `(user_id, subagent_id, sequence) WHERE is_summary` | 查找某 Agent 最新的摘要 |
-| `messages` | `(id) WHERE embedding IS NULL` | 后台查找尚未计算向量的消息 |
-| `messages` | `embedding` HNSW | 向量搜索 |
-
-`steps` 暂不建索引，待费用统计或执行轨迹展示时再加。关键词搜索所需索引在实现 `search_message` 时再定。
-
-## 邮箱验证码登录
-
-流程：`POST /auth/code` 传入邮箱，后端生成验证码、存库并通过 Resend 发送；`POST /auth/verify` 传入邮箱和验证码，核对成功后（新邮箱自动创建用户）返回登录凭证；之后的请求都携带凭证，由中间件查出用户。
-
-- 登录凭证使用随机令牌 + 数据库记录（`sessions` 表），不使用 JWT：退出登录或管理员删除用户时删除记录，令牌立即失效；删除用户时经级联删除自动清除。JWT 签发后在过期前无法收回。
-- 令牌通过请求头 `Authorization: Bearer <令牌>` 传递（客户端为 Flutter，不使用 Cookie）。
-- 验证码为 6 位数字，有效期 10 分钟；同一邮箱 60 秒内只能请求一次，防止轰炸邮箱和浪费发信额度。
-- 同一验证码最多输错 5 次，之后作废，防止暴力猜测；请求新验证码时旧验证码立即作废，同一时间只有一个有效。
-- 验证码与登录令牌在数据库中只存哈希值，不存原文，数据库泄露也拿不到可用的凭证。
-- 发信按 `APP_ENV` 区分：`dev` 不发邮件，把验证码打印到后端日志，本地无需 Resend Key；`prod` 通过 Resend 发信，启动时缺少 Resend 配置直接报错退出，且绝不打印验证码。不采用"配了 Key 才发"，避免正式环境漏配时验证码被静默打进日志。
-- 允许多设备同时登录，每次登录新增一条 `sessions` 记录。
-- `POST /auth/logout` 只退出当前设备（删除当前令牌的记录）；"退出所有设备"暂不提供。
-- 登录凭证滑动过期：连续 30 天不活跃才失效；中间件在距上次延期超过一天时将过期时间推迟到 30 天后，避免每次请求都写库。过期令牌按未登录处理，返回 401；过期记录暂留表中，以后再加定期清理。
-- 发信配置为两个环境变量，仅 `prod` 必填：`RESEND_API_KEY` 与 `EMAIL_FROM`（如 `Aether <noreply@company.com>`）。发件域名需由部署企业先在 Resend 后台验证，部署说明中写明步骤。维护者自己的部署沿用 aether-start 已在 Resend 验证的域名，发件人为 `noreply@mail.forkicks.fun`。
-- 直接用 `net/http` 调用 Resend 发信接口，不引入官方 SDK：只需"发一封邮件"这一个功能。
-- 验证码邮件为中英双语，写在同一封邮件里，不做多语言切换；企业 fork 后可自行修改文案。样式沿用 aether-start 的深色验证码邮件。
-
-表结构（`00002_create_auth_tables.sql`）：
-
-- `login_codes`：`email` 主键（一个邮箱一行，请求新验证码时覆盖，旧的自然作废）、`code_hash`、`attempts`、`expires_at`、`created_at`（判断 60 秒重发间隔）。不关联 `users`，因为新邮箱验证成功前用户还不存在；验证成功后删除该行。
-- `sessions`：`id`、`user_id`（级联删除，带索引）、`token_hash`（唯一）、`expires_at`、`created_at`。滑动延期不需要额外的列：剩余不足 29 天即说明距上次延期超过一天。
-- 验证码只有一百万种可能，数据库泄露时其哈希可被穷举反推；因验证码 10 分钟过期、用过即删，影响有限，暂不引入服务端密钥。登录令牌为 32 字节随机数，不受此影响。
-
-实现要点：
-
-- 接口：`POST /auth/code`（成功 204，60 秒内重复请求 429）、`POST /auth/verify`（成功返回 `{"token": "..."}`，验证码错误或过期统一返回 400）、`POST /auth/logout`（成功 204）。未携带或携带无效、过期令牌返回 401。
-- 邮箱去除首尾空格并转为小写后再使用。
-- 核对验证码时先原子地占用一次尝试机会再比对，并发请求也不会超过 5 次。
-
-## 最小对话（第 1 步）
-
-实现顺序：最小对话（含 WebSocket 收发完整消息）→ 边生成边显示 → 更多工具（`read_message`、`search_message`）→ 压缩与混合搜索 → Subagent。第 1 步：用户通过 WebSocket 发消息，Main 调用模型并通过 `send_message` 回复，推送完整消息与状态，不推送逐段生成的文字。
-
-用户原话：
-
-> 我希望给用户发的消息添加这么几个状态：sending，delivered，read；main 先用 haiku5.5；系统提示词就参考 anthropic 发布过的 blog 和我们的产品理念；模型调用失败，无需对用户显示任何内容，内部上报。
-
-### Main 如何回复用户
-
-Main 只有调用 `send_message` 才会发消息给用户；模型直接输出的文字是 Main 自己的思考，用户看不到。
-
-理由：Main 会被 Subagent 的消息唤醒，很多汇报只需记下、不必打扰用户；"什么时候该开口"是 Main 的能力之一。用户与 Subagent 都通过同一个工具联系，与架构图一致。因此第 1 步就需要实现工具调用（至少 `send_message`）。
-
-### 消息状态
-
-| 状态 | 含义 | 判断方式 |
-| --- | --- | --- |
-| `sending` | App 已发出，后端尚未确认 | 只存在于 App |
-| `failed` | 请求未发送成功（如断网），用户可点击重发 | 只存在于 App |
-| `delivered` | 已存入数据库，Main 尚未加入上下文 | `sequence` 为空 |
-| `read` | Main 已加入上下文 | `sequence` 有值 |
-
-不新增列，后端返回消息时由 `sequence` 算出 `delivered` / `read`。
-
-### 模型
-
-- Main 使用 `anthropic/claude-haiku-5.5`（OpenRouter，上下文 100 万 token）。
-- 模型名由环境变量 `MAIN_MODEL` 配置，默认 `anthropic/claude-haiku-5.5`，企业换模型无需改代码。
-- `OPENROUTER_API_KEY` 在 dev 与 prod 下都必填：本地开发也需要真实调用模型。
-
-### 系统提示词
-
-参考 Anthropic 的文章：
-
-- [The new rules of context engineering for Claude 5 generation models](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models)：系统提示词的核心是说明产品与所做的事；少写死规则，让模型凭上下文判断；不给示例；工具用法写在工具描述中，不在系统提示词重复。
-- [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)：提示词写在"合适的高度"，既不硬编码脆弱逻辑，也不空泛。
-- [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)：教主 agent 如何分派任务（目标、产出格式、工具建议、任务边界），在实现 Subagent 时加入。
-
-提示词用英文写，让模型用用户的语言回复；产品名暂为 Aether，企业 fork 后可改。第 1 步的提示词：
-
-```text
-You are Aether, a personal agent. Each person you work with has exactly one
-conversation with you, and it never resets: the same relationship continues
-across days, months, and years. Older parts of the conversation may appear as
-summaries; treat them as your own memory of what happened.
-
-You are deployed by an organization to serve its people. Your job is to
-understand what the person actually needs and help them get it done, the way a
-capable assistant who knows them well would.
-
-Reply in the language the person writes in. Match the length and depth of your
-reply to what they asked: a quick question gets a quick answer. Be direct and
-honest, including about what you don't know or can't do.
-```
-
-工具与 Subagent 加入后，再补充分派任务的部分。
-
-### 模型调用失败
-
-- 不向用户显示任何内容，内部上报：`slog.Error` 记录日志，并写入对应 `steps` 行的 `error`。
-- 临时性错误（超时、限流、服务端 5xx）自动重试 3 次，间隔逐渐拉长；仍失败则放弃。
-- 用户消息已为 `read`，留在上下文中；用户下次发消息时，Main 会一并看到之前未回复的消息。
-
-## 多实例与实时通信
-
-用户原话：
-
-> 我希望做成 web socket，即，一打开聊天页面，就建立起双向通信的通道。
-
-> 我想采取类似这样的架构：生产者、共享存储、消费者。
-
-> 把 messages 表里，没有发给用户的消息全部发给用户不就行了嘛？
-
-### 整体结构
-
-参考业界做法后，采用"实例无状态、状态放在共享存储"的结构（与 [LangGraph Agent Server](https://docs.langchain.com/langsmith/agent-server)、[DBOS](https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution) 同一思路），不采用把请求路由到固定实例的 Actor 模型（如 Cloudflare Durable Objects、Restate Virtual Objects），因为后者依赖专门的平台。
-
-- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文、待读消息、Subagent 状态等都在 PostgreSQL 中。
-- 用户请求不需要路由到"正在运行 agent 的机器"：收到消息的机器只负责存入数据库；同一用户的 Main 由数据库锁保证同一时间只有一台机器运行，正在运行的机器在下一次模型调用前会取到新消息。
-- 机器之间通过 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，通知只带用户 ID，数据始终以表为准。不引入 Redis。
-- 内存中只有两样东西：WebSocket 连接（断开后 App 重连到任意机器即可）与进行中的模型调用（机器崩溃后由其他机器重新调用）。
-- 第 1 步只部署一台，但代码按多台的要求编写。
-
-不单独建 `events` 表：用户能看到的消息本就在 `messages` 中，每条 WebSocket 连接自己记录推送位置，从 `messages` 中查出位置之后的消息即可。
-
-### WebSocket
-
-- 使用 `coder/websocket` 库。
-- WebSocket 负责发消息与实时推送；拉取历史消息与登录走 HTTP。
-- 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后由 App 发送的第一条消息验证登录：`{"type": "auth", "token": "...", "last_message_id": "..."}`，5 秒内未收到或验证失败即断开。不把令牌放在网址中，避免被写入访问日志。
-- 后端每 30 秒发送心跳；连接断开时 App 自动重连。
-- 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。
-
-### 用户发消息
-
-1. App 发送 `{"type": "send_message", "id": "...", "text": "..."}`，消息 ID 由 App 生成，App 显示 `sending`。
-2. 后端校验：`id` 为合法 UUID；只支持纯文本，`text` 非空且不超过 32,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。
-3. 存入 `messages`，`sequence` 为空；同一 ID 已存在时不重复保存（App 重发时幂等）。
-4. 在同一连接上回复 `{"type": "delivered", "id": "..."}`；App 超时未收到则显示 `failed`，可点击重发。
-5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
-6. 尝试获取该用户的锁：获取到则运行 Main；获取不到说明已有机器在运行，到此为止。
-
-`content` 按 OpenRouter 的消息格式存储，组装上下文时可直接使用。
-
-### Main 运行
-
-获取锁后循环：
-
-1. 为所有待读消息补上序号（变为已读），发送 NOTIFY。
-2. 组装上下文：系统提示词 + Main 的全部消息。
-3. 调用模型，提供 `send_message` 工具（第 1 步只能发给用户）。
-4. 保存模型输出，在 `steps` 记录 token 数与费用。
-5. 模型调用了 `send_message` 时保存该消息，发送 NOTIFY。
-6. 模型本轮调用了工具则回到第 1 步；未调用工具则结束（直接输出的文字是思考，不发给用户）。
-
-结束后释放锁，并在释放后再查一次待读消息，如有则重新尝试获取锁，避免释放前一瞬间到达的消息无人处理。
-
-### 推送
-
-- 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记"已发送"。
-- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息（用户自己发的、Main 用 `send_message` 发给用户的），以及当前已读位置，推送给 App。
-- 已读位置用一个值表示（最后一条已读的用户消息）：待读消息总是一次性按顺序补号，已读只会从前往后连续推进。
-- App 重连时在 `auth` 中带上最后收到的消息 ID，后端从其后补齐。
-
-### 其他
-
-- `GET /messages?before=<ID>&limit=50`：从最新往前翻页，只返回用户能看到的消息；以 UUIDv7 的消息 ID 作翻页位置（待读消息没有序号）。
-- 后端启动时找出所有仍有待读消息的用户，逐个尝试运行其 Main，防止重启时丢消息。
-
-### 业界做法中暂不采用、以后再评估的
-
-- 将"连接服务器"与"agent worker"拆成两组机器（LangGraph 的做法）：代码按两种角色分开编写，第 1 步在同一进程中运行。
-- 用租约代替 advisory lock：第 1 步使用 advisory lock，更简单且机器崩溃时立即释放。
-- 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
-
-### 待确认细节
-
-- "用户能看到的消息"在 `messages` 中如何标记与查询。
-- 用户消息与 Main 回复可能由两台机器同时写入，按"位置之后"查询可能漏掉晚提交的消息。
-
-## 模型服务与费用
-
-项目开源、供企业 fork 部署，因此 OpenRouter 与 Resend 的 Key 由部署的企业在自己的环境变量中配置，费用由该企业承担。Main 使用 `anthropic/claude-haiku-5.5`（见上节），Subagent 的模型稍后确定。
-
-## 原始架构中已给出的约束
-
-- 消息保存后直接触发接收方。
-- Main 使用 `messageList` 上下文，按用户串行处理。
-- Main 提供 `assign_subagents`、`send_message`、`search_message`、`read_message` 四个工具。
-- `assign_subagents` 记录 Subagent 后异步启动，立即返回 `subagent_id`。
-- Subagent 按任务创建，使用独立上下文，后台执行，限额并行。
-- Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知（按用户确认，替代原图中的“进度 / 完成 / 失败回报”）。
-- 历史消息搜索和读取受用户权限及消息归属限制。
-- 保存消息、Run 状态及执行轨迹。
-- 浏览器和代码任务在隔离执行环境中执行。
-- Flutter 通过 HTTP/SSE 与后端交互，支持断线恢复（已按用户确认改为 HTTP + WebSocket）。
+| 实现顺序 | 最小对话 → 边生成边显示 → 更多工具 → 压缩与混合搜索 → Subagent | [05](wiki/05-main-runtime.md#实现顺序) |
+| 主对话 | 每用户一条长期主对话，同一份 `messageList` | [05](wiki/05-main-runtime.md) |
+| 回复用户 | 只通过 `send_message`；禁止直接输出正文，模型违约正文也不对外展示 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
+| 处理中收到新消息 | 当前请求或工具调用结束后、下一次模型调用前加入 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 按用户串行 | `pg_try_advisory_lock`，释放后唤醒调度；周期扫描补偿漏通知 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
+| Main 沟通方式 | 只通过工具行动和沟通，耗时任务以 `send_message` 汇报关键进展，完成后发送结果；禁止直接输出正文 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
+| Main 模型 | `minimax/minimax-m3.1-flash`，`MAIN_MODEL` 可改 | [05](wiki/05-main-runtime.md#模型) |
+| Subagent 模型 | `SUBAGENT_MODEL` 独立配置，留空时使用 `MAIN_MODEL` 的实际值 | [05](wiki/05-main-runtime.md#模型) |
+| 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，保留只用工具沟通和最终结果走 `send_message` 的契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
+| 模型调用失败 | 不向用户显示，记日志与 `steps.error`；临时错误重试 3 次 | [05](wiki/05-main-runtime.md#模型调用失败) |
+| Subagent | 与 Main 只通过消息联系；状态由运行时维护；收到消息即唤醒；暂无强制中断 | [05](wiki/05-main-runtime.md#subagent-已实现) |
+| 近期实现顺序 | Subagent 的联网搜索与网页读取 → WhatsApp 风格简版 Flutter → 本地联调；先补齐 Subagent 运行与通信链路 | [05](wiki/05-main-runtime.md#实现顺序) |
+| Subagent 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
+| 派发接口 | `assign_subagents({tasks:["任务说明", ...]})`，每项创建独立 Subagent，立即返回对应 ID | [05](wiki/05-main-runtime.md#assign_subagents-已实现) |
+| Subagent 并发 | 每用户最多 3 个同时执行，超出任务保留在数据库中排队 | [05](wiki/05-main-runtime.md#subagent-已实现) |
+| Subagent 超时 | 每次唤醒最多连续执行 15 分钟，超时标为 `failed` 并通知 Main，收到新消息可再唤醒 | [05](wiki/05-main-runtime.md#subagent-已实现) |
 
 ## 待确认问题
 
 以下仅是待讨论事项，不构成已采用的方案；清单也不是完整的决策枚举。
 
-- Flutter 包标识、各平台应用标识和前端代码组织；后端目录内的具体实现组织。
-- Flutter 版本；其余后端和前端依赖选择。
 - 文档语言（中文、英文或双语）。
-- Subagent 的具体模型及配置入口。
 - 企业管理员：身份与权限如何表示、本仓库后端为管理后台提供哪些接口、管理后台仓库的技术选型。
 - 按用户的用量与费用控制（额度、频率限制、统计）。
 - 多实例部署下的后台向量计算。
 - 企业统一登录（SSO）等登录方式扩展。
-- 聊天界面显示 Main 列表中的哪些内容。
-- 新消息加入上下文时的并发入库规则。
-- Subagent 并发上限、补充消息处理、取消、超时、失败和恢复规则。
 - 压缩的触发时机与摘要写法。
 - 混合搜索的细节：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；完整消息读取规则。
-- 消息持久化与触发执行之间的故障恢复规则。
 - 边生成边显示的推送方式，以及各平台的 WebSocket 连接恢复行为。
-- 搜索服务、HTTP 工具、MCP 接入方式及执行权限。
+- 其余 HTTP 工具与 MCP 的接入方式和权限。
 - 浏览器和代码隔离环境的实现、资源限制与生命周期。
 - 六个平台的界面、任务状态展示、发布和验证方式。
 - 通用 Docker 部署的具体形式；维护者阿里云新加坡实例的部署资源、数据库部署、域名、TLS 和 dev/prod 隔离方式。

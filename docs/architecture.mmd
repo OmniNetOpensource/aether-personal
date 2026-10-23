@@ -1,6 +1,6 @@
 flowchart TD
     subgraph L1["第一层：Flutter 前端"]
-        FLUTTER["聊天与任务界面：HTTP · WebSocket · 断线恢复"]
+        FLUTTER["Main 聊天界面：HTTP · WebSocket · 断线恢复"]
     end
 
     subgraph L2["第二层：Go 后端"]
@@ -23,11 +23,11 @@ flowchart TD
 
         subgraph SUBBOX["Subagent：按任务创建"]
             SUB["Sub Runtime：独立上下文 · 后台执行 · 限额并行"]
-            TOOLS["执行工具：搜索 · HTTP/MCP · 浏览器 · 代码"]
-
-            SUB <-->|"工具调用 / 结果"| TOOLS
         end
 
+        TOOLS["Main / Subagent 共用执行工具<br/>已实现：search · fetch_url<br/>待实现：HTTP/MCP · 浏览器 · 代码"]
+        SUB <-->|"工具调用 / 结果"| TOOLS
+        MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 对外消息与事件"| MESSAGES
         MESSAGES <-->|"保存与读取消息"| DB
         MESSAGES -->|"消息保存后直接触发 main"| MAIN
@@ -50,7 +50,7 @@ flowchart TD
     end
 
     FLUTTER <-->|"HTTP 历史记录 / WebSocket 收发消息与推送"| API
-    MAIN <-->|"模型推理 / 四个消息工具的调用请求"| MODEL
+    MAIN <-->|"模型推理 / 消息、派发与执行工具请求"| MODEL
     SUB <-->|"模型推理 / 执行工具的调用请求"| MODEL
     TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL
     TOOLS <-->|"隔离任务执行 / 结果"| SANDBOX
