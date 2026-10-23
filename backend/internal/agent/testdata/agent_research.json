@@ -1,0 +1,46 @@
+[
+  {
+    "id": "01-writing",
+    "title": "无需联网的短文本任务",
+    "prompts": [
+      "把这句话改得自然、简洁，保留原意，只给最终版本：我们计划于下周上线新版本，如您在使用过程中遇到任何问题，请随时与我们进行联系。"
+    ]
+  },
+  {
+    "id": "02-read-page",
+    "title": "单个指定网页",
+    "prompts": [
+      "只阅读 https://docs.flutter.dev/deployment/web ，用三条中文说明 Flutter Web 发布前要做什么，每条不超过两句话，最后附来源。不要额外搜索。"
+    ]
+  },
+  {
+    "id": "03-search-read",
+    "title": "搜索后阅读官方资料",
+    "prompts": [
+      "通过 Google 找到 Flutter 官方关于 WebAssembly 的说明，并读取官方页面。请说明它与默认 Web 构建的关系、构建命令和部署服务器要求，附官方来源；区分文档明确说明和你的推断。"
+    ]
+  },
+  {
+    "id": "04-two-sources",
+    "title": "两份独立资料的对照",
+    "prompts": [
+      "阅读 https://api.flutter.dev/flutter/foundation/ChangeNotifier-class.html 和 https://api.flutter.dev/flutter/foundation/ValueNotifier-class.html ，比较它们的通知触发方式、适用场景和可变集合的注意点。用一个简短表格和一个选择建议回答，每项结论能对应到来源。"
+    ]
+  },
+  {
+    "id": "05-three-platforms",
+    "title": "跨平台调研与证据区分",
+    "prompts": [
+      "我在学习 Flutter 异步编程。请把 Google 的 Flutter 或 Dart 官方资料、微信公众号、小红书这三路资料分别交给独立的后台助手查找和读取正文，每路找一份相关材料，再由你整合。给出一个三步学习顺序，说明每份材料适合解决什么问题，附各自来源链接。把官方规则与作者个人经验区分清楚。"
+    ],
+    "require_delegation": true
+  },
+  {
+    "id": "06-follow-up",
+    "title": "带历史的追问",
+    "prompts": [
+      "阅读 https://docs.flutter.dev/deployment/web ，简要总结 Flutter Web 的构建输出目录、WebAssembly 服务器要求和 source map 部署注意事项，附来源。",
+      "根据刚才读到的内容，给我一份最短的发布检查清单，并单独写出使用 WebAssembly 时新增的服务器要求。这次不要再搜索或读取网页，信息不足就明确说。"
+    ]
+  }
+]
