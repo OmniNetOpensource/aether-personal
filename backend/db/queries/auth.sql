@@ -30,8 +30,9 @@ INSERT INTO sessions (user_id, token_hash, expires_at)
 VALUES ($1, $2, now() + interval '30 days');
 
 -- name: GetActiveSession :one
-SELECT id, user_id FROM sessions
-WHERE token_hash = $1 AND expires_at > now();
+SELECT sessions.id, sessions.user_id, users.email FROM sessions
+JOIN users ON users.id = sessions.user_id
+WHERE sessions.token_hash = $1 AND sessions.expires_at > now();
 
 -- name: ExtendSession :exec
 -- 剩余不足 29 天（距上次延期超过一天）才写库。

@@ -12,6 +12,23 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type ActiveAgentUser struct {
+	UserID uuid.UUID
+}
+
+type AdminLoginAttempt struct {
+	Singleton       bool
+	Attempts        int32
+	WindowStartedAt time.Time
+}
+
+type AdminSession struct {
+	ID             uuid.UUID
+	TokenHash      []byte
+	CredentialHash []byte
+	ExpiresAt      time.Time
+}
+
 type LoginCode struct {
 	Email     string
 	CodeHash  []byte
@@ -21,19 +38,91 @@ type LoginCode struct {
 }
 
 type Message struct {
-	ID               uuid.UUID
-	UserID           uuid.UUID
-	SubagentID       *uuid.UUID
-	Sequence         *int64
-	Role             string
-	Content          []byte
-	Sender           *string
-	SenderSubagentID *uuid.UUID
-	StepID           *uuid.UUID
-	IsSummary        bool
-	Embedding        *pgvector.Vector
-	CreatedAt        time.Time
-	ClientMessageID  *uuid.UUID
+	ID                     uuid.UUID
+	UserID                 uuid.UUID
+	SubagentID             *uuid.UUID
+	Sequence               *int64
+	Role                   string
+	Content                []byte
+	Sender                 *string
+	SenderSubagentID       *uuid.UUID
+	StepID                 *uuid.UUID
+	IsSummary              bool
+	Embedding              *pgvector.Vector
+	CreatedAt              time.Time
+	ClientMessageID        *uuid.UUID
+	SummaryThroughSequence *int64
+	CompactReplySequence   *int64
+}
+
+type ModelCall struct {
+	ID                     uuid.UUID
+	StepID                 *uuid.UUID
+	UserID                 uuid.UUID
+	SubagentID             *uuid.UUID
+	RequestedModel         string
+	ResponseModel          *string
+	ProviderGenerationID   *string
+	Outcome                string
+	HttpStatus             *int32
+	StartedAt              time.Time
+	FinishedAt             *time.Time
+	DurationMs             *int64
+	InputTokens            *int32
+	OutputTokens           *int32
+	Cost                   *decimal.Decimal
+	ToolNames              []string
+	FailureKind            *string
+	RequestBody            []byte
+	ResponseBody           []byte
+	ResponseTruncated      bool
+	Purpose                string
+	CompactReason          *string
+	ContextTokensBefore    *int32
+	ContextTokensAfter     *int32
+	SummaryThroughSequence *int64
+}
+
+type ModelSetting struct {
+	ID                     uuid.UUID
+	Singleton              bool
+	MainModel              string
+	SubagentModel          *string
+	Version                int64
+	UpdatedAt              time.Time
+	UpdatedBy              string
+	MainModelMaxTokens     *int32
+	SubagentModelMaxTokens *int32
+	CompactAfterHours      int32
+	CompactAtTokens        int32
+	MainContextLength      *int64
+	SubagentContextLength  *int64
+}
+
+type RecapState struct {
+	UserID            uuid.UUID
+	Active            bool
+	WorkVersion       int64
+	WindowStartedAt   time.Time
+	RequestTotal      int64
+	RecapRequestTotal int64
+	Summary           string
+	Revision          int64
+	UpdatedAt         time.Time
+}
+
+type SandboxOperation struct {
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	StepID            uuid.UUID
+	ToolCallID        string
+	ToolName          string
+	Args              []byte
+	State             string
+	ProviderCommandID *string
+	Result            []byte
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type Session struct {
@@ -55,6 +144,10 @@ type Step struct {
 	Error        *string
 	StartedAt    time.Time
 	FinishedAt   *time.Time
+	ModelReply   []byte
+	ResumeAfter  *time.Time
+	Purpose      string
+	Activity     []byte
 }
 
 type Subagent struct {
@@ -69,4 +162,14 @@ type User struct {
 	ID        uuid.UUID
 	Email     string
 	CreatedAt time.Time
+}
+
+type UserSandbox struct {
+	UserID         uuid.UUID
+	AllocationID   uuid.UUID
+	ProviderID     *string
+	ProvisionState string
+	LastActivityAt time.Time
+	LastError      *string
+	CreatedAt      time.Time
 }

@@ -57,19 +57,21 @@ func (q *Queries) ExtendSession(ctx context.Context, id uuid.UUID) error {
 }
 
 const getActiveSession = `-- name: GetActiveSession :one
-SELECT id, user_id FROM sessions
-WHERE token_hash = $1 AND expires_at > now()
+SELECT sessions.id, sessions.user_id, users.email FROM sessions
+JOIN users ON users.id = sessions.user_id
+WHERE sessions.token_hash = $1 AND sessions.expires_at > now()
 `
 
 type GetActiveSessionRow struct {
 	ID     uuid.UUID
 	UserID uuid.UUID
+	Email  string
 }
 
 func (q *Queries) GetActiveSession(ctx context.Context, tokenHash []byte) (GetActiveSessionRow, error) {
 	row := q.db.QueryRow(ctx, getActiveSession, tokenHash)
 	var i GetActiveSessionRow
-	err := row.Scan(&i.ID, &i.UserID)
+	err := row.Scan(&i.ID, &i.UserID, &i.Email)
 	return i, err
 }
 

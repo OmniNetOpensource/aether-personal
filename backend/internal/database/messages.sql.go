@@ -87,6 +87,60 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 	return err
 }
 
+const getLastContextUsage = `-- name: GetLastContextUsage :one
+SELECT requested_model, request_body, coalesce(input_tokens, 0)::integer AS input_tokens
+FROM model_calls WHERE user_id = $1
+ AND subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL
+ORDER BY started_at DESC LIMIT 1
+`
+
+type GetLastContextUsageParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+type GetLastContextUsageRow struct {
+	RequestedModel string
+	RequestBody    []byte
+	InputTokens    int32
+}
+
+func (q *Queries) GetLastContextUsage(ctx context.Context, arg GetLastContextUsageParams) (GetLastContextUsageRow, error) {
+	row := q.db.QueryRow(ctx, getLastContextUsage, arg.UserID, arg.SubagentID)
+	var i GetLastContextUsageRow
+	err := row.Scan(&i.RequestedModel, &i.RequestBody, &i.InputTokens)
+	return i, err
+}
+
+const getLastMainReply = `-- name: GetLastMainReply :one
+SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.created_at FROM messages AS m
+WHERE m.user_id = $1 AND m.subagent_id IS NULL AND m.role = 'assistant'
+ AND EXISTS (
+  SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.content->'tool_calls') = 'array'
+   THEN m.content->'tool_calls' ELSE '[]'::jsonb END) AS call
+  JOIN messages AS receipt ON receipt.user_id = m.user_id AND receipt.subagent_id IS NULL
+   AND receipt.role = 'tool' AND receipt.content->>'tool_call_id' = call->>'id'
+   AND receipt.content->>'content' = 'delivered' AND receipt.sequence > m.sequence
+  WHERE call->'function'->>'name' = 'send_message'
+   AND CASE WHEN pg_input_is_valid(call->'function'->>'arguments', 'jsonb')
+    THEN (call->'function'->>'arguments')::jsonb->>'to' = 'user' ELSE false END
+ )
+ORDER BY m.sequence DESC LIMIT 1
+`
+
+type GetLastMainReplyRow struct {
+	Sequence  int64
+	CreatedAt time.Time
+}
+
+func (q *Queries) GetLastMainReply(ctx context.Context, userID uuid.UUID) (GetLastMainReplyRow, error) {
+	row := q.db.QueryRow(ctx, getLastMainReply, userID)
+	var i GetLastMainReplyRow
+	err := row.Scan(&i.Sequence, &i.CreatedAt)
+	return i, err
+}
+
 const getLatestMainMessageID = `-- name: GetLatestMainMessageID :one
 SELECT id FROM messages
 WHERE user_id = $1 AND subagent_id IS NULL
@@ -139,7 +193,7 @@ func (q *Queries) GetSubagent(ctx context.Context, arg GetSubagentParams) (Subag
 
 const getUnfinishedStep = `-- name: GetUnfinishedStep :one
 SELECT id FROM steps
-WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND finished_at IS NULL
+WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND finished_at IS NULL AND purpose = 'agent'
 ORDER BY started_at LIMIT 1
 `
 
@@ -179,6 +233,32 @@ func (q *Queries) InsertAgentMessage(ctx context.Context, arg InsertAgentMessage
 	return err
 }
 
+const insertContextSummary = `-- name: InsertContextSummary :exec
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence, compact_reply_sequence)
+VALUES ($1, $2, 'user', $3, $4, true, $5, $6)
+`
+
+type InsertContextSummaryParams struct {
+	UserID                 uuid.UUID
+	SubagentID             *uuid.UUID
+	Content                []byte
+	StepID                 *uuid.UUID
+	SummaryThroughSequence *int64
+	CompactReplySequence   *int64
+}
+
+func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSummaryParams) error {
+	_, err := q.db.Exec(ctx, insertContextSummary,
+		arg.UserID,
+		arg.SubagentID,
+		arg.Content,
+		arg.StepID,
+		arg.SummaryThroughSequence,
+		arg.CompactReplySequence,
+	)
+	return err
+}
+
 const insertUserMessage = `-- name: InsertUserMessage :execrows
 INSERT INTO messages (user_id, sequence, role, content, sender, client_message_id)
 VALUES (
@@ -206,10 +286,38 @@ func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessagePa
 	return result.RowsAffected(), nil
 }
 
+const isMainThinking = `-- name: IsMainThinking :one
+SELECT EXISTS (
+    SELECT 1 FROM steps AS main_step
+    WHERE main_step.user_id = $1::uuid
+        AND main_step.subagent_id IS NULL AND main_step.finished_at IS NULL
+    UNION ALL
+    SELECT 1 FROM messages AS main_message
+    WHERE main_message.user_id = $1::uuid
+        AND main_message.subagent_id IS NULL AND main_message.sequence IS NULL
+)
+`
+
+func (q *Queries) IsMainThinking(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isMainThinking, userID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listAgentContext = `-- name: ListAgentContext :many
-SELECT content FROM messages
-WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND sequence IS NOT NULL
-ORDER BY sequence
+WITH summary AS (
+ SELECT id, summary_through_sequence FROM messages
+ WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND is_summary
+ ORDER BY sequence DESC LIMIT 1
+)
+SELECT m.content FROM messages AS m
+WHERE m.user_id = $1 AND m.subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND m.sequence IS NOT NULL AND (
+  m.id = (SELECT id FROM summary)
+  OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
+ )
+ORDER BY m.is_summary DESC, m.sequence
 `
 
 type ListAgentContextParams struct {
@@ -237,9 +345,61 @@ func (q *Queries) ListAgentContext(ctx context.Context, arg ListAgentContextPara
 	return items, nil
 }
 
+const listAgentContextRows = `-- name: ListAgentContextRows :many
+WITH summary AS (
+ SELECT id, summary_through_sequence FROM messages
+ WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND is_summary
+ ORDER BY sequence DESC LIMIT 1
+)
+SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.compact_reply_sequence FROM messages AS m
+WHERE m.user_id = $1 AND m.subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND m.sequence IS NOT NULL AND (
+  m.id = (SELECT id FROM summary)
+  OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
+ )
+ORDER BY m.is_summary DESC, m.sequence
+`
+
+type ListAgentContextRowsParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+type ListAgentContextRowsRow struct {
+	Sequence             int64
+	Content              []byte
+	IsSummary            bool
+	CompactReplySequence *int64
+}
+
+func (q *Queries) ListAgentContextRows(ctx context.Context, arg ListAgentContextRowsParams) ([]ListAgentContextRowsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentContextRows, arg.UserID, arg.SubagentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentContextRowsRow
+	for rows.Next() {
+		var i ListAgentContextRowsRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.Content,
+			&i.IsSummary,
+			&i.CompactReplySequence,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChatRowsAfter = `-- name: ListChatRowsAfter :many
 SELECT id, role, sender, client_message_id, content, created_at FROM messages
-WHERE user_id = $1 AND subagent_id IS NULL AND (sender = 'user' OR role = 'assistant') AND id > $2
+WHERE user_id = $1 AND subagent_id IS NULL AND NOT is_summary AND (sender = 'user' OR role = 'assistant') AND id > $2
 ORDER BY id
 LIMIT 100
 `
@@ -287,7 +447,7 @@ func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterPa
 
 const listChatRowsBefore = `-- name: ListChatRowsBefore :many
 SELECT id, role, sender, client_message_id, content, created_at FROM messages
-WHERE user_id = $1 AND subagent_id IS NULL AND (sender = 'user' OR role = 'assistant') AND id < $2
+WHERE user_id = $1 AND subagent_id IS NULL AND NOT is_summary AND (sender = 'user' OR role = 'assistant') AND id < $2
 ORDER BY id DESC
 LIMIT 50
 `
@@ -365,12 +525,22 @@ func (q *Queries) ListPendingAgentMessageIDs(ctx context.Context, arg ListPendin
 }
 
 const listRunnableAgents = `-- name: ListRunnableAgents :many
-SELECT user_id, subagent_id FROM messages WHERE sequence IS NULL
-UNION
-SELECT user_id, subagent_id FROM steps WHERE finished_at IS NULL
-UNION
-SELECT user_id, id AS subagent_id FROM subagents WHERE status = 'running'
-ORDER BY user_id, subagent_id NULLS FIRST
+SELECT candidates.user_id, candidates.subagent_id FROM (
+    SELECT user_id, subagent_id FROM messages WHERE sequence IS NULL
+    UNION
+    SELECT user_id, subagent_id FROM steps WHERE finished_at IS NULL
+    UNION
+    SELECT user_id, id AS subagent_id FROM subagents WHERE status = 'running'
+    UNION
+    SELECT user_id, subagent_id FROM model_calls WHERE outcome = 'in_flight' AND purpose <> 'recap'
+) AS candidates
+WHERE NOT EXISTS (
+    SELECT 1 FROM steps AS deferred
+    WHERE deferred.user_id = candidates.user_id
+        AND deferred.subagent_id IS NOT DISTINCT FROM candidates.subagent_id
+        AND deferred.finished_at IS NULL AND deferred.resume_after > now()
+)
+ORDER BY candidates.user_id, candidates.subagent_id NULLS FIRST
 `
 
 type ListRunnableAgentsRow struct {
@@ -426,6 +596,36 @@ func (q *Queries) NotifyUserMessages(ctx context.Context, userID uuid.UUID) erro
 	return err
 }
 
+const recoverCompactSteps = `-- name: RecoverCompactSteps :exec
+UPDATE steps SET finished_at = now(), error = 'compaction interrupted before commit'
+WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND purpose = 'compact' AND finished_at IS NULL
+`
+
+type RecoverCompactStepsParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+func (q *Queries) RecoverCompactSteps(ctx context.Context, arg RecoverCompactStepsParams) error {
+	_, err := q.db.Exec(ctx, recoverCompactSteps, arg.UserID, arg.SubagentID)
+	return err
+}
+
+const saveCompactedContextSize = `-- name: SaveCompactedContextSize :exec
+UPDATE model_calls SET context_tokens_after = $2 WHERE step_id = $1 AND purpose = 'compact' AND outcome = 'succeeded'
+`
+
+type SaveCompactedContextSizeParams struct {
+	StepID             *uuid.UUID
+	ContextTokensAfter *int32
+}
+
+func (q *Queries) SaveCompactedContextSize(ctx context.Context, arg SaveCompactedContextSizeParams) error {
+	_, err := q.db.Exec(ctx, saveCompactedContextSize, arg.StepID, arg.ContextTokensAfter)
+	return err
+}
+
 const setSubagentStatus = `-- name: SetSubagentStatus :exec
 UPDATE subagents SET status = $3 WHERE user_id = $1 AND id = $2
 `
@@ -439,6 +639,24 @@ type SetSubagentStatusParams struct {
 func (q *Queries) SetSubagentStatus(ctx context.Context, arg SetSubagentStatusParams) error {
 	_, err := q.db.Exec(ctx, setSubagentStatus, arg.UserID, arg.ID, arg.Status)
 	return err
+}
+
+const startCompactStep = `-- name: StartCompactStep :one
+INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
+VALUES ($1, $2, $3, now(), 'compact') RETURNING id
+`
+
+type StartCompactStepParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	Model      string
+}
+
+func (q *Queries) StartCompactStep(ctx context.Context, arg StartCompactStepParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, startCompactStep, arg.UserID, arg.SubagentID, arg.Model)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const startStep = `-- name: StartStep :one
