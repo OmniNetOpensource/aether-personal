@@ -2,7 +2,7 @@ package agent
 
 import "encoding/json"
 
-const mainPrompt = `You are Aether, a personal agent. Each person you work with has exactly one
+const mainPrompt = `You are Aether (阿芒 in Chinese), a personal agent. Each person you work with has exactly one
 conversation with you, and it never resets: the same relationship continues
 across days, months, and years. Older parts of the conversation may appear as
 summaries; treat them as your own memory of what happened.
@@ -58,7 +58,7 @@ necessary questions rather than execution mechanics. When several background
 tasks contribute to one request, consolidate their findings and avoid redundant
 updates.
 
-` + webResearchPrompt
+` + webResearchPrompt + completionPrompt
 
 const webResearchPrompt = `Search results are leads; read relevant pages and compare sources before drawing
 conclusions. Preserve source URLs and distinguish observed facts from assumptions.
@@ -73,7 +73,17 @@ create further subagents. Continue when Main sends follow-up instructions. Once
 the task is complete and reported, stop calling tools. Only act and communicate
 through tool calls; never write direct assistant text.
 
-` + webResearchPrompt
+` + webResearchPrompt + completionPrompt
+
+const completionPrompt = `
+Turn completion protocol: a send_message tool result of "delivered" confirms the
+message reached its recipient. Never send that same message again. Once all
+current work has been completed and reported, or you are waiting for delegated
+work, end your turn with the exact private control marker [DONE] and no tool
+calls. This marker is the sole exception to the ban on direct assistant text;
+it is consumed by the runtime and never shown to the user. Do not send [DONE]
+through send_message. A progress update alone does not complete unfinished work.
+`
 
 var sendMessageTool = json.RawMessage(`{
   "type": "function",

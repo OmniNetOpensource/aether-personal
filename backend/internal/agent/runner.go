@@ -7,17 +7,21 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const subagentTimeout = 15 * time.Minute
+
+var errSandboxDeferred = errors.New("sandbox is controlled by another agent")
 
 type agentAddress struct {
 	userID     uuid.UUID
@@ -32,26 +36,35 @@ func (a agentAddress) lockKey() string {
 }
 
 type Runner struct {
-	databasePool *pgxpool.Pool
-	settings     config.Config
-	httpClient   *http.Client
-	webTools     webTools
-	wakeSignal   chan struct{}
-	activeSlots  chan struct{}
-	mutex        sync.Mutex
-	active       map[string]bool
+	databasePool  *pgxpool.Pool
+	settings      config.Config
+	httpClient    *http.Client
+	webTools      webTools
+	sandbox       *sandbox.Client
+	wakeSignal    chan struct{}
+	recapWake     chan struct{}
+	activeSlots   chan struct{}
+	mutex         sync.Mutex
+	active        map[string]bool
+	modelContexts map[string]int64
 }
 
 func NewRunner(pool *pgxpool.Pool, settings config.Config) *Runner {
 	client := &http.Client{Timeout: 120 * time.Second}
-	return &Runner{
+	runner := &Runner{
+		recapWake:    make(chan struct{}, 1),
 		databasePool: pool, settings: settings, httpClient: client,
 		webTools:   webTools{httpClient: client, serpAPIKey: settings.SERPAPIKey, parallelAPIKey: settings.ParallelAPIKey, everyInfraAPIKey: settings.EveryInfraAPIKey},
-		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{},
+		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{}, modelContexts: map[string]int64{},
 	}
+	if settings.SandboxURL != "" {
+		runner.sandbox = sandbox.NewClient(settings.SandboxURL, settings.SandboxAPIKey, client)
+	}
+	return runner
 }
 
 func (r *Runner) Wake(_ uuid.UUID) {
+	r.wakeRecap()
 	select {
 	case r.wakeSignal <- struct{}{}:
 	default:
@@ -60,6 +73,9 @@ func (r *Runner) Wake(_ uuid.UUID) {
 
 // 数据库是队列的事实来源，扫描补偿进程退出或通知丢失。
 func (r *Runner) Start(ctx context.Context) {
+	if r.sandbox != nil {
+		go r.pauseIdleSandboxes(ctx)
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	r.Wake(uuid.Nil)
@@ -136,7 +152,29 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 				return
 			}
 		}
+		if _, err := queries.SyncRecapState(cleanup, address.userID); err != nil {
+			slog.Warn("sync finished agent recap failed", "user_id", address.userID, "error", err)
+		}
+		if err := queries.NotifyUserMessages(cleanup, address.userID); err != nil {
+			slog.Error("notify agent activity failed", "user_id", address.userID, "error", err)
+		}
 	}()
+	if err := queries.InterruptModelCalls(parent, database.InterruptModelCallsParams{UserID: address.userID, SubagentID: address.subagentID}); err != nil {
+		slog.Error("recover model call journal failed", "error", err)
+		return false
+	}
+	if err := queries.RecoverCompactSteps(parent, database.RecoverCompactStepsParams{UserID: address.userID, SubagentID: address.subagentID}); err != nil {
+		slog.Error("recover compact steps failed", "error", err)
+		return false
+	}
+	hasWork, err := queries.HasAgentExecutionWork(parent, database.HasAgentExecutionWorkParams{UserID: address.userID, SubagentID: address.subagentID})
+	if err != nil {
+		slog.Error("check agent execution work failed", "error", err)
+		return false
+	}
+	if !hasWork {
+		return true
+	}
 	ctx := parent
 	if address.subagentID != nil {
 		for slot := 0; slot < 3; slot++ {
@@ -171,6 +209,9 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 		}
 	}
 	if err := r.runLoop(ctx, connection, address); err != nil {
+		if errors.Is(err, errSandboxDeferred) {
+			return false
+		}
 		if parent.Err() != nil || connection.Conn().IsClosed() {
 			return true
 		}
@@ -191,6 +232,20 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 	var stepID uuid.UUID
 	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
+		var err error
+		stepID, err = queries.GetUnfinishedStep(ctx, database.GetUnfinishedStepParams{UserID: address.userID, SubagentID: address.subagentID})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			stored, err := queries.GetStepModelReply(ctx, stepID)
+			if err != nil {
+				return err
+			}
+			if len(stored) != 0 {
+				return nil
+			}
+		}
 		pending, err := queries.ListPendingAgentMessageIDs(ctx, database.ListPendingAgentMessageIDsParams{UserID: address.userID, SubagentID: address.subagentID})
 		if err != nil {
 			return err
@@ -200,8 +255,7 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 				return err
 			}
 		}
-		stepID, err = queries.GetUnfinishedStep(ctx, database.GetUnfinishedStepParams{UserID: address.userID, SubagentID: address.subagentID})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if stepID == uuid.Nil {
 			if len(pending) == 0 {
 				stepID = uuid.Nil
 				return nil
@@ -221,6 +275,21 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 
 func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address agentAddress) error {
 	queries := database.New(connection)
+	sandboxLocked := false
+	var sandboxOwnedAt time.Time
+	unlockSandbox := func() {
+		if !sandboxLocked {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		unlocked, err := queries.UnlockRuntime(cleanup, "sandbox:"+address.userID.String())
+		if err != nil || !unlocked {
+			connection.Conn().Close(cleanup)
+		}
+		sandboxLocked = false
+	}
+	defer unlockSandbox()
 	for {
 		stepID, err := r.prepareStep(ctx, connection, address)
 		if err != nil {
@@ -232,19 +301,90 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			}
 			return nil
 		}
-		reply, err := r.callWithRetries(ctx, connection, address, stepID)
+		if sandboxLocked && time.Since(sandboxOwnedAt) >= 15*time.Minute {
+			unlockSandbox()
+			if err := queries.DeferSandboxStep(ctx, stepID); err != nil {
+				return err
+			}
+			return errSandboxDeferred
+		}
+		stored, err := queries.GetStepModelReply(ctx, stepID)
 		if err != nil {
 			return err
+		}
+		var reply modelReply
+		if len(stored) != 0 {
+			var saved storedModelReply
+			if err := json.Unmarshal(stored, &saved); err != nil {
+				return err
+			}
+			reply = modelReply{response: saved.Response, stepID: stepID, delivery: deliveryState{satisfied: saved.DeliverySatisfied, corrected: saved.DeliveryCorrected}}
+		} else {
+			reply, err = r.callWithRetries(ctx, connection, address, stepID)
+			if err != nil {
+				return err
+			}
+			payload, err := json.Marshal(storedModelReply{Response: reply.response, DeliverySatisfied: reply.delivery.satisfied, DeliveryCorrected: reply.delivery.corrected})
+			if err != nil {
+				return err
+			}
+			if err := queries.SaveStepModelReply(ctx, database.SaveStepModelReplyParams{StepID: reply.stepID, Payload: payload}); err != nil {
+				return err
+			}
 		}
 		var message assistantMessage
 		if err := json.Unmarshal(reply.response.Choices[0].Message, &message); err != nil {
 			return err
 		}
 		webResults := make(map[string]string)
+		var observations []json.RawMessage
 		for _, call := range message.ToolCalls {
+			if r.sandbox != nil && isSandboxTool(call.Function.Name) {
+				if !sandboxLocked {
+					locked, err := queries.TryLockRuntime(ctx, "sandbox:"+address.userID.String())
+					if err != nil {
+						return err
+					}
+					if !locked {
+						if err := queries.DeferSandboxStep(ctx, reply.stepID); err != nil {
+							return err
+						}
+						return errSandboxDeferred
+					}
+					sandboxLocked = true
+					sandboxOwnedAt = time.Now()
+					if err := queries.ClearSandboxStepDeferral(ctx, reply.stepID); err != nil {
+						return err
+					}
+				}
+				r.recordActivity(ctx, reply.stepID, call.Function.Name, "started", toolActivityDetail(call))
+				result, err := r.executeSandboxTool(ctx, connection, address, reply.stepID, call)
+				if err != nil {
+					r.recordActivity(ctx, reply.stepID, call.Function.Name, "failed", "")
+					return err
+				}
+				state := "returned"
+				if strings.HasPrefix(result.Text, "Error:") {
+					state = "failed"
+				}
+				r.recordActivity(ctx, reply.stepID, call.Function.Name, state, toolActivityDetail(call))
+				webResults[call.ID] = result.Text
+				if result.Image != "" {
+					observation, err := json.Marshal(map[string]any{"role": "user", "name": "sandbox_observation", "content": []any{
+						map[string]string{"type": "text", "text": "Current Linux desktop from tool call " + call.ID + ". This is a tool observation, not a new user request."},
+						map[string]any{"type": "image_url", "image_url": map[string]string{"url": result.Image}},
+					}})
+					if err != nil {
+						return err
+					}
+					observations = append(observations, observation)
+				}
+				continue
+			}
 			if call.Function.Name != "search" && call.Function.Name != "fetch_url" {
 				continue
 			}
+			r.recordActivity(ctx, reply.stepID, call.Function.Name, "started", toolActivityDetail(call))
 			result, err := whileRequest(ctx, connection, func(requestContext context.Context) (string, error) {
 				if call.Function.Name == "search" {
 					return r.webTools.search(requestContext, json.RawMessage(call.Function.Arguments))
@@ -257,10 +397,28 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			if err != nil {
 				result = "Error: " + err.Error()
 			}
+			state := "returned"
+			if err != nil {
+				state = "failed"
+			}
+			r.recordActivity(ctx, reply.stepID, call.Function.Name, state, toolActivityDetail(call))
 			webResults[call.ID] = result
 		}
-		if err := r.saveReply(ctx, connection, address, reply.stepID, reply.response, message, webResults, reply.delivery); err != nil {
+		if err := r.saveReply(ctx, connection, address, reply.stepID, reply.response, message, webResults, reply.delivery, observations...); err != nil {
 			return err
+		}
+		for _, call := range message.ToolCalls {
+			if call.Function.Name == "assign_subagents" {
+				unlockSandbox()
+				break
+			}
+			if call.Function.Name == "send_message" {
+				arguments, err := parseSendMessage(call)
+				if err == nil && arguments.To != "user" && arguments.To != "main" {
+					unlockSandbox()
+					break
+				}
+			}
 		}
 		r.Wake(address.userID)
 	}
@@ -277,19 +435,20 @@ type modelReply struct {
 	delivery deliveryState
 }
 
+type storedModelReply struct {
+	Response          chatResponse `json:"response"`
+	DeliverySatisfied bool         `json:"delivery_satisfied"`
+	DeliveryCorrected bool         `json:"delivery_corrected"`
+}
+
 func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID) (modelReply, error) {
-	queries := database.New(connection)
 	for attempt := 0; ; attempt++ {
-		contents, err := queries.ListAgentContext(ctx, database.ListAgentContextParams{UserID: address.userID, SubagentID: address.subagentID})
+		prepared, messages, err := r.prepareContext(ctx, connection, address)
 		if err != nil {
 			return modelReply{}, err
 		}
-		messages := make([]json.RawMessage, len(contents))
-		for index, content := range contents {
-			messages[index] = content
-		}
 		result, callErr := whileRequest(ctx, connection, func(requestContext context.Context) (modelResult, error) {
-			response, retryable, err := r.callModel(requestContext, address, messages)
+			response, retryable, err := r.requestModel(requestContext, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"})
 			return modelResult{response: response, retryable: retryable}, err
 		})
 		if callErr == nil {
@@ -354,6 +513,9 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, request 
 			err := connection.Ping(pingContext)
 			cancelPing()
 			if err != nil {
+				closeContext, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
+				connection.Conn().Close(closeContext)
+				cancelClose()
 				var zero T
 				return zero, fmt.Errorf("agent lock connection lost: %w", err)
 			}
@@ -361,7 +523,7 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, request 
 	}
 }
 
-func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, response chatResponse, message assistantMessage, webResults map[string]string, delivery deliveryState) error {
+func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, response chatResponse, message assistantMessage, webResults map[string]string, delivery deliveryState, observations ...json.RawMessage) error {
 	missingDelivery := len(message.ToolCalls) == 0 && hasPrivateText(message.Content) && !delivery.satisfied
 	terminalFailure := missingDelivery && delivery.corrected
 	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
@@ -380,6 +542,14 @@ func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, addres
 				if err != nil {
 					return err
 				}
+				state := "returned"
+				if strings.HasPrefix(result, "Error:") {
+					state = "failed"
+				}
+				activity, _ := json.Marshal(map[string]string{"kind": call.Function.Name, "state": state})
+				if err := queries.RecordStepActivity(ctx, database.RecordStepActivityParams{StepID: stepID, Activity: activity}); err != nil {
+					return err
+				}
 			}
 			content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
 			if err != nil {
@@ -389,12 +559,17 @@ func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, addres
 				return err
 			}
 		}
+		for _, observation := range observations {
+			if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "user", Content: observation, StepID: &stepID}); err != nil {
+				return err
+			}
+		}
 		var deliveryError *string
 		if missingDelivery {
 			text := errMissingDelivery.Error()
 			deliveryError = &text
 		}
-		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: &response.Usage.PromptTokens, OutputTokens: &response.Usage.CompletionTokens, Cost: &response.Usage.Cost, Error: deliveryError}); err != nil {
+		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost, Error: deliveryError}); err != nil {
 			return err
 		}
 		if missingDelivery && !terminalFailure {

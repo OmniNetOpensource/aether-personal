@@ -46,6 +46,7 @@ func main() {
 	defer databasePool.Close()
 	runner := agent.NewRunner(databasePool, appConfig)
 	go runner.Start(ctx)
+	go runner.StartRecaps(ctx)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

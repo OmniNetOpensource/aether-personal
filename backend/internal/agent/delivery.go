@@ -23,10 +23,13 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 	calls := map[string]toolCall{}
 	for _, raw := range messages {
 		var message struct {
-			Role       string          `json:"role"`
-			Content    json.RawMessage `json:"content"`
-			ToolCalls  []toolCall      `json:"tool_calls"`
-			ToolCallID string          `json:"tool_call_id"`
+			Role              string          `json:"role"`
+			Name              string          `json:"name"`
+			Content           json.RawMessage `json:"content"`
+			ToolCalls         []toolCall      `json:"tool_calls"`
+			ToolCallID        string          `json:"tool_call_id"`
+			DeliverySatisfied bool            `json:"delivery_satisfied"`
+			DeliveryCorrected bool            `json:"delivery_corrected"`
 		}
 		if json.Unmarshal(raw, &message) != nil {
 			continue
@@ -35,6 +38,14 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 		json.Unmarshal(message.Content, &text)
 		switch message.Role {
 		case "user":
+			if message.Name == "context_summary" {
+				state = deliveryState{satisfied: message.DeliverySatisfied, corrected: message.DeliveryCorrected}
+				clear(calls)
+				continue
+			}
+			if message.Name == "sandbox_observation" {
+				continue
+			}
 			state = deliveryState{}
 			clear(calls)
 		case "system":
@@ -52,6 +63,9 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 				continue
 			}
 			delete(calls, message.ToolCallID)
+			if isSandboxTool(call.Function.Name) {
+				state.satisfied = false
+			}
 			switch call.Function.Name {
 			case "search", "fetch_url":
 				state.satisfied = false
