@@ -16,3 +16,6 @@
 # 本地实验生成的回答与原始执行记录
 /docs/experiments/main-role-ab/
 /docs/experiments/agent-research/
+
+# 本地沙盒 ID、截图与运行记录
+/infra/sandbox/.local/
