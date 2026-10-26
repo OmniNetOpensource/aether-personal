@@ -19,6 +19,13 @@ import (
 
 const maxMessageCharacters = 32000
 
+type chatActivity struct {
+	State       string `json:"state"`
+	Summary     string `json:"summary"`
+	Revision    int64  `json:"revision"`
+	WorkVersion int64  `json:"work_version"`
+}
+
 // chatConnections 记录本机每个用户的 WebSocket 连接；收到该用户的 NOTIFY 时唤醒这些连接去查表推送。
 type chatConnections struct {
 	mutex       sync.Mutex
@@ -182,6 +189,9 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+			if err := s.pushChatMessages(ctx, connection, userID, &position); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -207,11 +217,17 @@ func (s *server) receiveChatMessages(ctx context.Context, connection *websocket.
 			if err := queries.LockUserMessages(ctx, userID); err != nil {
 				return err
 			}
+			if _, err := queries.SyncRecapState(ctx, userID); err != nil {
+				return err
+			}
 			if _, err := queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
 				UserID:          userID,
 				Text:            frame.Text,
 				ClientMessageID: &frame.ClientMessageID,
 			}); err != nil {
+				return err
+			}
+			if _, err := queries.SyncRecapState(ctx, userID); err != nil {
 				return err
 			}
 			return queries.NotifyUserMessages(ctx, userID)
@@ -251,8 +267,26 @@ func (s *server) pushChatMessages(ctx context.Context, connection *websocket.Con
 		slog.Error("get read position failed", "user_id", userID, "error", err)
 		return err
 	}
+	mainThinking, err := s.queries.IsMainThinking(ctx, userID)
+	if err != nil {
+		slog.Error("get Main activity failed", "user_id", userID, "error", err)
+		return err
+	}
+	activity := chatActivity{State: "idle"}
+	recap, err := s.queries.GetRecapState(ctx, userID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		activity.Revision, activity.WorkVersion = recap.Revision, recap.WorkVersion
+		if recap.Active != nil && *recap.Active {
+			activity.State, activity.Summary = "working", recap.Summary
+		}
+	}
 	return wsjson.Write(ctx, connection, struct {
-		Type string `json:"type"`
+		Type         string       `json:"type"`
+		MainThinking bool         `json:"main_thinking"`
+		Activity     chatActivity `json:"activity"`
 		chatMessages
-	}{Type: "messages", chatMessages: chatMessages{Messages: chatMessagesFromRows(rows), ReadUpTo: readUpTo}})
+	}{Type: "messages", MainThinking: mainThinking, Activity: activity, chatMessages: chatMessages{Messages: chatMessagesFromRows(rows), ReadUpTo: readUpTo}})
 }

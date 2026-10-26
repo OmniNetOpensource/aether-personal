@@ -3,21 +3,25 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type server struct {
-	databasePool *pgxpool.Pool
-	queries      *database.Queries
-	appConfig    config.Config
-	httpClient   *http.Client
-	runner       *agent.Runner
-	connections  *chatConnections
+	databasePool   *pgxpool.Pool
+	queries        *database.Queries
+	appConfig      config.Config
+	httpClient     *http.Client
+	runner         *agent.Runner
+	connections    *chatConnections
+	sandboxClient  *sandbox.Client
+	desktopViewers sync.Map
 }
 
 func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner) http.Handler {
@@ -29,14 +33,32 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 		runner:       runner,
 		connections:  newChatConnections(),
 	}
+	if appConfig.SandboxURL != "" {
+		s.sandboxClient = sandbox.NewClient(appConfig.SandboxURL, appConfig.SandboxAPIKey, nil)
+	}
 	go s.listenForUserMessages()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /auth/config", s.authConfig)
+	if appConfig.AppEnv == "dev" {
+		mux.HandleFunc("POST /auth/dev", s.devLogin)
+	}
 	mux.HandleFunc("POST /auth/code", s.requestLoginCode)
 	mux.HandleFunc("POST /auth/verify", s.verifyLoginCode)
 	mux.Handle("POST /auth/logout", s.requireSession(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /messages", s.requireSession(http.HandlerFunc(s.listMessages)))
+	mux.Handle("GET /sandbox", s.requireSession(http.HandlerFunc(s.sandboxStatus)))
+	mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
+	mux.HandleFunc("POST /admin/login", s.adminLogin)
+	mux.Handle("POST /admin/logout", s.requireAdmin(http.HandlerFunc(s.adminLogout)))
+	mux.Handle("GET /admin/me", s.requireAdmin(http.HandlerFunc(s.adminMe)))
+	mux.Handle("GET /admin/snapshot", s.requireAdmin(http.HandlerFunc(s.adminSnapshot)))
+	mux.Handle("GET /admin/calls", s.requireAdmin(http.HandlerFunc(s.adminCalls)))
+	mux.Handle("GET /admin/calls/{id}", s.requireAdmin(http.HandlerFunc(s.adminCallDetail)))
+	mux.Handle("GET /admin/models", s.requireAdmin(http.HandlerFunc(s.adminModels)))
+	mux.Handle("GET /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.adminModelSettings)))
+	mux.Handle("PUT /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.updateAdminModelSettings)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
 	if appConfig.FrontendDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))

@@ -93,21 +93,9 @@ func (s *server) verifyLoginCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := s.queries.UpsertUserByEmail(r.Context(), email)
+	token, err := s.createUserSession(r.Context(), email)
 	if err != nil {
-		internalError(w, "upsert user failed", err)
-		return
-	}
-
-	tokenBytes := make([]byte, 32)
-	rand.Read(tokenBytes)
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	tokenHash := sha256.Sum256([]byte(token))
-	if err := s.queries.CreateSession(r.Context(), database.CreateSessionParams{
-		UserID:    userID,
-		TokenHash: tokenHash[:],
-	}); err != nil {
-		internalError(w, "create session failed", err)
+		internalError(w, "create login session failed", err)
 		return
 	}
 
@@ -118,6 +106,42 @@ func (s *server) verifyLoginCode(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": token})
+}
+
+func (s *server) authConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]bool{"dev_login": s.appConfig.AppEnv == "dev"})
+}
+
+func (s *server) devLogin(w http.ResponseWriter, r *http.Request) {
+	const email = "dev@example.com"
+	token, err := s.createUserSession(r.Context(), email)
+	if err != nil {
+		internalError(w, "create dev session failed", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": email})
+}
+
+func (s *server) createUserSession(ctx context.Context, email string) (string, error) {
+	userID, err := s.queries.UpsertUserByEmail(ctx, email)
+	if err != nil {
+		return "", err
+	}
+	tokenBytes := make([]byte, 32)
+	rand.Read(tokenBytes)
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	tokenHash := sha256.Sum256([]byte(token))
+	if err := s.queries.CreateSession(ctx, database.CreateSessionParams{
+		UserID:    userID,
+		TokenHash: tokenHash[:],
+	}); err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

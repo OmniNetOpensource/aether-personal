@@ -26,7 +26,7 @@ func (s *server) sendLoginCode(ctx context.Context, email string, code string) e
 	}{
 		From:    s.appConfig.EmailFrom,
 		To:      []string{email},
-		Subject: "Aether 登录验证码 / Login code",
+		Subject: "阿芒登录验证码 / Aether login code",
 		HTML:    strings.ReplaceAll(loginEmailHTML, "{{code}}", code),
 		Text:    fmt.Sprintf("你的登录验证码是 %s，10 分钟内有效。\nYour login code is %s. It expires in 10 minutes.", code, code),
 	})
@@ -68,7 +68,7 @@ const loginEmailHTML = `<!DOCTYPE html>
 <tr><td style="border-top:3px solid #5e6ad2;border-radius:12px;background-color:#141414;border-left:1px solid #262626;border-right:1px solid #262626;border-bottom:1px solid #262626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Helvetica,sans-serif;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
 <tr><td style="padding:36px 32px 28px;">
-<p style="margin:0 0 20px;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#8a8f98;">Aether</p>
+<p style="margin:0 0 20px;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#8a8f98;">阿芒 / Aether</p>
 <h1 style="margin:0 0 24px;font-size:20px;font-weight:600;line-height:1.3;color:#f7f8f8;letter-spacing:-0.02em;">登录验证 / Sign in</h1>
 <p style="margin:0 0 16px;font-size:14px;line-height:1.5;color:#8a8f98;">请使用以下验证码登录。<br>Use the code below to sign in.</p>
 <p style="margin:0;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:36px;font-weight:600;letter-spacing:10px;line-height:1.2;color:#f7f8f8;">{{code}}</p>
