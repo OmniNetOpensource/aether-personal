@@ -25,7 +25,7 @@
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
 - 模型：OpenRouter；邮件：Resend（直接用 `net/http` 调用）。
-- 前端：Flutter `3.47.7`，工程位于 `frontend/`，本地先验收 Web。
+- 前端：Lynx + ReactLynx + TypeScript，工程位于 `frontend/`，本地先验收 Web；Linux 使用浏览器。
 
 ## 常用命令（在 `backend/` 下）
 
@@ -41,7 +41,7 @@ go build ./... && go vet ./...
 
 ## 约定
 
-- 配置只来自环境变量；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。`prod` 必需的配置缺失时启动即报错退出。
+- 启动配置只来自环境变量；管理员在看板选择的运行时模型配置持久化到数据库，并覆盖模型环境变量默认值；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。`prod` 必需的配置缺失时启动即报错退出。
 - 迁移文件按 `00001_...sql` 顺序编号，包含 Up 与 Down；新增迁移后在本地验证执行、回滚、再执行。
 - 表结构：固定取值的字段用 `text` + `CHECK`，不用 enum；外键一律 `ON DELETE CASCADE`。
 - sqlc 生成类型：不能为空的列用普通类型，能为空的列加 `*`（`nil` 表示空）；UUID 用 `google/uuid`，时间用 `time.Time`，`numeric` 用 `shopspring/decimal`。

@@ -14,7 +14,7 @@
 - 部署、配置和本地开发流程都要让陌生的企业部署者和贡献者能够上手，不能依赖维护者本机的环境或私有资源。
 - 模型与发信的 Key 由部署的企业配置，费用由该企业承担。
 - 支持删除用户，暂时只能由企业管理员删除，终端用户不能自行删除。
-- 管理后台是单独的前端仓库、单独部署，不放在本仓库的 Flutter 工程中。
+- 管理后台代码位于同一仓库的 `admin/`，作为独立服务部署，与 `frontend/` 聊天客户端分开。
 
 此前的定位为“让每个人都能部署自己的 personal agent”，已由上述定位取代。交付范围是整张架构图的全部内容，实现时同时考虑 dev 和 prod 环境。
 
@@ -22,7 +22,7 @@
 
 ```mermaid
 flowchart LR
-    APP["第一层：Flutter App<br/>六个平台"]
+    APP["第一层：Lynx App<br/>Linux 通过浏览器"]
     subgraph BACKEND["第二层：Go 后端（多台对等、无状态）"]
         API["API<br/>HTTP + WebSocket"]
         RUNTIME["Agent 运行时<br/>Main · Subagent"]
@@ -43,24 +43,38 @@ flowchart LR
     RUNTIME <--> TOOLS
 ```
 
-### 第一层：Flutter 前端
+### 第一层：Lynx 前端
+
+2026-10-26 用户确认产品中文名为「阿芒」。中文界面的标题、登录文案、输入提示、无障碍标签和管理看板品牌使用「阿芒」，验证码邮件及 Main 身份提示同步此名称，便于用户在各入口识别同一产品。英文名保留 Aether，仓库名、npm 包名、Go 模块路径、宿主接口与登录存储键继续使用现有技术标识。
+
+2026-10-23 用户明确决定：
+
+> Linux 浏览器能用就行，直接迁移到 Lynx，保留现有功能和界面。
+
+这取代此前 Flutter 六端原生工程的选择。采用 Lynx + ReactLynx + TypeScript：共用界面使用 Lynx 元素，Web 由 Lynx for Web 渲染，Go 继续同源提供 `frontend/build/web`。Android、iOS、macOS、Windows 仍是原生目标；Linux 通过浏览器使用，不要求 Linux 原生桌面应用。
+
+选择理由：当前前端集中在登录与 Main 聊天，适合此时切换到 TypeScript、JSX 和 CSS；后端 HTTP、WebSocket 与消息存储独立于 UI 框架，可以保持既有契约。Lynx 不等同于浏览器 React，宿主提供存储、链接打开、WebSocket 与键盘/视口适配，依赖 DOM 的库不能直接放进 Lynx 界面代码。
 
 | 组件 | 职责 | 状态 |
 | --- | --- | --- |
-| 聊天界面 | 仅显示与 Main 的消息流，提供必要登录、输入、历史、重发及消息状态 | `已实现` |
-| 连接管理 | 打开聊天页建立 WebSocket，断线自动重连并补齐消息，刷新恢复登录 | `已实现` |
+| ReactLynx 界面 | 邮箱登录、Main 消息、输入、Markdown、回执、失败重发与真实思考气泡 | `开发中` |
+| TypeScript 连接管理 | 第一帧认证、断线自动重连、按 position 补消息、历史翻页、重发沿用 client_message_id | `开发中` |
+| Web 宿主 | 浏览器持久存储、兼容 Flutter 旧登录键、WebSocket、中文输入法、视口与安全打开来源链接 | `开发中` |
+| 原生宿主 | Android / iOS / macOS / Windows 的容器接入、设备能力及构建发布 | `仅设计`（平台目标已确认，宿主接入未完成） |
 
-目标平台：Android、iOS、macOS、Windows、Linux、Web。
+保留 2026-10-23 确认的 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。2026-10-26 按用户要求采用产品图标的深绿、奶油白与柔黄色，替代此前白底、Main 浅灰与用户蓝灰的配色。Subagent 和工具不展示给用户，只展示 Main 发来的真实消息。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
-用户在 2026-10-22 确认先制作 WhatsApp 风格的简版 Flutter 客户端，本地首个验收平台为 Flutter Web，在 In-App Browser 中联调真实后端。用户进一步明确：“subagent不需要显示给用户。只需要显示和main的消息流，其他都不需要”。因此不制作任务列表、任务详情或工具过程面板，后台结果由 Main 发给用户。六个平台仍是完整交付目标。
+2026-10-26，用户确认增加额外 Agent 汇总 Main 与 Subagent 的行动，向用户展示运行动态。这扩展了前述隐藏工具与内部任务的展示范围；客户端在聊天底部展示动态摘要，刷新与重连会恢复当前状态，见 [05 行动摘要 Agent](05-main-runtime.md#行动摘要-agent开发中)。
 
-2026-10-23，用户在查看多组设计参考后确认采用 [Poke](https://poke.com/) 的联系人式 IM 方向，随后进一步要求删除所有内部容器和其他元素，全屏只展示消息列表与输入框。最终页面采用白底、灰色短信式气泡和底部胶囊输入框，没有联系人栏、头像、菜单、外层卡片或空白页介绍。连续消息按发送方和时间间隔分组，日期及发送状态留在消息流内；向上滚动时自动加载更早消息。选择理由是让长期单一 Main 对话更直接，减少界面干扰。进度仍是 Main 发出的真实消息，送达、已读、失败重发继续使用原有协议。
+Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、代码块、列表、粗体、引用与来源链接。用户消息显示原文，远程图片显示替代文字，HTML 不执行，链接只允许无账号密码的 HTTP(S)。中文字体 Noto Sans SC 和 OFL 许可随构建打包。构建时转换依赖中的 Unicode 属性正则，以兼容 Lynx PrimJS。
 
-本轮保留邮箱登录、历史加载、断线恢复、失败重发及 Markdown 来源链接。Flutter 静态检查与 14 项测试通过，覆盖 320、390、768、1440 像素宽度、844×390 横屏、1.3 倍字体、长链接、表格、代码块、窄屏键盘、多行草稿、最新回执、失败重发和自动加载历史。停在底部时，窗口尺寸或键盘改变后继续显示最新消息；主动上翻阅读时不强制回到底部。Flutter Web 已在 In-App Browser 检查手机、平板与桌面的实际页面；原生平台和真实手机软键盘尚未验收。
+2026-10-26 用户指定深绿背景、黄色毛绒角色的图片作为产品图标。客户端登录标识、Web 标签页与主屏幕快捷方式、管理看板品牌标识统一使用该图，便于识别同一产品。原图保存在 `frontend/public/app-icon.png`，管理看板独立部署所需的相同副本位于 `admin/public/app-icon.png`；保留完整构图与背景，不增加聊天头像。原生应用图标待原生宿主实现时接入。
 
-工程名为 `aether_personal`，组织标识为 `io.github.omninetopensource`，显示名 Aether。UI 使用 Flutter 自身组件，不引入状态管理框架。HTTP、WebSocket、客户端消息 ID 和登录态恢复分别使用 `http`、`web_socket_channel`、`uuid`、`shared_preferences`，Main 正文通过 `flutter_markdown_plus` 显示可选择的 Markdown，来源链接由 `url_launcher` 在新标签页打开；补充 Markdown 行内语法以识别紧跟中文冒号的来源网址，沿用 `markdown` 包的 URL 解析规则。用户消息保留原文。链接仅接受 HTTP(S)，远程图片显示替代文字。具体版本固定在 `frontend/pubspec.lock`。中文字体 Noto Sans SC 及 OFL 许可随应用打包；构建不依赖外部 CanvasKit CDN。
+同日用户要求“把整个前端的基础配色也做成这样”。客户端与管理看板统一以森林绿 `#204b32`、柔黄 `#f6cf83`、奶油白 `#fffcf4` 为基础色：聊天使用深绿背景、奶油白 Main 气泡和柔黄用户气泡；登录页使用深绿背景与奶油白表单；看板使用深绿侧栏、暖白内容区与柔黄选中态。选择理由是让页面与用户指定的产品图标保持一致，同时用文字与背景对比保证阅读清晰。输入框、Markdown、图表、焦点和状态提示沿用同一色板，错误保留可辨识的暖红色。客户端色值集中在 `frontend/src/palette.css`，Web 宿主与 Lynx 界面共用；管理看板为独立部署保留相同色值。
 
-本地 SDK 采用 Flutter 官方 stable 渠道，安装到 `$HOME/develop/flutter`，不修改全局 shell 配置。2026-10-22 安装版本为 Flutter `3.47.7`、Dart `3.13.5`，框架提交为 `abaf9c5237`。Web 构建、静态检查和前端测试已通过，真实登录、消息收发与刷新恢复已在 In-App Browser 验证。原生平台仍缺 Android SDK 或完整 Xcode，尚未构建验收。
+实现文件见 `frontend/src/`、`frontend/host/`；依赖由 `frontend/package-lock.json` 固定。Web 产物为 `frontend/build/web`，共用界面产物为 `frontend/dist/main.web.bundle`、`frontend/dist/main.lynx.bundle`。原生 bundle 与可安装的原生 App 是两件事；原生宿主尚未接入与验收。
+
+此前 Flutter 版本曾完成 Web 登录、真实模型回复、来源打开与刷新恢复验证；这些是历史证据，不作为 Lynx 当前验收结果。具体迁移验证以当前 `frontend/README.md` 为准。
 
 ### 第二层：Go 后端
 
@@ -73,21 +87,23 @@ flowchart LR
 | `send_message` | Main 发消息给用户或 Subagent，Subagent 发给 Main | `已实现` |
 | `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `仅设计` |
 | `assign_subagents` | 派出 Subagent，异步启动并立即返回 `subagent_id` | `已实现` |
+| 行动摘要 recap | 每 20 秒或四次模型请求汇总 Main 与 Subagent 行动，实时更新聊天动态 | `开发中` |
 | Subagent 运行时 | 独立上下文、后台执行、每用户 3 个并行、持久排队、15 分钟超时 | `已实现` |
-| 压缩 | 上下文过长时生成摘要 | `仅设计` |
+| 压缩 | 超过回答间隔或上下文阈值后，在下一次模型请求前生成摘要；阈值由看板配置 | `开发中` |
 | 向量计算 | 后台为消息补算 embedding | `仅设计` |
-| 管理员接口 | 供管理后台删除用户等 | `待确认` |
+| 管理员只读观测接口 | 用户、Main / Subagent、模型调用与历史步骤，见 [08](08-admin-observability.md) | `开发中` |
+| 管理员用户操作接口 | 删除用户等管理操作 | `待确认` |
 
 ### 第三层：外部服务
 
 | 服务 | 用途 | 状态 |
 | --- | --- | --- |
-| OpenRouter 对话接口 | Main 使用 `minimax/minimax-m3.1-flash`（`MAIN_MODEL` 可改） | `已实现` |
+| OpenRouter 对话接口 | Main 使用 `deepseek/deepseek-v4.1-flash-1017`（`MAIN_MODEL` 可改） | `已实现` |
 | OpenRouter embedding 接口 | `google/gemini-embedding-2`，1536 维 | `仅设计` |
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`fetch_url` | Serper、Parallel、EveryInfra，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
-| 浏览器与代码隔离环境 | Subagent 的执行工具 | `待确认` |
+| Linux 沙盒工作环境 | Main 与 Subagent 共用，覆盖终端、代码、文件、软件、浏览器、图形桌面和后台进程，见 [07](07-sandbox.md) | `开发中` |
 
 ## 语义澄清
 
@@ -122,7 +138,7 @@ flowchart LR
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。
-- Flutter 通过 HTTP + WebSocket 与后端交互，支持断线恢复。
+- Lynx 通过 HTTP + WebSocket 与后端交互，支持断线恢复。
 
 ## 关键设计
 
@@ -137,7 +153,8 @@ flowchart LR
 | 目录 | 用途 | 状态 |
 | --- | --- | --- |
 | `backend/` | Go 后端 | 有代码 |
-| `frontend/` | Flutter 六个平台共用工程 | Web 已构建并联调，其余平台未验收 |
+| `frontend/` | Lynx 共用界面、TypeScript 连接管理与 Web 宿主 | 迁移开发中；原生宿主未验收 |
+| `admin/` | 管理看板页面与 Node 同源代理，独立运行和部署 | 有代码 |
 | `infra/` | dev/prod 环境与部署配置 | 尚未创建 |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
 
@@ -167,7 +184,7 @@ flowchart LR
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
-| 前端 | Flutter 3.47.7 | 六平台工程，当前验收 Web |
+| 前端 | Lynx + ReactLynx + TypeScript | 先验收 Web；Linux 使用浏览器 |
 
 ## 后端骨架 `已实现`
 
@@ -182,7 +199,7 @@ flowchart LR
 
 ## 配置
 
-配置只来自环境变量；dev 使用未提交的 `.env`，由启动命令加载。`APP_ENV` 必填且只允许 `dev` / `prod`，`prod` 缺少必需配置时启动即报错退出。
+启动配置只来自环境变量；dev 使用未提交的 `.env`，由启动命令加载。管理员在看板保存的运行时模型选择持久化于数据库并覆盖模型默认值，见 [08](08-admin-observability.md)。`APP_ENV` 必填且只允许 `dev` / `prod`，`prod` 缺少必需配置时启动即报错退出。
 
 | 环境变量 | 说明 |
 | --- | --- |
@@ -190,11 +207,12 @@ flowchart LR
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
 | `PORT` | 可选，默认 `8080` |
 | `OPENROUTER_API_KEY` | 必填（dev 也需要真实调用模型） |
-| `MAIN_MODEL` | 可选，默认 `minimax/minimax-m3.1-flash` |
+| `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
+| `RECAP_MODEL` | 可选，留空跟随管理端当前 Main 模型；独立生成运行动态 |
 | `DATABASE_MAX_CONNS` | 默认 20，最小 5；预留 4 条连接处理普通请求 |
 | `SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY` | 联网工具密钥；缺少时相应工具返回错误 |
-| `FRONTEND_DIR` | 同源提供 Flutter Web 的构建目录 |
+| `FRONTEND_DIR` | 同源提供 Lynx Web 的构建目录 |
 | `RESEND_API_KEY`、`EMAIL_FROM` | `prod` 必填；dev 不发邮件，验证码打印在日志中 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 
@@ -217,6 +235,6 @@ flowchart LR
 
 ## 本地开发
 
-根目录 `make dev` 构建 Flutter Web、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 Flutter；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
+根目录 `make dev` 构建 Lynx Web、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 TypeScript；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
 
 用户在 2026-10-22 明确技术实现由开发者决定，仅产品决策询问用户。该要求替代此前逐项询问技术微决策的工作方式，已确认产品选择继续记录在 Wiki 与决策总览。

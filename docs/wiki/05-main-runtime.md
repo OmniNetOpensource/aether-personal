@@ -6,7 +6,7 @@
 
 最小对话（含 WebSocket 收发完整消息）→ 边生成边显示 → 更多工具（`read_message`、`search_message`）→ 压缩与混合搜索 → Subagent。
 
-当前 `已实现` 的代码包含最小 Main 对话、Subagent 派发和双向消息、联网 `search` / `fetch_url`、Flutter Web 聊天。推送完整消息与状态，不推送逐段生成的文字。
+当前 `已实现` 的代码包含最小 Main 对话、Subagent 派发和双向消息、联网 `search` / `fetch_url`、Web 聊天（现迁移至 Lynx）。推送完整消息与状态，不推送逐段生成的文字。
 
 2026-10-22，用户调整近期实现顺序：先为 Subagent 添加联网 `search` 与网页读取工具，再制作 WhatsApp 风格的简版 Flutter 客户端，最后在本地联调。完成这些工作需要先实现 Main 派发任务、Subagent 独立运行及双方消息通信。边生成边显示、历史检索和压缩仍属于完整交付范围。
 
@@ -46,7 +46,7 @@ flowchart TD
 获取锁后循环：
 
 1. 同一事务为待读消息补号，并创建或恢复 `finished_at` 为空的 `steps`。消息已读而模型尚未完成的工作因此仍可恢复。
-2. 组装系统提示词与该 Agent 的完整上下文。Main 和 Subagent 共用循环，模型、提示词和可用工具按身份选择。
+2. 检查自动压缩条件，必要时生成摘要；随后组装系统提示词、最新摘要与未被覆盖的消息。Main 和 Subagent 共用循环，模型、提示词和可用工具按身份选择。
 3. 在事务外调用 OpenRouter。Subagent 的搜索和正文读取也在事务外执行，等待期间保留执行锁，不保留消息写入锁。
 4. 在短事务中保存 assistant、工具结果、消息路由及模型用量。Main 派发 Subagent 时，创建身份、首条消息和派发回执也在同一事务提交。
 5. 有工具调用时，在保存结果的同一事务创建下一条未完成 step，避免结果已保存但尚未继续调用模型的恢复间隙；否则结束。
@@ -59,7 +59,7 @@ flowchart TD
 - **启动与周期恢复**：启动和每秒扫描待读消息、未完成 step 及仍为 `running` 的 Subagent。通知只减少等待，漏通知不会使任务永久无人处理。
 - **连接预算**：`DATABASE_MAX_CONNS` 默认 20、最小 5。每实例最多同时运行“连接池上限减 4”个 Agent，为登录、消息和扫描保留连接。每个 Agent 的全部数据库操作使用自己持有的连接，避免持锁时再等待池中另一条连接。WebSocket 的专用 LISTEN 连接通过 Hijack 移出池，实际数据库连接预算需另加这一条，并计入所有实例的合计。
 - **锁连接失效**：等待外部请求时每 5 秒检查锁连接，失效即取消请求；完成网络操作后只有仍持锁的连接能提交结果。
-- **崩溃重做**：未提交的模型与只读网页请求可以重做，供应商可能重复计费。已经提交的派发、投递和工具回执不重复执行。本规则只适用于当前只读联网工具，未来写操作需单独设计幂等。
+- **崩溃重做**：未提交的模型与只读网页请求可以重做，供应商可能重复计费。已经提交的派发、投递和工具回执不重复执行。沙盒写操作另有持久化模型回复与操作日志：回执复用、命令按 ID 查询，提交结果不明时不重放，见 [07](07-sandbox.md#实现约束)。
 
 ## 工具
 
@@ -67,7 +67,7 @@ flowchart TD
 | --- | --- | --- |
 | `send_message` | Main 可发给 `user` 或本用户 Subagent UUID；Subagent 只能发给 `main` | `已实现` |
 | `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `仅设计` |
-| `search_message` | 在完整历史中混合搜索（关键词 + 向量），见 [02 数据模型](02-data-model.md#压缩与上下文检索-仅设计) | `仅设计` |
+| `search_message` | 在完整历史中混合搜索（关键词 + 向量），见 [02 数据模型](02-data-model.md#压缩与上下文检索) | `仅设计` |
 | `assign_subagents` | 创建独立 Subagent 并持久排队，立即返回有序 `subagent_ids` | `已实现` |
 | `search`、`fetch_url` | Main 与 Subagent 共用搜索和网页读取工具 | `已实现` |
 
@@ -79,12 +79,16 @@ flowchart TD
 
 ## 模型
 
-- Main 使用 `minimax/minimax-m3.1-flash`（OpenRouter，上下文 1,048,576 token）。
-- 模型名由环境变量 `MAIN_MODEL` 配置，默认 `minimax/minimax-m3.1-flash`，企业换模型无需改代码。
+管理端可全局切换 Main / Subagent 模型或让 Subagent 跟随 Main，保存到数据库，从下次请求读取配置时生效；环境变量提供未保存时的默认值，详见 [08](08-admin-observability.md#一键切换模型2026-10-23开发中)。
+
+- Main 使用 `deepseek/deepseek-v4.1-flash-1017`（OpenRouter，上下文 1,048,576 token）。
+- 模型初始默认值由环境变量 `MAIN_MODEL` 配置，默认 `deepseek/deepseek-v4.1-flash-1017`，企业换模型无需改代码。
 - `OPENROUTER_API_KEY` 在 dev 与 prod 下都必填：本地开发也需要真实调用模型。
 - Subagent 的模型通过 `SUBAGENT_MODEL` 独立配置；留空时使用 `MAIN_MODEL` 的实际值，默认与 Main 相同。用户在 2026-10-22 确认此选择，便于先用同一模型联调，再单独调整 Subagent 模型。
 
-2026-10-23，用户要求切换到最新 MiniMax 模型。根据 [OpenRouter 实时模型目录](https://openrouter.ai/api/v1/models) 与 [官方模型页](https://openrouter.ai/minimax/minimax-m3.1-flash)，选择 2026-10-19 发布的 MiniMax M3.1 Flash，使用正式模型 ID `minimax/minimax-m3.1-flash`。它支持工具调用，沿用现有 OpenRouter 接口、提示词和消息协议；Main 默认值及本地配置一并更新，Subagent 留空跟随 Main。后端构建、静态检查及现有测试通过；另在隔离数据库中用真实模型验证了 Main 派发、Subagent 回报，以及 Main 通过 `send_message` 发送进度和结果，两个角色的请求均为新模型。本地后端已重新加载该配置。
+2026-10-23，用户要求切换到最新 MiniMax 模型。根据 [OpenRouter 实时模型目录](https://openrouter.ai/api/v1/models) 与 [官方模型页](https://openrouter.ai/minimax/minimax-m3.1-flash)，选择 2026-10-19 发布的 MiniMax M3.1 Flash，使用正式模型 ID `minimax/minimax-m3.1-flash`。它支持工具调用，沿用现有 OpenRouter 接口、提示词和消息协议；Main 默认值及本地配置一并更新，Subagent 留空跟随 Main。后端构建、静态检查及现有测试通过；另在隔离数据库中用真实模型验证了 Main 派发、Subagent 回报，以及 Main 通过 `send_message` 发送进度和结果，两个角色的请求均为新模型。本地后端当时已重新加载该配置。
+
+同日用户进一步指定切换为 `deepseek/deepseek-v4.1-flash-1017`，替代前述 MiniMax 选择。当前 Main 默认值、本地配置与示例说明同步更新；`SUBAGENT_MODEL` 留空，Subagent 跟随 Main 使用该模型。[OpenRouter 模型页](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017) 与实时目录确认该 ID 存在，并支持工具调用和图片输入，因此保留现有工具与桌面截图能力。构建与静态检查通过；隔离数据库中的真实派发验收共完成 6 个步骤，Main 与 Subagent 均使用该模型，分别经 `send_message` 交付 `DS-SUB-OK` 与 `DS-MAIN-OK`，无模型或持久化错误。本地后端已重启。
 
 ## 系统提示词 `已实现`
 
@@ -94,7 +98,7 @@ flowchart TD
 
 - 每用户一条长期 Main 对话，按用户语言回答，回答篇幅与问题相称。
 - Main 与 Subagent 共用联网执行工具，Main 自行决定直接执行或委派；Subagent 仍使用后台任务专用提示词。
-- 只通过工具行动和沟通，关键进展与最终结果必须用 `send_message`，禁止直接输出正文；工具过程和内部任务不展示给用户。
+- 只通过工具行动和沟通，关键进展与最终结果必须用 `send_message`，禁止直接输出正文；当前实现不展示工具过程和内部任务。2026-10-26 新增的行动摘要 Agent 汇总这些行动供用户查看，见下文。
 - Aether 原文第一段依赖 `search_chat_history`、`read_chat_history` 与 `/app/会话ID` 链接，本项目尚无这些工具和路由，因此改为依据当前上下文和摘要回顾、保留说话者归属，信息不足时不能断言从未讨论，也不能声称已经检索历史。
 - Aether provider 另外拼接的 `buildSystemPrompt()` 不属于本次迁入的 `AETHER_SYSTEM_PROMPT`；其中“不必引用来源”与本项目的研究交付要求冲突，未迁入。Main 与 Subagent 继续共用来源核对及网页属于不可信资料的规则。
 
@@ -138,7 +142,7 @@ sequenceDiagram
 
 调度使用每用户三个 PostgreSQL 会话锁名额，跨实例共享上限；排队由 `idle` 与待读消息表示，不新增状态取值。`subagents.started_at` 保留本轮开始时间，重启不会重置截止时间。调度、失败通知、恢复和再唤醒已通过真实 PostgreSQL 隔离 schema 测试，外部接口在该测试中模拟。
 
-后续仍待确认的范围包括其余 HTTP 工具、MCP、浏览器和代码隔离环境的实现、权限、资源限制与生命周期。当前只读联网工具和 Main/Subagent 的运行规则由本次实现落实。
+其余 HTTP 工具与 MCP 尚待确认。2026-10-23，用户确认沙盒覆盖完整 Linux 工作能力，包含浏览器与图形桌面，并确认环境长期保留、空闲暂停、下次继续使用，见 [07 Linux 沙盒工作环境](07-sandbox.md)。沙盒正在开发：已接入 OpenSandbox、持久用户映射、操作日志和按用户控制锁；生产隔离与检查点尚待部署验证。详见 07 的当前接入与验证边界。
 
 ### assign_subagents `已实现`
 
@@ -164,3 +168,47 @@ Parallel 返回非空 `full_content` 时使用全文，否则使用同一次响�
 核对来源为本地 Aether 的 `src/backend/chat/tools/search-tool.ts` 和 `src/backend/chat/tools/fetch-tool.ts`，以及 [Parallel Extract 文档](https://docs.parallel.ai/api-reference/extract/extract)。Go 接入代码位于 `web_tools.go`，协议与错误测试已通过。供应商密钥只在后端读取，缺少密钥时返回明确工具错误。本地已复用 Aether 配置中的 Parallel 和 EveryInfra 密钥。
 
 2026-10-22 已从 Flutter Web 发起真实任务，验证 Main 派发两个后台 Subagent、Parallel 读取官方网页、EveryInfra 搜索和读取微信公众号文章、回传 Main 并显示结果。显式的 `make check-live` 进一步验证微信与小红书搜索、Parallel 正文提取，小红书笔记正文也已通过真实服务检查。2026-10-23 已配置 Serper，并通过真实 Google 搜索检查，返回 6 条来源链接；进一步从 Flutter Web 验证 Google 搜索、Parallel 读取官方文档、Subagent 回传 Main、Main 汇总回复的完整链路。该次任务结束后 Subagent 为 idle，执行步骤无失败、无未完成项。
+
+### 跨模型的回合结束协议（开发中）
+
+模型收到 `send_message` 的 `delivered` 回执后不得重复发送相同消息。当前工作已交付或等待已派发任务时，通过无工具调用的私有 `[DONE]` 标记结束回合，属于“只通过工具对外沟通”的控制协议例外；该标记保留在内部上下文，不会显示在用户消息流中。运行时仍根据真实已提交工具回执判断交付，标记本身不能替代给用户或 Main 发送结果。此协议解决部分新模型无法稳定以空回复结束、进而重复调用发送消息工具的问题。Gemini 实际请求已验证一条结果投递后正常停止。
+
+## 行动摘要 Agent（开发中）
+
+2026-10-26，用户明确要求：
+
+> 我希望用额外的一个agent去 summarize 当前agent们的行动。
+
+随后确定调用频率：
+
+> 这样：每20s或者每4次模型请求，调用一次recap
+
+recap 是独立的模型调用，汇总当前用户 Main 与 Subagent 的真实行动，更新聊天底部的动态文字。它没有执行工具，不指挥其他 Agent，也不占用户的三个 Subagent 名额。最终回复仍由 Main 通过 `send_message` 交付。选择理由是让用户在长任务运行期间看懂多个 Agent 正在做什么。
+
+### 触发与恢复
+
+有待处理或执行中的工作时，20 秒或累计四次模型请求先到先触发。Main 与该用户所有 Subagent 的请求合计计数，包括重试与上下文压缩请求；recap 自己的请求不计入。计数表示应用开始一次请求尝试，与 `model_calls` 一样，不承诺进程崩溃前请求一定已到达供应商。
+
+`recap_state` 每用户保存一行工作版本、计时窗口、累计请求数、上次 recap 的计数位置、最新摘要与展示版本。recap 开始领取工作时重新计时并记录计数位置，生成期间的新请求留给下一轮。后台每秒扫描，新的模型请求也会唤醒扫描，因此时间触发有调度延迟，不是严格的实时定时器。
+
+每个后端实例同时执行一个 recap，为业务调用保留连接；多实例通过每用户 PostgreSQL 咨询锁保证同一用户最多一个 recap。超过容量的工作保留在数据库中等待，生成期间满足的新阈值合并为后续一次调用。锁连接失效会取消外部请求，后续拥有锁的实例把旧请求日志标为中断后继续。
+
+所有执行 Agent 均无工作时清除当前动态并停止计时、计数。新工作开启新版本；保存摘要同时检查工作版本与实际工作是否仍存在，旧摘要不能重新显示已结束的活动。首次连接和断线重连读取数据库中的最新快照，历史翻页不覆盖动态。
+
+### 行动输入与模型
+
+实现位于 `backend/internal/agent/recap.go`，复用 `openrouter.go` 的请求、响应、用量与费用日志。进程入口分别启动执行调度和 recap 调度。
+
+运行时在 `steps.activity` 保存每步最近八条模型或工具开始、返回、失败记录。搜索只提取查询词，网页只提取主机与路径，文件只提取路径；命令、文件内容与原始工具输出不进入行动记录。摘要输入包含最新用户请求、活跃 Agent 的任务与行动、近期完成步骤、排队数量和上次摘要，并分别限制长度和条数。
+
+`RECAP_MODEL` 指定独立模型，留空时跟随管理端当前 Main 模型。每次 recap 最长 18 秒，输出最多 180 个字符的一两句话。模型只能依据记录描述进展，不能把工具返回解释为整个目标完成。失败、超时或无效摘要记录在内部，等待下一个触发周期，主任务继续运行。
+
+`model_calls.purpose = 'recap'` 的记录直接关联用户，`step_id` 为空。执行队列和 Main 请求恢复排除这些调用，管理端单独标记动态摘要；总费用仍包含 recap。
+
+### 本地验证
+
+迁移 `00012` 已在独立数据库完成 Up、Down、Up。真实模型任务完成 Main 派发两个 Subagent、分别读取官方网页、回传和 Main 汇总，共观察到 17 次业务请求与四次 recap；每次 recap 之前均新增四次业务请求。
+
+受控验证中，时间条件约 20.27 秒触发，四次请求条件在计数写入后约 0.28 秒触发；双实例只生成一次 recap，recap 请求不增加计数，空闲状态拒绝迟到的摘要。In-App Browser 已观察到动态文字、刷新后恢复，以及工作结束后自动收起。构建仍出现 Lynx 的 ObjectRef 提示，不能据此宣称构建无警告。
+
+故障验收使用无效的 recap 模型产生明确 HTTP 错误，随后 Main 仍完成了真实回复。代码尚未提交或推送；本地验收使用独立数据库与端口，不代表生产部署。

@@ -1,15 +1,16 @@
-# aether-personal
+# 阿芒 · aether-personal
 
-企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 Flutter 六个平台、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
+企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 Lynx 跨平台客户端（Linux 使用浏览器）、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
 
-当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Flutter 聊天。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
+当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Lynx 聊天。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
 
 ## 已确认方向
 
 | 项目 | 已确认内容 |
 | --- | --- |
 | 项目名称 | `aether-personal` |
-| Flutter 平台 | Android、iOS、macOS、Windows、Linux、Web |
+| 产品名称 | 中文「阿芒」，英文 Aether |
+| 前端 | Lynx + ReactLynx + TypeScript；目标 Android、iOS、macOS、Windows、Web，Linux 通过浏览器使用 |
 | 后端 | Go |
 | 部署方式 | 项目提供通用 Docker 部署；阿里云新加坡仅为维护者自己实例的部署位置 |
 | Go 版本 | `1.27.2` |
@@ -19,31 +20,32 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter；Main 默认 `minimax/minimax-m3.1-flash`，Subagent 默认跟随 Main，可分别配置 |
+| 模型服务 | OpenRouter；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，Subagent 默认跟随 Main，可分别配置 |
 | 密钥与费用 | OpenRouter / Resend Key 由部署的企业配置，费用由该企业承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
 | Main Agent | 每用户固定一个逻辑 Main，按用户串行运行，状态持久化到 PostgreSQL |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
+| Linux 沙盒工作环境 | 完整 Linux 工作能力，环境长期保留、空闲暂停、下次恢复继续使用；本地已接通，生产隔离与检查点待验收 |
 | 处理中收到新消息 | 当前模型请求或工具调用结束后，在下一次模型调用前加入新消息 |
 | 环境 | 实现时同时考虑 dev 和 prod |
 
 ## 完整交付范围
 
-- Flutter Main 聊天界面，HTTP、WebSocket 和断线恢复。
+- Lynx Main 聊天界面，HTTP、WebSocket 和断线恢复。
 - Go API：认证、收发消息、WebSocket。
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[数据模型](docs/wiki/02-data-model.md)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
-- Main 可直接执行或委派任务，与 Subagent 共用执行工具（当前为 `search`、`fetch_url`）；消息和派发权限按角色区分。
+- Main 可直接执行或委派任务，与 Subagent 共用执行工具（联网工具与可选的 Linux 沙盒工具）；消息和派发权限按角色区分。
 - Main 在耗时任务中通过 `send_message` 汇报关键进展，完成后发送结果，禁止直接输出正文。历史检索 `search_message`、`read_message` 尚待实现。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。
 - Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知。
 - 按用户权限搜索和读取历史消息。
 - 通过 OpenRouter 调用模型。
 - 搜索、HTTP API、MCP 等外部服务调用。
-- 在隔离执行环境中运行浏览器与代码任务。
+- 在隔离 Linux 工作环境中运行终端、代码、浏览器、图形桌面与后台进程，支持文件处理和软件安装与使用，范围见 [Linux 沙盒工作环境](docs/wiki/07-sandbox.md)。
 - dev/prod 环境配置及对应的验证。
 
 上述范围不代表各项已经实现，当前状态见架构 Wiki。技术实现由开发者判断，影响用户体验和产品范围的决定先与用户确认。
@@ -55,7 +57,8 @@
 | 目录 | 用途 |
 | --- | --- |
 | `backend/` | Go 后端 |
-| `frontend/` | Flutter 六个平台共用工程 |
+| `frontend/` | Lynx 共用界面与 Web 宿主工程 |
+| `admin/` | 管理看板静态页面与 Node 同源代理，独立运行 |
 | `infra/` | dev/prod 环境和部署配置 |
 | `docs/` | 架构图、架构 Wiki 与决策总览 |
 
@@ -72,11 +75,11 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-Flutter 工程位于 `frontend/`，当前以 Flutter Web 本地联调；其余平台的工程已生成，尚未构建验收。
+Lynx 工程位于 `frontend/`，Web 由 Go 同源提供；同时生成 Lynx 原生 bundle。移动和桌面原生宿主的接入与验收尚未完成，不能把 bundle 编译成功视为原生 App 已可发布。
 
 ## 本地开发
 
-需要 Go `1.27.2`、Docker 和 Flutter `3.47.7`。Flutter 不在 PATH 时，根目录 Makefile 会使用 `$HOME/develop/flutter/bin/flutter`；也可用 `FLUTTER=/path/to/flutter/bin/flutter` 覆盖。
+需要 Go `1.27.2`、Docker，以及 Node.js `^20.19.0 || >=22.12.0`（建议 Node 24）。前端依赖固定在 `frontend/package-lock.json`，不再需要 Flutter SDK。
 
 首次准备配置并填入服务密钥：
 
@@ -86,7 +89,7 @@ cp backend/.env.example backend/.env
 make dev
 ```
 
-打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Flutter Web、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面、HTTP API 和 WebSocket。本地 dev 验证码只打印在运行后端的终端中。
+打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Lynx Web、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面、HTTP API 和 WebSocket。本地 dev 点击「开发测试登录」即可进入固定 mock 用户 `dev@example.com`，无需输入邮箱或验证码。
 
 检查代码和真实数据库运行时：
 
@@ -115,22 +118,26 @@ make db-down   # 停止本地 PostgreSQL
 
 | 环境变量 | 说明 |
 | --- | --- |
+| `ADMIN_PASSWORD_HASH` | 管理看板密码哈希，用 `python3 scripts/set-admin-password.py` 设置；留空关闭管理入口。见 [08](docs/wiki/08-admin-observability.md) |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式（dev 文本，prod JSON） |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
 | `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 或 Subagent 占一条；另有一条独立 LISTEN 连接 |
 | `OPENROUTER_API_KEY` | 必填，OpenRouter 的 API Key |
-| `MAIN_MODEL` | 可选，Main 使用的模型，默认 `minimax/minimax-m3.1-flash` |
-| `SUBAGENT_MODEL` | 可选，Subagent 使用的模型，留空时使用 `MAIN_MODEL` 的实际值 |
+| `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017` |
+| `MAX_OUTPUT_TOKENS` | 可选，单次请求输出 Token 上限，默认 `8192`，包含推理 Token；按保存时已知模型能力缩小 |
+| `SUBAGENT_MODEL` | 可选，Subagent 的初始默认模型，留空跟随 Main；可在管理看板切换 |
 | `SERP_API_KEY` | Serper Google 搜索密钥 |
 | `PARALLEL_API_KEY` | 普通网页及 Reddit 正文读取密钥 |
 | `EVERYINFRA_API_KEY` | 微信公众号、小红书搜索及正文读取密钥 |
-| `FRONTEND_DIR` | Flutter Web 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
+| `FRONTEND_DIR` | Lynx Web 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
 | `RESEND_API_KEY` | `prod` 必填，Resend 的 API Key |
 | `EMAIL_FROM` | `prod` 必填，验证码邮件发件人，如 `Aether <noreply@company.com>`；域名需先在 Resend 后台验证 |
 
-本地登录（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）：
+本地 dev 在聊天页面点击「开发测试登录」，或调用 `POST /auth/dev`，即可使用 `dev@example.com` 登录，无需邮箱或验证码；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
+
+邮箱验证码接口仍可直接调用（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）：
 
 ```sh
 curl -X POST localhost:8080/auth/code -d '{"email":"me@example.com"}'
@@ -144,3 +151,9 @@ curl -X POST localhost:8080/auth/logout -H "Authorization: Bearer <token>"
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。
 - [决策总览](docs/decisions.md)：已确认选择的一览表及待确认问题。
+
+## 管理看板（开发中）
+
+看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`，打开 [管理看板](http://127.0.0.1:5174)。无第三方依赖或构建步骤，需要 Node.js 22.9 或更新版本。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./scripts/start.sh` 统一启动聊天前后端与看板。
+
+看板包含运行概览、模型调用和模型配置。可按用户和 Main / Subagent 筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

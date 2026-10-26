@@ -9,11 +9,13 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 | 页面 | 内容 |
 | --- | --- |
 | [01 总体架构](01-overview.md) | 项目定位、语义澄清、三层结构与各组件状态、工程组织、技术栈、配置、托管与部署 |
-| [02 数据模型](02-data-model.md) | 6 张表、消息列表（`messageList`）的排序与待读规则、压缩与检索、外键、索引、迁移、sqlc |
+| [02 数据模型](02-data-model.md) | 数据表、消息列表（`messageList`）的排序与待读规则、压缩与检索、外键、索引、迁移、sqlc |
 | [03 认证](03-auth.md) | 邮箱验证码登录、登录令牌、滑动过期、发信 |
 | [04 消息与实时通信](04-messaging.md) | 无状态多实例结构、WebSocket 协议、消息状态、推送、重发、写入顺序 |
 | [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理、Subagent 设计 |
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
+| [07 Linux 沙盒工作环境](07-sandbox.md) | 完整 Linux 工作能力范围、环境与操控工具、长期保留与空闲暂停、执行恢复约束 |
+| [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、用户与 Agent 下钻、请求日志、费用覆盖和管理员权限 |
 
 ## 状态标注
 
@@ -33,10 +35,12 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 1. 最小对话：用户通过 WebSocket 发消息，Main 调用模型并通过 `send_message` 回复。`已实现`
 2. 边生成边显示。`待确认`
 3. 更多工具：`read_message`、`search_message`。`仅设计`
-4. 压缩与混合搜索。`仅设计`
+4. 自动压缩。`开发中` 混合搜索仍为 `仅设计`。
 5. Subagent。`已实现`
 
 此前已完成：后端骨架、数据库迁移、邮箱验证码登录。2026-10-22 按用户新顺序先实现 Subagent 联网工具和 Flutter Web，仅展示 Main 消息流。Go、Flutter 与真实数据库协议测试已通过；真实模型、Parallel 网页读取、微信公众号搜索与正文读取已经从 Flutter 页面跑通。2026-10-23 补齐 Serper 后，Google 搜索与网页读取也已通过 Flutter 页面完成真实联调，来源链接可点击并打开官方页面。原生平台未验收。
+
+2026-10-23 用户确认前端迁移至 Lynx，保留界面和功能；Linux 只要求浏览器可用。当前迁移状态见 [01 总体架构](01-overview.md#第一层lynx-前端) 和 `frontend/README.md`。上述 Flutter 验证是迁移前的历史记录。
 
 ## 维护
 
