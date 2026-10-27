@@ -80,7 +80,9 @@ func (q *Queries) CountRecapRequest(ctx context.Context, stepID uuid.UUID) (uuid
 const getRecapInput = `-- name: GetRecapInput :one
 SELECT jsonb_build_object(
     'user_request', (SELECT left(content->>'content', 2000) FROM messages
-        WHERE messages.user_id = $1 AND subagent_id IS NULL AND sender = 'user' ORDER BY id DESC LIMIT 1),
+        WHERE messages.user_id = $1 AND subagent_id IS NULL
+            AND (sender = 'user' OR (sender = 'system' AND content->>'name' = 'schedule_event'))
+        ORDER BY id DESC LIMIT 1),
     'previous_summary', (SELECT summary FROM recap_state WHERE recap_state.user_id = $1),
     'active_agents', (SELECT coalesce(jsonb_agg(item), '[]'::jsonb) FROM (
         SELECT jsonb_build_object('agent', CASE WHEN s.subagent_id IS NULL THEN 'Main' ELSE s.subagent_id::text END,

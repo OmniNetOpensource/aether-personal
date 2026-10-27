@@ -13,6 +13,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/httpapi"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,6 +48,7 @@ func main() {
 	runner := agent.NewRunner(databasePool, appConfig)
 	go runner.Start(ctx)
 	go runner.StartRecaps(ctx)
+	go scheduler.Run(ctx, databasePool, runner.Wake)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

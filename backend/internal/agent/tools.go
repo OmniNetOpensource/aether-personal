@@ -8,12 +8,15 @@ import (
 	"strings"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Queries, address agentAddress, call toolCall) (string, error) {
 	switch call.Function.Name {
+	case "schedule":
+		return scheduler.ExecuteTool(ctx, queries, address.userID, call.Function.Arguments)
 	case "send_message":
 		arguments, err := parseSendMessage(call)
 		if err != nil {

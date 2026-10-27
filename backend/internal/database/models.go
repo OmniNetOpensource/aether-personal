@@ -125,6 +125,31 @@ type SandboxOperation struct {
 	UpdatedAt         time.Time
 }
 
+type Schedule struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Title     string
+	Context   string
+	RunAt     *time.Time
+	Cron      *string
+	Timezone  string
+	Status    string
+	NextRunAt *time.Time
+	Version   int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ScheduleOccurrence struct {
+	ID               uuid.UUID
+	ScheduleID       uuid.UUID
+	ScheduleVersion  int64
+	ScheduledFor     time.Time
+	DeliveredAt      time.Time
+	Context          string
+	TriggerMessageID uuid.UUID
+}
+
 type Session struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID

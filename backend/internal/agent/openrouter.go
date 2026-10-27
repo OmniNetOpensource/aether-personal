@@ -72,6 +72,7 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 	if address.subagentID != nil {
 		prompt, tools = subagentPrompt, subagentTools
 	}
+	prompt += "\nCurrent time (UTC): " + time.Now().UTC().Format(time.RFC3339) + "\n"
 	if r.sandbox != nil {
 		prompt += sandboxPrompt
 		tools = append(append([]json.RawMessage{}, tools...), sandboxExecutionTools...)
@@ -169,7 +170,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 				for _, call := range message.ToolCalls {
 					name := call.Function.Name
 					switch name {
-					case "send_message", "assign_subagents", "search", "fetch_url", "run_command", "get_command", "stop_command", "read_file", "write_file", "desktop":
+					case "send_message", "assign_subagents", "schedule", "search", "fetch_url", "run_command", "get_command", "stop_command", "read_file", "write_file", "desktop":
 					default:
 						name = "other"
 					}
