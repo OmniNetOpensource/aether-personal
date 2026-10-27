@@ -26,12 +26,13 @@
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务 | 虚拟概念，实体是 Subagent，统一称 `subagent_id` | [01](wiki/01-overview.md#任务是虚拟概念实体是-subagent) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
-| 前端框架与平台 | 2026-10-23 迁移至 Lynx + ReactLynx + TypeScript；Android / iOS / macOS / Windows / Web，Linux 通过浏览器使用 | [01](wiki/01-overview.md#第一层lynx-前端) |
-| 客户端界面与验收 | Lynx 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏、菜单或外层卡片；先验收 Web | [01](wiki/01-overview.md#第一层lynx-前端) |
-| 前端构建 | Node.js + npm 锁文件，输出 Web 宿主与 Lynx bundle；不再依赖 Flutter SDK | [01](wiki/01-overview.md#第一层lynx-前端) |
-| 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层lynx-前端) |
-| 产品图标 | 2026-10-26 用户提供的深绿背景黄色毛绒角色原图；用于客户端登录、Web 图标和管理看板品牌标识 | [01](wiki/01-overview.md#第一层lynx-前端) |
-| 基础配色 | 2026-10-26 随产品图标统一为森林绿、奶油白与柔黄；覆盖聊天客户端及管理看板 | [01](wiki/01-overview.md#第一层lynx-前端) |
+| 前端框架与平台 | 2026-10-27 改为 React + React DOM + TypeScript 的纯 Web 应用，桌面与移动共用 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏、菜单或外层卡片；2026-10-28 删除整个顶部栏；先验收 Web | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 前端构建 | Node.js + npm 锁文件，Rsbuild 输出 Web/PWA 至 frontend/build/web；无需原生 SDK | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 产品图标 | 2026-10-26 用户提供的深绿背景黄色毛绒角色原图；用于客户端登录、Web 图标和管理看板品牌标识 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 基础配色 | 2026-10-26 随产品图标统一为森林绿、奶油白与柔黄；覆盖聊天客户端及管理看板 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 本地 Web 接入 | Go 用 `FRONTEND_DIR` 提供构建产物，与 HTTP API、WebSocket 同源；根目录 `make dev` 启动 | [01](wiki/01-overview.md#本地开发) |
 | 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
@@ -43,7 +44,7 @@
 | 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
 | 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
-| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡，沙盒独立主机；生产验收待完成 | [09](wiki/09-deployment.md) |
+| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡，当前沙盒暂停接入，仅上线联网执行工具；生产部署待完成 | [09](wiki/09-deployment.md) |
 | 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由部署企业配置，费用由该企业承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |
@@ -69,7 +70,7 @@
 
 | 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| 本地开发登录 | dev 一键登录固定 mock 用户 `dev@example.com`，无需邮箱或验证码；prod 不开放 | [03](wiki/03-auth.md#本地开发登录) |
+| 本地开发登录 | 2026-10-28 确认 dev 默认自动使用固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码；prod 不开放 | [03](wiki/03-auth.md#本地开发登录) |
 | 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户 | [03](wiki/03-auth.md) |
 | 首版注册范围 | 2026-10-26 确认向公众开放注册，不要求邀请码或人工审核；生产防滥用与用量控制待完成 | [03](wiki/03-auth.md#生产注册范围) |
 | 看板登录 | 仅输入独立管理员密码，无邮箱和验证码；使用独立管理会话，聊天账号不能访问管理接口 | [08](wiki/08-admin-observability.md#权限与-api) |
@@ -101,6 +102,7 @@
 | --- | --- | --- |
 | 实现顺序 | 最小对话 → 边生成边显示 → 更多工具 → 压缩与混合搜索 → Subagent | [05](wiki/05-main-runtime.md#实现顺序) |
 | 主对话 | 每用户一条长期主对话，同一份 `messageList` | [05](wiki/05-main-runtime.md) |
+| Schedule 职责 | 2026-10-27 确认 Agent 通过工具布置一次性和周期安排，到期后将任务上下文发给该用户的 Main，复用现有执行流程；开发中 | [10](wiki/10-schedules.md) |
 | 回复用户 | 只通过 `send_message`；禁止直接输出正文，模型违约正文也不对外展示 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | 处理中收到新消息 | 当前请求或工具调用结束后、下一次模型调用前加入 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 按用户串行 | `pg_try_advisory_lock`，释放后唤醒调度；周期扫描补偿漏通知 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
@@ -112,14 +114,16 @@
 | 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，保留只用工具沟通和最终结果走 `send_message` 的契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 模型调用失败 | 不向用户显示，记日志与 `steps.error`；临时错误重试 3 次 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | Subagent | 与 Main 只通过消息联系；状态由运行时维护；收到消息即唤醒；暂无强制中断 | [05](wiki/05-main-runtime.md#subagent-已实现) |
-| 近期实现顺序 | 已完成 Subagent 联网与主对话；当前将客户端迁移至 Lynx，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
+| 近期实现顺序 | 已完成 Subagent 联网与主对话；当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | Subagent 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | 派发接口 | `assign_subagents({tasks:["任务说明", ...]})`，每项创建独立 Subagent，立即返回对应 ID | [05](wiki/05-main-runtime.md#assign_subagents-已实现) |
 | Subagent 并发 | 每用户最多 3 个同时执行，超出任务保留在数据库中排队 | [05](wiki/05-main-runtime.md#subagent-已实现) |
 | Subagent 超时 | 每次唤醒最多连续执行 15 分钟，超时标为 `failed` 并通知 Main，收到新消息可再唤醒 | [05](wiki/05-main-runtime.md#subagent-已实现) |
+| 当前执行能力 | 2026-10-27 暂时停用全部沙箱功能，只保留搜索与网页读取；隐藏桌面入口，忽略旧沙箱配置，保留代码以便后续恢复 | [07](wiki/07-sandbox.md#当前状态暂时停用2026-10-27) |
 | 沙盒能力范围 | 完整 Linux 工作电脑，包含终端、代码、文件、软件安装与使用、浏览器、图形桌面和后台进程；Main 与 Subagent 共用执行工具，开发中，本地链路已接通，生产隔离与检查点待验收 | [07](wiki/07-sandbox.md#能力范围-开发中) |
 | 沙盒持久化与暂停 | 工作环境长期保留，空闲时暂停，下次自动恢复继续使用；文件、已安装软件、用户配置和浏览器状态不随任务结束清空，开发中，本地链路已接通，生产隔离与检查点待验收 | [07](wiki/07-sandbox.md#持久化与暂停-开发中) |
 | 沙盒归属与首批功能 | 每用户一个独立持久的 Linux 沙盒，Main 与该用户 Subagent 共用；首批优先浏览网页、处理文件和运行代码，开发中，本地链路已接通，生产隔离与检查点待验收 | [07](wiki/07-sandbox.md#每用户独立环境与首批功能-开发中) |
+| 维护者云沙盒 | 2026-10-27 验证阿里云二代后决定暂时停用，当前不购买云沙箱；保留后续按需创建、应用判断空闲后暂停，恢复同一环境；暂停默认保留 7 天，长期数据仍需外部备份 | [07](wiki/07-sandbox.md#阿里云二代运行时2026-10-27) |
 | 沙盒实时观看 | 2026-10-26 确认入口放在聊天页面，用户只看自己的桌面；Web 首版只读，观看不创建或恢复环境，本地已验收 | [07](wiki/07-sandbox.md#聊天页面实时桌面2026-10-26) |
 
 ## 待确认问题
@@ -129,6 +133,7 @@
 - 文档语言（中文、英文或双语）。
 - 企业管理员的多角色与个人身份管理；当前看板使用共享管理员密码，技术与接口见 [08](wiki/08-admin-observability.md)。
 - 按用户的用量与费用控制（额度、频率限制、统计）。
+- Schedule 的固定间隔安排与静默监控完成协议，见 [10](wiki/10-schedules.md#漏跑暂停和删除)。
 - 多实例部署下的后台向量计算。
 - 企业统一登录（SSO）等登录方式扩展。
 - 混合搜索的细节：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；完整消息读取规则。

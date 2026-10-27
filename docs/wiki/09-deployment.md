@@ -6,11 +6,11 @@
 
 | 服务 | 位置 | 入口 |
 | --- | --- | --- |
-| Lynx Web 静态资源与 Worker 代理 | Cloudflare Workers Static Assets | `aether.forkicks.fun` |
+| Web/PWA 静态资源与 Worker 代理 | Cloudflare Workers Static Assets | `aether.forkicks.fun` |
 | Go API、Agent Runtime | 阿里云新加坡的应用主机 | `origin-aether.forkicks.fun`，要求源站凭证 |
 | PostgreSQL 18 + pgvector | 应用主机的独立生产数据卷 | 不发布宿主机端口 |
 | 管理看板 | 应用主机的独立 Node 容器 | `admin-aether.forkicks.fun`，独立管理员密码 |
-| OpenSandbox 与用户 Linux 环境 | 独立沙盒主机 | 私网管理入口，生产隔离待验收 |
+| 用户 Linux 环境 | 暂时停用，本次不部署 | 不配置云沙箱或桌面入口，见 [07](07-sandbox.md#当前状态暂时停用2026-10-27) |
 
 源站和管理子域名由部署实现选定。当前文件提供部署基础，不表示服务器、DNS 或线上服务已经创建。
 
@@ -24,9 +24,11 @@
 make edge-dry-run
 ```
 
-`frontend/build/web` 是静态资源目录。保留 `PUBLIC_API_BASE_URL` 为空，页面使用当前域名访问 API。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws` 和桌面 `/sandbox/desktop`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将 Wasm 或脚本请求回退成 HTML。
+`frontend/build/web` 是静态资源目录。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API；沙盒及桌面入口当前关闭。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
 `infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他企业部署时修改这些公开配置，不能使用维护者的域名。
+
+PWA 的 `sw.js`、清单与图标包含在同一产物中，无需额外服务。站点需要 HTTPS。Service Worker 使用当前构建的静态资源清单，不缓存 API 或认证数据；缓存入口为 `/`。新版在页面中提示用户更新，点击后切换并恢复当前标签页草稿。iOS 在 Safari 分享菜单中安装，Android 使用浏览器安装入口。反向代理不能把缺失的 `sw.js` 或清单回退为 HTML，也不能对 `sw.js` 配置长期不可变缓存。
 
 ## 准备应用主机
 
@@ -92,10 +94,9 @@ make edge-deploy
 
 - 验证码申请的 IP 与邮箱频率限制、总发信预算，以及服务端校验的机器人防护。
 - 每用户模型用量与并发限制、全局费用上限。具体额度、重置周期和超额后的用户体验待产品确认。
-- 沙盒租户隔离、禁止访问应用与数据库网络、磁盘备份、主机重启恢复，以及总容量限制。当前开发 Compose 不能用于公众沙盒，见 [07](07-sandbox.md#验证与边界)。
-- 真实 Resend 收信、真实模型回复、WebSocket 断线补消息、管理看板权限和桌面观看链路验收。
+- 真实 Resend 收信、真实模型回复、WebSocket 断线补消息和管理看板权限验收。
 
-`/healthz` 只检查数据库，不能证明模型、邮件和沙盒可用。尚未配置 `SANDBOX_URL` 时不会注册沙盒工具，不代表已经交付完整 Linux 能力。
+`/healthz` 只检查数据库，不能证明模型和邮件可用。2026-10-27 用户决定本次只启用联网执行工具，沙盒代码开关关闭，已有 `SANDBOX_*` 配置也不会启用工具；生产 Compose 已注释这些变量。沙盒隔离、备份与恢复、容量限制等验收留到恢复该功能时进行。
 
 ## 备份与更新
 
@@ -124,6 +125,8 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 - 聊天与桌面 WebSocket 均完成 Upgrade，并收到 Go 对无效令牌返回的 1008 关闭码。没有用该检查冒充真实桌面画面验收。
 - 源站无凭证返回 403，源站管理 API 返回 404，Worker 不提供开发登录和管理 API。检查中发现并修正了 Caddy 指令排序导致管理路径未被先行拦截的问题。
 - 使用实际备份脚本导出数据库，在另一空数据库恢复，核对迁移版本 12 与用户行数 1。备份权限为 600，文件名在 macOS 与 Linux 使用兼容的随机后缀。
+
+2026-10-27 前端改为 React Web/PWA，当前本地验收见 [`frontend/README.md`](../../frontend/README.md)。上述 Lynx 构建记录保留为历史，不代表当前 PWA 的真机或生产验收。
 
 ## 官方资料
 

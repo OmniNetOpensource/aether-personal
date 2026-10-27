@@ -22,7 +22,7 @@
 
 ```mermaid
 flowchart LR
-    APP["第一层：Lynx App<br/>Linux 通过浏览器"]
+    APP["第一层：React Web App<br/>移动端 PWA"]
     subgraph BACKEND["第二层：Go 后端（多台对等、无状态）"]
         API["API<br/>HTTP + WebSocket"]
         RUNTIME["Agent 运行时<br/>Main · Subagent"]
@@ -43,38 +43,32 @@ flowchart LR
     RUNTIME <--> TOOLS
 ```
 
-### 第一层：Lynx 前端
+### 第一层：Web 与 PWA 前端
 
-2026-10-26 用户确认产品中文名为「阿芒」。中文界面的标题、登录文案、输入提示、无障碍标签和管理看板品牌使用「阿芒」，验证码邮件及 Main 身份提示同步此名称，便于用户在各入口识别同一产品。英文名保留 Aether，仓库名、npm 包名、Go 模块路径、宿主接口与登录存储键继续使用现有技术标识。
+2026-10-27，用户确认将前端彻底改为纯 Web 应用，移动端使用 PWA。这取代 2026-10-23 的 Lynx 选择及同日较早的 Android 原生宿主优先方案。桌面和移动端共用 React、React DOM、TypeScript 与 CSS，直接使用浏览器 API，不再生成 Lynx bundle 或维护原生容器。
 
-2026-10-23 用户明确决定：
-
-> Linux 浏览器能用就行，直接迁移到 Lynx，保留现有功能和界面。
-
-这取代此前 Flutter 六端原生工程的选择。采用 Lynx + ReactLynx + TypeScript：共用界面使用 Lynx 元素，Web 由 Lynx for Web 渲染，Go 继续同源提供 `frontend/build/web`。Android、iOS、macOS、Windows 仍是原生目标；Linux 通过浏览器使用，不要求 Linux 原生桌面应用。
-
-选择理由：当前前端集中在登录与 Main 聊天，适合此时切换到 TypeScript、JSX 和 CSS；后端 HTTP、WebSocket 与消息存储独立于 UI 框架，可以保持既有契约。Lynx 不等同于浏览器 React，宿主提供存储、链接打开、WebSocket 与键盘/视口适配，依赖 DOM 的库不能直接放进 Lynx 界面代码。
+选择理由：当前功能以邮箱登录、长期聊天与实时消息为主，标准 DOM 已能覆盖。React 直接渲染浏览器元素后，存储、WebSocket、中文输入法、选区、无障碍与键盘适配不再需要跨宿主桥接。PWA 使用同一份 Web 产物，移动端通过添加到主屏幕获得独立窗口。
 
 | 组件 | 职责 | 状态 |
 | --- | --- | --- |
-| ReactLynx 界面 | 邮箱登录、Main 消息、输入、Markdown、回执、失败重发与真实思考气泡 | `开发中` |
-| TypeScript 连接管理 | 第一帧认证、断线自动重连、按 position 补消息、历史翻页、重发沿用 client_message_id | `开发中` |
-| Web 宿主 | 浏览器持久存储、兼容 Flutter 旧登录键、WebSocket、中文输入法、视口与安全打开来源链接 | `开发中` |
-| 原生宿主 | Android / iOS / macOS / Windows 的容器接入、设备能力及构建发布 | `仅设计`（平台目标已确认，宿主接入未完成） |
+| React 界面 | 邮箱登录、Main 消息、Markdown、回执、失败重发与真实思考动态 | 本地实现 |
+| TypeScript 连接管理 | WebSocket 第一帧认证、重连、按 position 补消息、历史翻页、重发沿用 client_message_id | 复用既有协议 |
+| 浏览器存储 | localStorage 保存登录，兼容早期 Flutter 与 Lynx 的键；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
+| PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
 
-保留 2026-10-23 确认的 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。2026-10-26 按用户要求采用产品图标的深绿、奶油白与柔黄色，替代此前白底、Main 浅灰与用户蓝灰的配色。Subagent 和工具不展示给用户，只展示 Main 发来的真实消息。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
+保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。Subagent 和工具过程留在后台，Main 的实际消息进入聊天，行动摘要显示在聊天底部，见 [05](05-main-runtime.md#行动摘要-agent开发中)。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
-2026-10-26，用户确认增加额外 Agent 汇总 Main 与 Subagent 的行动，向用户展示运行动态。这扩展了前述隐藏工具与内部任务的展示范围；客户端在聊天底部展示动态摘要，刷新与重连会恢复当前状态，见 [05 行动摘要 Agent](05-main-runtime.md#行动摘要-agent开发中)。
+中文名为「阿芒」，英文名为 Aether。保留用户指定的深绿背景黄色毛绒角色图标，原图位于 `frontend/public/app-icon.png`；管理看板独立部署的副本位于 `admin/public/app-icon.png`。界面沿用森林绿 `#204b32`、柔黄 `#f6cf83` 与奶油白 `#fffcf4`，前端色值集中在 `frontend/src/palette.css`。使用系统字体，避免离线应用外壳依赖大型字体下载。
 
-Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、代码块、列表、粗体、引用与来源链接。用户消息显示原文，远程图片显示替代文字，HTML 不执行，链接只允许无账号密码的 HTTP(S)。中文字体 Noto Sans SC 和 OFL 许可随构建打包。构建时转换依赖中的 Unicode 属性正则，以兼容 Lynx PrimJS。
+Main 正文由 marked 解析，再渲染成 React DOM，保留表格、代码块、列表、粗体、引用与来源链接。HTML 作为文本显示，远程图片显示替代文字；链接只允许无账号密码的 HTTP(S)，新窗口使用 `noopener noreferrer`。用户消息显示原文。Enter 发送、Shift+Enter 换行，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
 
-2026-10-26 用户指定深绿背景、黄色毛绒角色的图片作为产品图标。客户端登录标识、Web 标签页与主屏幕快捷方式、管理看板品牌标识统一使用该图，便于识别同一产品。原图保存在 `frontend/public/app-icon.png`，管理看板独立部署所需的相同副本位于 `admin/public/app-icon.png`；保留完整构图与背景，不增加聊天头像。原生应用图标待原生宿主实现时接入。
+2026-10-28，用户要求删除整个顶部栏，让聊天内容直接占满页面顶部；同时删除页面的「安装应用」按钮和安装说明弹窗，安装继续使用浏览器自带入口。Service Worker 注册与显式更新继续保留，更新提示仅在有待更新版本时出现。
 
-同日用户要求“把整个前端的基础配色也做成这样”。客户端与管理看板统一以森林绿 `#204b32`、柔黄 `#f6cf83`、奶油白 `#fffcf4` 为基础色：聊天使用深绿背景、奶油白 Main 气泡和柔黄用户气泡；登录页使用深绿背景与奶油白表单；看板使用深绿侧栏、暖白内容区与柔黄选中态。选择理由是让页面与用户指定的产品图标保持一致，同时用文字与背景对比保证阅读清晰。输入框、Markdown、图表、焦点和状态提示沿用同一色板，错误保留可辨识的暖红色。客户端色值集中在 `frontend/src/palette.css`，Web 宿主与 Lynx 界面共用；管理看板为独立部署保留相同色值。
+PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/build-pwa.mjs` 从现有图标生成普通图标、Apple 图标与带安全边距的 maskable 图标，随后按构建内容生成 Service Worker。缓存只包含本次构建的公开静态资源，不缓存认证响应、消息 API 或 WebSocket。入口缓存 `/`，避免 Go 对 `/index.html` 的重定向影响离线导航。
 
-实现文件见 `frontend/src/`、`frontend/host/`；依赖由 `frontend/package-lock.json` 固定。Web 产物为 `frontend/build/web`，共用界面产物为 `frontend/dist/main.web.bundle`、`frontend/dist/main.lynx.bundle`。原生 bundle 与可安装的原生 App 是两件事；原生宿主尚未接入与验收。
+用户曾在线打开并完成缓存后，可在断网时打开应用、起草消息；聊天历史仍从服务器读取，重新打开后的离线界面不提供历史消息副本。发送消息、Main 推理和历史同步需要网络。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知、后台持续连接尚未实现。
 
-此前 Flutter 版本曾完成 Web 登录、真实模型回复、来源打开与刷新恢复验证；这些是历史证据，不作为 Lynx 当前验收结果。具体迁移验证以当前 `frontend/README.md` 为准。
+代码位于 `frontend/src/`，构建工具沿用 Rsbuild，依赖固定在 `frontend/package-lock.json`。`npm run build` 只生成 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录，HTTP 与 WebSocket 契约不变。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 
@@ -87,6 +81,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | `send_message` | Main 发消息给用户或 Subagent，Subagent 发给 Main | `已实现` |
 | `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `仅设计` |
 | `assign_subagents` | 派出 Subagent，异步启动并立即返回 `subagent_id` | `已实现` |
+| `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将保存的上下文交给 Main，见 [10](10-schedules.md) | `开发中` |
 | 行动摘要 recap | 每 20 秒或四次模型请求汇总 Main 与 Subagent 行动，实时更新聊天动态 | `开发中` |
 | Subagent 运行时 | 独立上下文、后台执行、每用户 3 个并行、持久排队、15 分钟超时 | `已实现` |
 | 压缩 | 超过回答间隔或上下文阈值后，在下一次模型请求前生成摘要；阈值由看板配置 | `开发中` |
@@ -103,7 +98,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`fetch_url` | Serper、Parallel、EveryInfra，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
-| Linux 沙盒工作环境 | Main 与 Subagent 共用，覆盖终端、代码、文件、软件、浏览器、图形桌面和后台进程，见 [07](07-sandbox.md) | `开发中` |
+| Linux 沙盒工作环境 | 2026-10-27 暂时停用，仅保留联网执行工具；已有实现保留，见 [07](07-sandbox.md) | `暂时停用` |
 
 ## 语义澄清
 
@@ -138,7 +133,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。
-- Lynx 通过 HTTP + WebSocket 与后端交互，支持断线恢复。
+- Web/PWA 通过 HTTP + WebSocket 与后端交互，支持断线恢复。
 
 ## 关键设计
 
@@ -153,7 +148,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | 目录 | 用途 | 状态 |
 | --- | --- | --- |
 | `backend/` | Go 后端 | 有代码 |
-| `frontend/` | Lynx 共用界面、TypeScript 连接管理与 Web 宿主 | 迁移开发中；原生宿主未验收 |
+| `frontend/` | React Web/PWA、TypeScript 连接管理与静态构建 | 本地实现，移动真机待验收 |
 | `admin/` | 管理看板页面与 Node 同源代理，独立运行和部署 | 有代码 |
 | `infra/` | dev/prod 环境与部署配置 | dev 与沙盒配置已存在；生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
@@ -184,7 +179,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
-| 前端 | Lynx + ReactLynx + TypeScript | 先验收 Web；Linux 使用浏览器 |
+| 前端 | React + React DOM + TypeScript，Rsbuild 构建 | 纯 Web 应用，移动端安装 PWA |
 
 ## 后端骨架 `已实现`
 
@@ -212,7 +207,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | `RECAP_MODEL` | 可选，留空跟随管理端当前 Main 模型；独立生成运行动态 |
 | `DATABASE_MAX_CONNS` | 默认 20，最小 5；预留 4 条连接处理普通请求 |
 | `SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY` | 联网工具密钥；缺少时相应工具返回错误 |
-| `FRONTEND_DIR` | 同源提供 Lynx Web 的构建目录 |
+| `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
 | `RESEND_API_KEY`、`EMAIL_FROM` | `prod` 必填；dev 不发邮件，验证码打印在日志中 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 
@@ -228,7 +223,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 ## 部署
 
 - 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
-- 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go、PostgreSQL 和沙盒继续运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
+- 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime；2026-10-27 起沙盒暂时停用。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
 - 目前只部署一台后端，但代码按多台的要求编写。
 
@@ -238,6 +233,6 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 
 ## 本地开发
 
-根目录 `make dev` 构建 Lynx Web、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 TypeScript；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
+根目录 `make dev` 构建 Web/PWA、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 TypeScript；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
 
 用户在 2026-10-22 明确技术实现由开发者决定，仅产品决策询问用户。该要求替代此前逐项询问技术微决策的工作方式，已确认产品选择继续记录在 Wiki 与决策总览。

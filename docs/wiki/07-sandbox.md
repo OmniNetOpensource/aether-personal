@@ -1,5 +1,17 @@
 # 07 Linux 沙盒工作环境
 
+## 当前状态：暂时停用（2026-10-27）
+
+用户要求“先不管沙箱，先把沙箱相关的功能注释掉；先就只有 web 工具”。本次发布的执行能力只保留 `search` 和 `fetch_url`，消息、Subagent 分工与已实现的 Schedule 继续保留。选择理由是先上线联网能力，暂不承担每用户 Linux 环境的费用与运维。
+
+后端 `config.SandboxEnabled = false`，忽略全部 `SANDBOX_*` 环境变量，不创建 Provider，不注册沙箱工具，不启动空闲扫描；沙箱状态与桌面接口返回 404。模型收到当前能力限制，历史桌面截图在模型上下文中替换为停用说明，不要求管理员选择支持图片的模型。
+
+前端注释聊天的桌面入口，Web 宿主不再加载桌面查看器，旧客户端的桌面调用不会打开面板；不构建独立桌面页，开发代理与 Cloudflare 均不转发沙箱接口。本地启动脚本和生产 Compose 的沙箱启用配置已注释。
+
+实现代码、数据表、已有环境归属和历史记录保留，恢复功能需要明确调整代码开关并恢复前端与部署入口，填写旧环境变量不会自动重新启用。以下章节保留停用之前的设计、实现与验收记录，不代表当前发布具备这些能力。
+
+本地验收已通过：Go build / vet、TypeScript 与 Lynx/Web 构建；带有无效旧沙盒环境变量仍可启动，沙盒 API 与 Cloudflare 入口均为 404。真实模型完成 search → fetch_url → send_message，实际请求只公布联网执行工具及消息、分工、定时工具，没有图片载荷，沙盒分配与操作记录均为零。开发测试登录后的聊天页未显示桌面按钮；管理模型目录返回 requires_image=false。已有 Lynx ObjectRef 构建警告仍存在。没有新增测试文件或发布线上服务。
+
 ## 能力范围 `开发中`
 
 2026-10-23，用户确认 Agent 的沙盒目标是完整的 Linux 工作电脑。讨论第一版是否只支持代码与文件，还是同时支持浏览器操作时，用户原话为：
@@ -28,7 +40,7 @@
 
 Linux 环境提供运行程序的地方，Agent 还需要工具来操控该环境。终端工具负责启动命令、读取输出和停止进程。文件工具负责读写文件；面向用户的附件交付接口尚未实现。浏览器工具负责读取页面和执行操作。桌面工具负责截图、鼠标与键盘输入，让 Agent 能观察图形界面、操作软件并检查结果。
 
-运行时仍由 Go 后端调用模型并调度 Agent。沙盒承担软件与进程的执行，工具结果回到 Agent 上下文中。当前接入 OpenSandbox `release-1.1.0`，开发环境采用 Docker 运行时；生产需要的虚拟机隔离与磁盘、内存检查点尚未部署验证。
+运行时仍由 Go 后端调用模型并调度 Agent。沙盒承担软件与进程的执行，工具结果回到 Agent 上下文中。本地接入 OpenSandbox `release-1.1.0` 的 Docker 运行时；维护者云环境选择阿里云 FC Agent Sandbox 二代运行时，接入与验证边界见下文。
 
 ## 持久化与暂停 `开发中`
 
@@ -103,3 +115,38 @@ Main 与 Subagent 使用 PostgreSQL 会话锁 `sandbox:<user_id>` 协调操控�
 Docker 开发模式的暂停是 cgroup 冻结：保留当前宿主机上的进程内存，不释放全部内存；已验证 shell 变量与 PID 在暂停恢复后保持。它不能证明宿主机重启后恢复进程，也没有独立的持久磁盘备份。当前 Apple Silicon 开发机没有可用的嵌套 KVM，生产的虚拟机检查点需在支持 KVM 的 Linux 主机上另行验收。
 
 完整 Linux 能力与生产部署尚缺：沙盒内系统管理权限、虚拟机级租户隔离、租户网络策略、磁盘与内存检查点及备份恢复、容量与用量控制、环境缺失或不明操作的运维处理。当前开发 Docker 配置不能作为企业多租户生产部署。文件附件下载 API 与人工接管尚未实现。
+
+## 阿里云二代运行时（2026-10-27）
+
+用户确认继续验证二代运行时。选择理由：个位数用户需要按需启动、独立 Linux 环境以及磁盘和进程内存的暂停恢复，避免为每个用户持续运行 ECS。2026-10-27 工程师在工单中确认二代暂停恢复不需要白名单；真实调用成功。旧版文档仍有白名单说明，不能据此将一代功能限制套用到二代。
+
+独立云验证已通过同一 ID 暂停五分钟后恢复文件、apt 安装的软件、进程内存、浏览器 Cookie 和 localStorage，也通过两环境文件与安装软件隔离，以及十分钟超时暂停。Cookie 验证使用本地合成页面，没有验收外部网站实际登录或任意网站登录长期有效。
+
+后端增加 `SANDBOX_PROVIDER=aliyun`，原 OpenSandbox 继续用于本地。阿里云通过 E2B REST 控制面与 envd Connect JSON 协议执行，不需要把管理 Key 放进 Linux 环境。配置示例：
+
+```dotenv
+SANDBOX_PROVIDER=aliyun
+SANDBOX_URL=https://api.ap-southeast-1.e2b.fc.aliyuncs.com
+SANDBOX_DOMAIN=ap-southeast-1.e2b.fc.aliyuncs.com
+SANDBOX_API_KEY=<服务端 Team API Key>
+SANDBOX_IMAGE=<已准备好的二代 desktop 模板 ID>
+SANDBOX_IDLE_SECONDS=300
+```
+
+验证模板使用官方 `desktop:v0.0.44` 镜像、4 vCPU / 8 GiB。模板须已配置二代运行时；后端创建沙盒不创建模板。该配置只用于验证，尚未确定正式资源规格。二代镜像与 Go 后端不是同一台服务器，应用 API 和 PostgreSQL 的线上主机仍未部署。
+
+数据库继续保存每用户一个分配 ID，阿里云环境 ID 加 `aliyun:` 前缀，防止切换供应商时误用现有环境。创建结果不明时按分配元数据查找；不会无条件重建。旧 OpenSandbox 映射不能直接迁移到阿里云，缺失或不匹配的环境保留映射并报错。
+
+首次工作请求安装 Playwright、pandas、openpyxl、python-docx、pypdf、Pillow、PDF 命令行工具和中文字体，再初始化 1280×800 桌面与工作目录。依赖在每个持久环境内只准备一次，首次使用需要额外下载时间；正式镜像可将这些依赖预装。已完成初始化后不阻止终端工具使用，桌面软件退出时 Agent 仍可运行命令修复。Chrome 只启动一次，使用 `/home/desktop/.config/aether/chromium` 保存用户状态，并在内部 `127.0.0.1:9222` 提供 CDP。恢复后检查原进程，重连 CDP，不再次调用 launch，否则第二个 Chrome 会竞争 profile 数据库。VNC 监听 loopback；6080 的 WebSocket 通过每环境随机 Basic 认证，管理 Key 不转发到桌面入口。聊天页面沿用服务器端只读 RFB 检查。
+
+命令通过 Linux 监督进程执行，UUID 回执保存在该环境的 `/var/lib/aether/commands/`。启动前仍先保存应用操作记录；成功接受后保存命令 UUID。监督进程记录 PID 与进程启动时间，输出最多 32 KiB，超时终止整个进程组并记录退出码。查询发现监督进程消失而没有退出码时报告结果不明，不猜测成功。取消 HTTP 等待不会重新执行命令。
+
+应用每 30 秒检查真实工作状态，默认空闲 300 秒暂停。创建时启用供应商超时暂停（600 秒），但关闭流量自动恢复，防止观察请求与暂停竞争时意外唤醒。真正工作请求先恢复同一 ID，再执行工具；长命令启动前延长供应商超时至命令期限之后。观察路径只查询状态，不调用 connect 或初始化桌面。
+
+阿里云当前默认活跃上限 24 小时、深休眠保留 7 天。长期用户资料需要 OSS/NAS 等独立持久存储或可靠备份，不能把暂停快照当作永久保存。超过保留期的环境不会用空环境替代。配置长期 Key、备份与恢复、容量和费用限制、租户网络策略和正式线上部署仍需完成。官方依据：[暂停与恢复](https://help.aliyun.com/zh/functioncompute/pause-and-resume)、[套餐功能差异](https://help.aliyun.com/zh/functioncompute/feature-differences-in-the-multi-version-subscription-plan-for-cloud-sandboxes)。
+
+后端接入验收使用独立 PostgreSQL 数据库与两个应用账号，通过真实 OpenRouter 模型的 `run_command` / `get_command` 完成两个独立环境的写入和文件隔离。确认应用空闲扫描会暂停环境、HTTP 状态和桌面查看不会恢复暂停环境、新 Provider 客户端可恢复原 ID 与原文件。通过应用 WebSocket 观看真实桌面，并确认 B 账号提交 A 的环境 ID 仍只能打开 B 的桌面，A 保持暂停。未带凭证的公网桌面 WebSocket 返回 401，外部访问 9222 未成功；这不代替全面网络与安全审计。
+
+适配器命令验收通过退出码 7、停止与超时后的退出码 137、32 KiB 输出限制、PNG 截图，以及暂停恢复后 Chrome CDP 浏览器实例 ID 不变。Go build / vet 和生产 Compose 配置解析通过。未新增测试文件，未推送代码，未部署线上应用。验证 Key 为短期 Key，不能作为生产配置；长期备份与恢复仍未实现。
+
+预装依赖实测完成 Excel 写入回读、Word 写入回读、PDF 页创建与读取、PNG 编码回读，以及 Playwright 连接既有 Chrome CDP。没有启动第二个浏览器进程。

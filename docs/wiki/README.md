@@ -14,9 +14,10 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 | [04 消息与实时通信](04-messaging.md) | 无状态多实例结构、WebSocket 协议、消息状态、推送、重发、写入顺序 |
 | [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理、Subagent 设计 |
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
-| [07 Linux 沙盒工作环境](07-sandbox.md) | 完整 Linux 工作能力范围、环境与操控工具、长期保留与空闲暂停、执行恢复约束 |
+| [07 Linux 沙盒工作环境](07-sandbox.md) | 当前暂时停用；保留 Linux 工作环境设计、历史实现与恢复约束 |
 | [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、用户与 Agent 下钻、请求日志、费用覆盖和管理员权限 |
 | [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
+| [10 Schedule](10-schedules.md) | 一次性与周期安排、上下文投递、工具参数、持久化与漏跑恢复 |
 
 ## 状态标注
 
@@ -41,7 +42,7 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 
 此前已完成：后端骨架、数据库迁移、邮箱验证码登录。2026-10-22 按用户新顺序先实现 Subagent 联网工具和 Flutter Web，仅展示 Main 消息流。Go、Flutter 与真实数据库协议测试已通过；真实模型、Parallel 网页读取、微信公众号搜索与正文读取已经从 Flutter 页面跑通。2026-10-23 补齐 Serper 后，Google 搜索与网页读取也已通过 Flutter 页面完成真实联调，来源链接可点击并打开官方页面。原生平台未验收。
 
-2026-10-23 用户确认前端迁移至 Lynx，保留界面和功能；Linux 只要求浏览器可用。当前迁移状态见 [01 总体架构](01-overview.md#第一层lynx-前端) 和 `frontend/README.md`。上述 Flutter 验证是迁移前的历史记录。
+2026-10-27 用户确认前端改为纯 Web 应用，移动端使用 PWA，取代此前的 Lynx 与原生宿主方案。当前状态见 [01 总体架构](01-overview.md#第一层web-与-pwa-前端) 和 `frontend/README.md`。上述 Flutter 验证是迁移前的历史记录。
 
 ## 维护
 

@@ -74,6 +74,6 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 - 新版等待期间显示更新按钮，点击更新后页面加载新版，草稿保留。
 - 320px、390px 移动视口无页面横向溢出，Shift+Enter 换行、Enter 发送；上翻阅读后编辑多行草稿不改变阅读位置。真实历史中的表格、代码块和来源链接使用标准 DOM 渲染。
 
-手机尺寸检查属于 In-App Browser 视口验收，不能代替真实 iOS、Android 的主屏幕安装、系统键盘和后台生命周期验收。尚未推送或部署。
+手机尺寸检查属于 In-App Browser 视口验收，不能代替真实 iOS、Android 的主屏幕安装、系统键盘和后台生命周期验收。生产部署尚未完成。
 
 官方参考：[PWA 安装](https://web.dev/learn/pwa/installation)、[Service Worker](https://web.dev/learn/pwa/service-workers)。

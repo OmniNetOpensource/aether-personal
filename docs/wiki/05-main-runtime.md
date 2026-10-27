@@ -6,7 +6,7 @@
 
 最小对话（含 WebSocket 收发完整消息）→ 边生成边显示 → 更多工具（`read_message`、`search_message`）→ 压缩与混合搜索 → Subagent。
 
-当前 `已实现` 的代码包含最小 Main 对话、Subagent 派发和双向消息、联网 `search` / `fetch_url`、Web 聊天（现迁移至 Lynx）。推送完整消息与状态，不推送逐段生成的文字。
+当前 `已实现` 的代码包含最小 Main 对话、Subagent 派发和双向消息、联网 `search` / `fetch_url`、Web 聊天（现使用 React，移动端为 PWA）。推送完整消息与状态，不推送逐段生成的文字。
 
 2026-10-22，用户调整近期实现顺序：先为 Subagent 添加联网 `search` 与网页读取工具，再制作 WhatsApp 风格的简版 Flutter 客户端，最后在本地联调。完成这些工作需要先实现 Main 派发任务、Subagent 独立运行及双方消息通信。边生成边显示、历史检索和压缩仍属于完整交付范围。
 
@@ -69,6 +69,7 @@ flowchart TD
 | `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `仅设计` |
 | `search_message` | 在完整历史中混合搜索（关键词 + 向量），见 [02 数据模型](02-data-model.md#压缩与上下文检索) | `仅设计` |
 | `assign_subagents` | 创建独立 Subagent 并持久排队，立即返回有序 `subagent_ids` | `已实现` |
+| `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将上下文投递给 Main；见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url` | Main 与 Subagent 共用搜索和网页读取工具 | `已实现` |
 
 工具参数写在工具描述中。系统提示词明确“直接输出不显示，用户回复必须走消息通道”，防止简短回复绕过工具而在页面消失。参数或接收方无效时返回工具错误，模型可修正；跨用户 Subagent 不可访问。
@@ -142,7 +143,7 @@ sequenceDiagram
 
 调度使用每用户三个 PostgreSQL 会话锁名额，跨实例共享上限；排队由 `idle` 与待读消息表示，不新增状态取值。`subagents.started_at` 保留本轮开始时间，重启不会重置截止时间。调度、失败通知、恢复和再唤醒已通过真实 PostgreSQL 隔离 schema 测试，外部接口在该测试中模拟。
 
-其余 HTTP 工具与 MCP 尚待确认。2026-10-23，用户确认沙盒覆盖完整 Linux 工作能力，包含浏览器与图形桌面，并确认环境长期保留、空闲暂停、下次继续使用，见 [07 Linux 沙盒工作环境](07-sandbox.md)。沙盒正在开发：已接入 OpenSandbox、持久用户映射、操作日志和按用户控制锁；生产隔离与检查点尚待部署验证。详见 07 的当前接入与验证边界。
+其余 HTTP 工具与 MCP 尚待确认。2026-10-23，用户确认沙盒覆盖完整 Linux 工作能力，包含浏览器与图形桌面，并确认环境长期保留、空闲暂停、下次继续使用，见 [07 Linux 沙盒工作环境](07-sandbox.md)。2026-10-27 用户决定暂时停用沙盒，只保留联网执行工具；已有沙盒映射、操作日志与控制代码保留，当前不注册或执行。详见 07 的当前接入与验证边界。
 
 ### assign_subagents `已实现`
 

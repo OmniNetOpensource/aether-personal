@@ -1,8 +1,8 @@
 # 阿芒 · aether-personal
 
-企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 Lynx 跨平台客户端（Linux 使用浏览器）、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
+企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
 
-当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Lynx 聊天。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
+当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。2026-10-27 起暂时停用沙箱与桌面功能，执行工具只保留搜索和网页读取。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
 
 ## 已确认方向
 
@@ -10,9 +10,9 @@
 | --- | --- |
 | 项目名称 | `aether-personal` |
 | 产品名称 | 中文「阿芒」，英文 Aether |
-| 前端 | Lynx + ReactLynx + TypeScript；目标 Android、iOS、macOS、Windows、Web，Linux 通过浏览器使用 |
+| 前端 | React + React DOM + TypeScript；纯 Web 应用，移动端使用 PWA |
 | 后端 | Go |
-| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡，沙盒独立主机；生产验收待完成 |
+| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡，当前沙盒暂时停用；生产部署待完成 |
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
@@ -27,17 +27,18 @@
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
 | Main Agent | 每用户固定一个逻辑 Main，按用户串行运行，状态持久化到 PostgreSQL |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
-| Linux 沙盒工作环境 | 完整 Linux 工作能力，环境长期保留、空闲暂停、下次恢复继续使用；本地已接通，生产隔离与检查点待验收 |
+| Linux 沙盒工作环境 | 暂时停用；保留实现与历史数据，后续恢复再验收生产隔离与持久化 |
 | 处理中收到新消息 | 当前模型请求或工具调用结束后，在下一次模型调用前加入新消息 |
 | 环境 | 实现时同时考虑 dev 和 prod |
 
 ## 完整交付范围
 
-- Lynx Main 聊天界面，HTTP、WebSocket 和断线恢复。
+- Web/PWA Main 聊天界面，HTTP、WebSocket 和断线恢复。
 - Go API：认证、收发消息、WebSocket。
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[数据模型](docs/wiki/02-data-model.md)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
+- Schedule：Main 与 Subagent 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
 - Main 可直接执行或委派任务，与 Subagent 共用执行工具（联网工具与可选的 Linux 沙盒工具）；消息和派发权限按角色区分。
 - Main 在耗时任务中通过 `send_message` 汇报关键进展，完成后发送结果，禁止直接输出正文。历史检索 `search_message`、`read_message` 尚待实现。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。
@@ -57,7 +58,7 @@
 | 目录 | 用途 |
 | --- | --- |
 | `backend/` | Go 后端 |
-| `frontend/` | Lynx 共用界面与 Web 宿主工程 |
+| `frontend/` | React Web/PWA 工程 |
 | `admin/` | 管理看板静态页面与 Node 同源代理，独立运行 |
 | `infra/` | dev/prod 环境和部署配置 |
 | `docs/` | 架构图、架构 Wiki 与决策总览 |
@@ -75,7 +76,7 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-Lynx 工程位于 `frontend/`，Web 由 Go 同源提供；同时生成 Lynx 原生 bundle。移动和桌面原生宿主的接入与验收尚未完成，不能把 bundle 编译成功视为原生 App 已可发布。
+前端工程位于 `frontend/`，React 直接渲染标准 DOM。Web 与移动 PWA 共用 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 API。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
 
 ## 本地开发
 
@@ -89,7 +90,7 @@ cp backend/.env.example backend/.env
 make dev
 ```
 
-打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Lynx Web、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面、HTTP API 和 WebSocket。本地 dev 点击「开发测试登录」即可进入固定 mock 用户 `dev@example.com`，无需输入邮箱或验证码。
+打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面、HTTP API 和 WebSocket。本地 dev 默认自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
 
 检查代码和真实数据库运行时：
 
@@ -129,13 +130,13 @@ make db-down   # 停止本地 PostgreSQL
 | `SERP_API_KEY` | Serper Google 搜索密钥 |
 | `PARALLEL_API_KEY` | 普通网页及 Reddit 正文读取密钥 |
 | `EVERYINFRA_API_KEY` | 微信公众号、小红书搜索及正文读取密钥 |
-| `FRONTEND_DIR` | Lynx Web 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
+| `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
 | `RESEND_API_KEY` | `prod` 必填，Resend 的 API Key |
 | `EMAIL_FROM` | `prod` 必填，验证码邮件发件人，如 `Aether <noreply@company.com>`；域名需先在 Resend 后台验证 |
 
-本地 dev 在聊天页面点击「开发测试登录」，或调用 `POST /auth/dev`，即可使用 `dev@example.com` 登录，无需邮箱或验证码；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
+本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试，也可直接调用 `POST /auth/dev`；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
 
 邮箱验证码接口仍可直接调用（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）：
 

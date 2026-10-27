@@ -26,7 +26,7 @@
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
 - 模型：OpenRouter；邮件：Resend（直接用 `net/http` 调用）。
-- 前端：Lynx + ReactLynx + TypeScript，工程位于 `frontend/`，本地先验收 Web；Linux 使用浏览器。
+- 前端：React + React DOM + TypeScript，纯 Web 应用，移动端使用 PWA；工程位于 `frontend/`，构建输出 `frontend/build/web`。
 
 ## 常用命令（在 `backend/` 下）
 
