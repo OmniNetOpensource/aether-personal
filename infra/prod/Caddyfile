@@ -1,0 +1,15 @@
+{$ORIGIN_DOMAIN} {
+	route {
+		@admin path /admin /admin/*
+		respond @admin 404
+		@authorized header X-Aether-Origin-Key {$ORIGIN_AUTH_SECRET}
+		reverse_proxy @authorized api:8080 {
+			header_up -X-Aether-Origin-Key
+		}
+		respond "Forbidden" 403
+	}
+}
+
+{$ADMIN_DOMAIN} {
+	reverse_proxy admin:5174
+}

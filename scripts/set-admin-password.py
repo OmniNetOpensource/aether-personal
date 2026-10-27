@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""设置 backend/.env 中的管理员密码哈希。"""
+"""设置环境配置文件中的管理员密码哈希，默认 backend/.env。"""
 
 import argparse
 import base64
@@ -12,11 +12,12 @@ import shlex
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--generate", action="store_true", help="生成随机密码，保存到 backend/bin/admin-password.txt")
+parser.add_argument("--env-file", type=Path, help="目标配置文件，例如 infra/prod/.env")
 args = parser.parse_args()
 project_dir = Path(__file__).resolve().parent.parent
-env_path = project_dir / "backend/.env"
+env_path = args.env_file or project_dir / "backend/.env"
 if not env_path.is_file():
-    parser.error("请先从 backend/.env.example 创建 backend/.env")
+    parser.error(f"请先从对应的 .env.example 创建 {env_path}")
 
 if args.generate:
     password = secrets.token_urlsafe(18)
@@ -47,4 +48,4 @@ if args.generate:
     print(f"初始密码已保存到 {password_file}")
 else:
     password_file.unlink(missing_ok=True)
-print("密码哈希已写入 backend/.env。重启后端后生效，旧看板会话会失效。")
+print(f"密码哈希已写入 {env_path}。重启后端后生效，旧看板会话会失效。")

@@ -12,7 +12,7 @@
 | 产品名称 | 中文「阿芒」，英文 Aether |
 | 前端 | Lynx + ReactLynx + TypeScript；目标 Android、iOS、macOS、Windows、Web，Linux 通过浏览器使用 |
 | 后端 | Go |
-| 部署方式 | 项目提供通用 Docker 部署；阿里云新加坡仅为维护者自己实例的部署位置 |
+| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡，沙盒独立主机；生产验收待完成 |
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
@@ -147,6 +147,8 @@ curl -X POST localhost:8080/auth/logout -H "Authorization: Bearer <token>"
 ```
 
 ## 项目资料
+
+生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册；防滥用、用户用量控制与沙盒生产隔离仍须完成后才能公开上线。
 
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。

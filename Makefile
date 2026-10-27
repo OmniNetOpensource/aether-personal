@@ -1,4 +1,36 @@
-.PHONY: dev frontend admin check check-integration check-live check-research sandbox-up sandbox-build sandbox-create sandbox-status sandbox-pause sandbox-resume
+.PHONY: dev frontend admin check check-integration check-live check-research sandbox-up sandbox-build sandbox-create sandbox-status sandbox-pause sandbox-resume edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-up prod-status prod-backup
+
+PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
+
+edge-check:
+	cd infra/cloudflare && npm ci && npm run check
+
+edge-dry-run: frontend edge-check
+	cd infra/cloudflare && npm run dry-run
+
+edge-dev:
+	cd infra/cloudflare && npm run dev
+
+edge-deploy: edge-dry-run
+	cd infra/cloudflare && npm run deploy
+
+prod-build:
+	$(PROD_COMPOSE) build
+
+prod-db-up:
+	$(PROD_COMPOSE) up -d --wait postgres
+
+prod-migrate:
+	$(PROD_COMPOSE) run --rm migrate
+
+prod-up:
+	$(PROD_COMPOSE) up -d --wait api admin gateway
+
+prod-status:
+	$(PROD_COMPOSE) ps
+
+prod-backup:
+	sh scripts/backup-prod.sh
 
 frontend:
 	cd frontend && npm ci

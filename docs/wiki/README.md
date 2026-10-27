@@ -16,6 +16,7 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
 | [07 Linux 沙盒工作环境](07-sandbox.md) | 完整 Linux 工作能力范围、环境与操控工具、长期保留与空闲暂停、执行恢复约束 |
 | [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、用户与 Agent 下钻、请求日志、费用覆盖和管理员权限 |
+| [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
 
 ## 状态标注
 

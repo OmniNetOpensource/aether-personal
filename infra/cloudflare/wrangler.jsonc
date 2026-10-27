@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aether-personal-web",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-26",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "aether.forkicks.fun", "custom_domain": true }],
+  "assets": {
+    "directory": "../../frontend/build/web",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/auth", "/auth/*", "/messages", "/sandbox", "/sandbox/*",
+      "/ws", "/healthz", "/admin", "/admin/*"
+    ]
+  },
+  "vars": {
+    "ORIGIN_URL": "https://origin-aether.forkicks.fun"
+  },
+  "observability": { "enabled": true }
+}

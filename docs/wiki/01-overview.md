@@ -155,7 +155,7 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 | `backend/` | Go 后端 | 有代码 |
 | `frontend/` | Lynx 共用界面、TypeScript 连接管理与 Web 宿主 | 迁移开发中；原生宿主未验收 |
 | `admin/` | 管理看板页面与 Node 同源代理，独立运行和部署 | 有代码 |
-| `infra/` | dev/prod 环境与部署配置 | 尚未创建 |
+| `infra/` | dev/prod 环境与部署配置 | dev 与沙盒配置已存在；生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
 
 后端内部：
@@ -227,7 +227,8 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 
 ## 部署
 
-- 项目提供通用 Docker 部署（具体形式 `待确认`）；阿里云新加坡仅为维护者自己实例的部署位置。
+- 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
+- 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go、PostgreSQL 和沙盒继续运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
 - 目前只部署一台后端，但代码按多台的要求编写。
 

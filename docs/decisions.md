@@ -43,7 +43,8 @@
 | 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
 | 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
-| 部署方式 | 通用 Docker 部署；阿里云新加坡仅为维护者实例位置 | [01](wiki/01-overview.md#部署) |
+| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡，沙盒独立主机；生产验收待完成 | [09](wiki/09-deployment.md) |
+| 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由部署企业配置，费用由该企业承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |
 
@@ -70,6 +71,7 @@
 | --- | --- | --- |
 | 本地开发登录 | dev 一键登录固定 mock 用户 `dev@example.com`，无需邮箱或验证码；prod 不开放 | [03](wiki/03-auth.md#本地开发登录) |
 | 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户 | [03](wiki/03-auth.md) |
+| 首版注册范围 | 2026-10-26 确认向公众开放注册，不要求邀请码或人工审核；生产防滥用与用量控制待完成 | [03](wiki/03-auth.md#生产注册范围) |
 | 看板登录 | 仅输入独立管理员密码，无邮箱和验证码；使用独立管理会话，聊天账号不能访问管理接口 | [08](wiki/08-admin-observability.md#权限与-api) |
 | 登录凭证 | 随机令牌 + `sessions` 表，不用 JWT；`Authorization: Bearer` | [03](wiki/03-auth.md#登录凭证) |
 | 过期 | 滑动过期，30 天不活跃失效；允许多设备 | [03](wiki/03-auth.md#登录凭证) |
@@ -133,5 +135,5 @@
 - 边生成边显示的推送方式，以及各平台的 WebSocket 连接恢复行为。
 - 其余 HTTP 工具与 MCP 的接入方式和权限。
 - Android、iOS、macOS、Windows 原生宿主的发布和验收方式（Linux 已确认仅要求浏览器）。
-- 通用 Docker 部署的具体形式；维护者阿里云新加坡实例的部署资源、数据库部署、域名、TLS 和 dev/prod 隔离方式。
+- 维护者阿里云新加坡实例的实际资源与连接信息、生产部署验收；实现配置见 [09](wiki/09-deployment.md)。
 - 项目各部分的验收标准及验证环境。

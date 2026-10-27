@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/.env
+**/.env.*
+**/.dev.vars*
+**/.wrangler
+backend/bin
+frontend/build
+frontend/dist
+infra/sandbox/.local
+docs/experiments

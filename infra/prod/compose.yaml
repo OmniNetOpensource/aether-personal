@@ -1,0 +1,119 @@
+name: aether-personal-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U aether -d aether']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: &logging
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }
+
+  api:
+    image: aether-personal-backend:${RELEASE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/prod/Dockerfile.backend
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    environment:
+      APP_ENV: prod
+      PORT: '8080'
+      DATABASE_URL: &database-url postgres://aether:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=disable
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-20}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY:?Set RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM}
+      MAIN_MODEL: ${MAIN_MODEL:-}
+      SUBAGENT_MODEL: ${SUBAGENT_MODEL:-}
+      RECAP_MODEL: ${RECAP_MODEL:-}
+      MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-8192}
+      SERP_API_KEY: ${SERP_API_KEY:-}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY:-}
+      EVERYINFRA_API_KEY: ${EVERYINFRA_API_KEY:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      SANDBOX_URL: ${SANDBOX_URL:-}
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-}
+      SANDBOX_IDLE_SECONDS: ${SANDBOX_IDLE_SECONDS:-300}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, 'http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  migrate:
+    image: aether-personal-backend:${RELEASE_TAG:-local}
+    profiles: [tools]
+    entrypoint: [/usr/local/bin/goose]
+    command: [-dir, /app/db/migrations, up]
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: *database-url
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  admin:
+    image: aether-personal-admin:${RELEASE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/prod/Dockerfile.admin
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:5174/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  gateway:
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    restart: unless-stopped
+    environment:
+      ORIGIN_DOMAIN: ${ORIGIN_DOMAIN:?Set ORIGIN_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}
+      ORIGIN_AUTH_SECRET: ${ORIGIN_AUTH_SECRET:?Set ORIGIN_AUTH_SECRET}
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api: { condition: service_healthy }
+      admin: { condition: service_healthy }
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
