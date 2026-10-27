@@ -118,6 +118,9 @@ export class ChatController {
     const response = await this.request('GET', '/auth/config');
     const config = z.object({ dev_login: z.boolean() }).parse(await response.json());
     this.devLoginAvailable = config.dev_login;
+    if (config.dev_login && (!this.token || this.email !== 'dev@example.com')) {
+      await this.devSignIn();
+    }
     this.error = null;
     this.notify();
   }

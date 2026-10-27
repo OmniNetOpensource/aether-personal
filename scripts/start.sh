@@ -139,7 +139,7 @@ wait_ready "http://127.0.0.1:$backend_port/healthz" "$backend_pid" "$log_dir/bac
 wait_ready "http://127.0.0.1:$admin_port/" "$admin_pid" "$log_dir/admin.log"
 
 printf '\n启动完成\n聊天：http://127.0.0.1:%s\n看板：http://127.0.0.1:%s\n' "$backend_port" "$admin_port"
-printf 'dev 聊天点击「开发测试登录」即可进入；看板使用独立管理员密码登录。\n'
+printf 'dev 聊天默认自动进入 dev@example.com；看板使用独立管理员密码登录。\n'
 printf '按 Ctrl+C 关闭后端与看板；数据库保留运行。\n\n'
 tail -n 10 -f "$log_dir/backend.log" "$log_dir/admin.log" &
 service_pids+=("$!")
