@@ -1,57 +1,50 @@
 import { marked } from 'marked';
 import { decodeHTML } from 'entities';
 import type { Token, Tokens } from 'marked';
-import type { ReactNode } from '@lynx-js/react';
-import { host } from './platform.js';
+import type { ReactNode } from 'react';
+import { memo } from 'react';
+import { safeLink } from './platform.js';
 
 function inline(tokens: Token[]): ReactNode {
   return tokens.map((token, index) => {
     switch (token.type) {
       case 'strong':
-        return (
-          <text key={index} className="strong">
-            {inline(token.tokens ?? [])}
-          </text>
-        );
+        return <strong key={index}>{inline(token.tokens ?? [])}</strong>;
       case 'em':
-        return (
-          <text key={index} className="em">
-            {inline(token.tokens ?? [])}
-          </text>
-        );
+        return <em key={index}>{inline(token.tokens ?? [])}</em>;
       case 'del':
-        return (
-          <text key={index} className="deleted">
-            {inline(token.tokens ?? [])}
-          </text>
-        );
+        return <del key={index}>{inline(token.tokens ?? [])}</del>;
       case 'codespan':
         return (
-          <text key={index} className="code-inline">
+          <code key={index} className="code-inline">
             {token.text}
-          </text>
+          </code>
         );
-      case 'link':
-        return (
-          <text key={index} className="link" bindtap={() => host.openLink(token.href)}>
+      case 'link': {
+        const href = safeLink(token.href);
+        return href ? (
+          <a key={index} className="link" href={href} target="_blank" rel="noopener noreferrer">
             {inline(token.tokens ?? [])}
-          </text>
+          </a>
+        ) : (
+          <span key={index}>{inline(token.tokens ?? [])}</span>
         );
+      }
       case 'image':
         return (
-          <text key={index} className="muted">
+          <span key={index} className="muted">
             {token.text || '图片链接'}
-          </text>
+          </span>
         );
       case 'br':
-        return '\n';
+        return <br key={index} />;
       case 'escape':
         return decodeHTML(token.text);
       case 'html':
         return token.raw;
       default:
         return 'tokens' in token && token.tokens
-          ? inline(token.tokens ?? [])
+          ? inline(token.tokens)
           : 'text' in token
             ? decodeHTML(token.text)
             : token.raw;
@@ -66,82 +59,89 @@ function blocks(tokens: Token[]): ReactNode {
         return null;
       case 'heading':
         return (
-          <text key={index} className={`md-block heading h${token.depth}`}>
+          <div
+            key={index}
+            role="heading"
+            aria-level={token.depth}
+            className={`md-block heading h${token.depth}`}
+          >
             {inline(token.tokens ?? [])}
-          </text>
+          </div>
         );
       case 'code':
         return (
-          <scroll-view key={index} scroll-orientation="horizontal" className="code-block">
-            <text className="code-text">{token.text}</text>
-          </scroll-view>
+          <pre key={index} className="code-block" tabIndex={0}>
+            <code className="code-text">{token.text}</code>
+          </pre>
         );
       case 'blockquote':
         return (
-          <view key={index} className="quote">
+          <blockquote key={index} className="quote">
             {blocks(token.tokens ?? [])}
-          </view>
+          </blockquote>
         );
       case 'list':
         return (
-          <view key={index} className="md-block">
-            {token.items.map((item: Tokens.ListItem, itemIndex: number) => (
-              <view key={itemIndex} className="list-row">
-                <text className="list-marker">
+          <div key={index} className="md-block" role="list">
+            {token.items.map((item: Tokens.ListItem, i: number) => (
+              <div key={i} className="list-row" role="listitem">
+                <span className="list-marker">
                   {item.task
                     ? item.checked
                       ? '☑'
                       : '☐'
                     : token.ordered
-                      ? `${Number(token.start) + itemIndex}.`
+                      ? `${Number(token.start) + i}.`
                       : '•'}
-                </text>
-                <view className="list-body">{blocks(item.tokens)}</view>
-              </view>
+                </span>
+                <div className="list-body">{blocks(item.tokens)}</div>
+              </div>
             ))}
-          </view>
+          </div>
         );
       case 'table':
         return (
-          <scroll-view key={index} scroll-orientation="horizontal" className="md-block">
-            <view className="table">
-              <view className="table-row">
-                {token.header.map((cell: Tokens.TableCell, i: number) => (
-                  <text key={i} className="table-cell strong">
-                    {inline(cell.tokens)}
-                  </text>
-                ))}
-              </view>
-              {token.rows.map((row: Tokens.TableCell[], i: number) => (
-                <view key={i} className="table-row">
-                  {row.map((cell, j) => (
-                    <text key={j} className="table-cell">
+          <div key={index} className="table-scroll" tabIndex={0} role="region" aria-label="表格">
+            <table>
+              <thead>
+                <tr>
+                  {token.header.map((cell: Tokens.TableCell, i: number) => (
+                    <th key={i} style={{ textAlign: token.align[i] ?? undefined }}>
                       {inline(cell.tokens)}
-                    </text>
+                    </th>
                   ))}
-                </view>
-              ))}
-            </view>
-          </scroll-view>
+                </tr>
+              </thead>
+              <tbody>
+                {token.rows.map((row: Tokens.TableCell[], i: number) => (
+                  <tr key={i}>
+                    {row.map((cell, j) => (
+                      <td key={j} style={{ textAlign: token.align[j] ?? undefined }}>
+                        {inline(cell.tokens)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         );
       case 'hr':
-        return <view key={index} className="rule" />;
+        return <hr key={index} className="rule" />;
       default:
         return (
-          <text key={index} className="md-block">
+          <div key={index} className="md-block">
             {'tokens' in token && token.tokens
-              ? inline(token.tokens ?? [])
+              ? inline(token.tokens)
               : 'text' in token
                 ? decodeHTML(token.text)
                 : token.raw}
-          </text>
+          </div>
         );
     }
   });
 }
 
-export function Markdown({ text }: { text: string }) {
-  return (
-    <view className="markdown">{blocks(marked.lexer(text, { gfm: true, breaks: true }))}</view>
-  );
-}
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  return <div className="markdown">{blocks(marked.lexer(text, { gfm: true, breaks: true }))}</div>;
+});

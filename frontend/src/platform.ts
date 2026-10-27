@@ -1,46 +1,48 @@
 import { z } from 'zod';
 
-export interface AetherHost {
-  session(callback: (value: unknown) => void): void;
-  saveSession(token: string, email: string, callback: (saved: boolean) => void): void;
-  clearSession(): void;
-  uuid(callback: (id: string) => void): void;
-  openLink(url: string): void;
-  resizeComposer(): void;
-  openDesktop(token: string): void;
+export async function readSession() {
+  let token: string | null = null;
+  let email = '';
+  try {
+    const readString = (key: string) => {
+      const stored = localStorage.getItem(key);
+      if (stored === null) return null;
+      return stored.startsWith('"') ? z.string().parse(JSON.parse(stored)) : stored;
+    };
+    // Flutter used both JSON-encoded values and flutter.* keys before the Lynx migration.
+    token = readString('aether_session') ?? readString('flutter.aether_session');
+    email = readString('aether_email') ?? readString('flutter.aether_email') ?? '';
+    if (token) await saveSession(token, email);
+  } catch {
+    // A disabled browser store must still allow the login screen to open.
+  }
+  return { baseURL: location.origin, token, email, iconURL: '/app-icon.png' };
 }
 
-declare const NativeModules: { AetherHost: AetherHost };
+export async function saveSession(token: string, email: string) {
+  try {
+    localStorage.setItem('aether_email', email);
+    localStorage.setItem('aether_session', token);
+  } catch {
+    throw new Error('无法保存登录信息，请检查浏览器存储设置');
+  }
+}
 
-const sessionSchema = z.object({
-  baseURL: z.url(),
-  token: z.string().nullable(),
-  email: z.string(),
-});
+export function clearSession() {
+  try {
+    localStorage.removeItem('aether_session');
+    localStorage.removeItem('flutter.aether_session');
+  } catch {
+    // The controller also clears its in-memory session.
+  }
+}
 
-export const host: AetherHost = {
-  session: (callback) => NativeModules.AetherHost.session(callback),
-  saveSession: (token, email, callback) =>
-    NativeModules.AetherHost.saveSession(token, email, callback),
-  clearSession: () => NativeModules.AetherHost.clearSession(),
-  uuid: (callback) => NativeModules.AetherHost.uuid(callback),
-  openLink: (url) => NativeModules.AetherHost.openLink(url),
-  resizeComposer: () => NativeModules.AetherHost.resizeComposer(),
-  openDesktop: (token) => NativeModules.AetherHost.openDesktop(token),
-};
-export const readSession = () =>
-  new Promise<z.infer<typeof sessionSchema>>((resolve, reject) => {
-    host.session((value) => {
-      const result = sessionSchema.safeParse(value);
-      if (result.success) resolve(result.data);
-      else reject(new Error('无法读取登录信息，请重新登录'));
-    });
-  });
-
-export const saveSession = (token: string, email: string) =>
-  new Promise<void>((resolve, reject) => {
-    host.saveSession(token, email, (saved) =>
-      saved ? resolve() : reject(new Error('无法保存登录信息，请检查设备存储')),
-    );
-  });
-export const messageID = () => new Promise<string>((resolve) => host.uuid(resolve));
+export function safeLink(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password)
+      return url.href;
+  } catch {
+    // Markdown may contain incomplete or unsafe links.
+  }
+}

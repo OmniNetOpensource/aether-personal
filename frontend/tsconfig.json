@@ -4,13 +4,13 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "@lynx-js/react",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "types": ["@lynx-js/types", "node"]
+    "types": ["node", "react", "react-dom"]
   },
-  "include": ["src", "host", "*.ts"]
+  "include": ["src", "*.ts"]
 }

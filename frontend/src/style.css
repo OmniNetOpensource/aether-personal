@@ -1,14 +1,14 @@
 @import './palette.css';
 
 :root {
-  font-family: NotoSansSC, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: var(--text);
   font-size: 15px;
 }
-view {
+* {
   box-sizing: border-box;
 }
-text {
+body {
   font-size: 16px;
   line-height: 24px;
   color: var(--text);
@@ -27,11 +27,11 @@ text {
 }
 .chat-page {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--forest);
-  padding-top: env(safe-area-inset-top);
 }
 .messages {
   flex: 1;
@@ -39,6 +39,8 @@ text {
   min-height: 0;
 }
 .chat-toolbar {
+  flex-shrink: 0;
+  min-height: 56px;
   width: 100%;
   display: flex;
   flex-direction: row;
@@ -51,16 +53,6 @@ text {
   color: var(--on-forest);
   font-size: 16px;
   font-weight: 600;
-}
-.desktop-button {
-  padding: 7px 13px;
-  border-radius: 9px;
-  background: var(--forest-hover);
-}
-.desktop-button-label {
-  color: var(--on-forest);
-  font-size: 13px;
-  line-height: 20px;
 }
 .message-content {
   padding: 16px 32px 22px;
@@ -118,7 +110,7 @@ text {
   border-bottom-left-radius: 21px;
   border-bottom-right-radius: 6px;
 }
-.user-text {
+.user-body {
   color: var(--text);
   white-space: pre-wrap;
 }
@@ -152,7 +144,7 @@ text {
   box-sizing: border-box;
   flex: 1;
   min-width: 0;
-  height: 44px;
+  height: auto;
   min-height: 44px;
   max-height: 156px;
   font-size: 16px;
@@ -178,12 +170,6 @@ text {
   font-size: 28px;
   line-height: 32px;
   color: var(--forest-deep);
-}
-.send-disabled {
-  background: var(--surface-muted);
-}
-.send-disabled .send-arrow {
-  color: var(--text-muted);
 }
 .composer-error {
   margin: 0 26px;
@@ -213,7 +199,7 @@ text {
   flex-direction: row;
   gap: 5px;
 }
-.recap-text {
+.recap-body {
   font-size: 12px;
   line-height: 19px;
   color: var(--on-forest-muted);
@@ -257,15 +243,6 @@ text {
 .markdown > :last-child {
   margin-bottom: 0;
 }
-.strong {
-  font-weight: 600;
-}
-.em {
-  font-style: italic;
-}
-.deleted {
-  text-decoration: line-through;
-}
 .link {
   color: var(--forest);
   text-decoration: underline;
@@ -282,7 +259,7 @@ text {
   line-height: 27px;
 }
 .code-inline,
-.code-text {
+.code-body {
   font-family: monospace;
   font-size: 13px;
   line-height: 20px;
@@ -297,7 +274,7 @@ text {
   padding: 10px;
   max-width: 100%;
 }
-.code-text {
+.code-body {
   white-space: pre;
 }
 .list-row {
@@ -317,20 +294,6 @@ text {
   padding-left: 12px;
   margin-bottom: 8px;
 }
-.table {
-  display: flex;
-  flex-direction: column;
-}
-.table-row {
-  display: flex;
-  flex-direction: row;
-}
-.table-cell {
-  flex-shrink: 0;
-  width: 160px;
-  padding: 8px;
-  border: 1px solid var(--line-strong);
-}
 .rule {
   height: 1px;
   background: var(--line-strong);
@@ -342,7 +305,7 @@ text {
   background: var(--forest);
 }
 .login-center {
-  min-height: 100vh;
+  min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -401,14 +364,6 @@ text {
   align-items: center;
   justify-content: center;
 }
-.button-label {
-  color: var(--gold-soft);
-  font-size: 15px;
-  font-weight: 600;
-}
-.busy {
-  opacity: 0.6;
-}
 .change-email {
   padding-top: 16px;
   align-self: center;
@@ -446,4 +401,210 @@ text {
 }
 .login-input::placeholder {
   color: var(--text-muted);
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--forest);
+}
+body {
+  font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+#root {
+  position: fixed;
+  top: var(--app-top, 0);
+  left: 0;
+  width: 100%;
+  height: var(--app-height, 100dvh);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+p,
+h1,
+h2,
+pre,
+blockquote {
+  margin: 0;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  border: 0;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+.login-input:focus-visible {
+  outline-color: var(--forest);
+}
+button.link {
+  background: transparent;
+}
+.messages {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: none;
+  scrollbar-color: var(--forest-border) transparent;
+}
+.message-content {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.user-text,
+.markdown {
+  overflow-wrap: anywhere;
+}
+.composer-padding {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.message-input {
+  display: block;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+}
+.message-input:focus-visible {
+  outline: 0;
+}
+.composer:focus-within {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.send-button:disabled {
+  background: var(--surface-muted);
+  opacity: 1;
+}
+.send-button:disabled .send-arrow {
+  color: var(--text-muted);
+}
+.retry,
+.history-error {
+  background: transparent;
+  text-align: left;
+}
+.loading {
+  flex: 1;
+  min-height: 0;
+}
+.login-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.login-button {
+  color: var(--gold-soft);
+  font-size: 15px;
+  font-weight: 600;
+}
+.login-title {
+  margin-top: 28px;
+}
+.login-subtitle {
+  margin-top: 10px;
+  margin-bottom: 30px;
+}
+.login-input {
+  font-size: 16px;
+}
+.change-email {
+  margin-top: 16px;
+  padding: 0;
+}
+.app-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.app-button {
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: var(--forest-hover);
+  color: var(--on-forest);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.connection-status {
+  font-size: 12px;
+  color: var(--on-forest-muted);
+}
+.load-older {
+  display: block;
+  margin: 0 auto 18px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--on-forest-muted);
+  font-size: 12px;
+}
+.code-block {
+  overflow-x: auto;
+}
+.code-inline {
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 8px;
+}
+table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+th,
+td {
+  min-width: 120px;
+  max-width: 320px;
+  border: 1px solid var(--line-strong);
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.rule {
+  border: 0;
+  flex-shrink: 0;
+}
+.quote {
+  margin-left: 0;
+  margin-right: 0;
+}
+@media (max-width: 699px) {
+  .chat-toolbar {
+    padding: 8px 16px;
+  }
+  .login-center {
+    padding: 18px;
+  }
+  .login-card {
+    padding: 28px;
+  }
 }

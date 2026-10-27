@@ -7,31 +7,25 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "build": "npm run check && rspeedy build && rsbuild build --config web.config.ts",
-    "dev": "npm run build && rsbuild dev --config web.config.ts",
+    "build": "npm run check && rsbuild build --config web.config.ts && node scripts/build-pwa.mjs",
+    "dev": "rsbuild dev --config web.config.ts",
     "check": "tsc --noEmit",
-    "format": "prettier --write src host *.ts *.json",
-    "dev:lynx": "rspeedy dev"
+    "format": "prettier --write src scripts *.ts *.json index.html public/manifest.webmanifest"
   },
   "dependencies": {
-    "@lynx-js/lynx-core": "^0.1.4",
-    "@lynx-js/react": "0.128.0",
-    "@lynx-js/web-core": "0.26.4",
-    "@lynx-js/websocket": "0.0.4",
-    "@novnc/novnc": "1.7.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "entities": "^8.1.0",
     "marked": "17.0.4",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/plugin-transform-unicode-property-regex": "^7.29.7",
-    "@lynx-js/react-rsbuild-plugin": "0.21.0",
-    "@lynx-js/rspeedy": "0.18.2",
-    "@lynx-js/types": "4.3.0",
+    "@rsbuild/plugin-react": "2.1.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "sharp": "0.35.5",
     "@rsbuild/core": "2.2.14",
     "@types/node": "^24.0.0",
-    "babel-loader": "^10.1.1",
     "prettier": "^3.6.0",
     "typescript": "^5.9.0"
   }

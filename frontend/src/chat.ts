@@ -1,6 +1,5 @@
-import type { WebSocket } from '@lynx-js/websocket';
 import { z } from 'zod';
-import { host, messageID, readSession, saveSession } from './platform.js';
+import { clearSession, readSession, saveSession } from './platform.js';
 
 const messageSchema = z.object({
   id: z.string().min(1),
@@ -18,11 +17,24 @@ const pageSchema = z.object({
   read_up_to: z.string().nullable().optional(),
 });
 const activitySchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('idle'), revision: z.number().int().nonnegative(), work_version: z.number().int().nonnegative() }),
-  z.object({ state: z.literal('working'), summary: z.string(), revision: z.number().int().nonnegative(), work_version: z.number().int().nonnegative() }),
+  z.object({
+    state: z.literal('idle'),
+    revision: z.number().int().nonnegative(),
+    work_version: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal('working'),
+    summary: z.string(),
+    revision: z.number().int().nonnegative(),
+    work_version: z.number().int().nonnegative(),
+  }),
 ]);
 const frameSchema = z.discriminatedUnion('type', [
-  pageSchema.extend({ type: z.literal('messages'), main_thinking: z.boolean().optional(), activity: activitySchema.optional() }),
+  pageSchema.extend({
+    type: z.literal('messages'),
+    main_thinking: z.boolean().optional(),
+    activity: activitySchema.optional(),
+  }),
   z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),
 ]);
 
@@ -56,6 +68,7 @@ export class ChatController {
   loadingHistory = false;
   hasMoreHistory = true;
   email = '';
+  iconURL = '/app-icon.png';
   devLoginAvailable = false;
   error: string | null = null;
   token: string | null = null;
@@ -70,6 +83,7 @@ export class ChatController {
   private historyLoaded = false;
   private connecting = false;
   private disposed = false;
+  private suspended = false;
   private lastPosition?: string;
   private readUpTo?: string;
   private listeners = new Set<() => void>();
@@ -90,9 +104,8 @@ export class ChatController {
       this.baseURL = session.baseURL;
       this.token = session.token;
       this.email = session.email;
-      const response = await this.request('GET', '/auth/config');
-      const config = z.object({ dev_login: z.boolean() }).parse(await response.json());
-      this.devLoginAvailable = config.dev_login;
+      this.iconURL = session.iconURL;
+      if (navigator.onLine) await this.loadAuthConfig();
     } catch (error) {
       this.error = error instanceof Error ? error.message : '无法读取登录信息，请重新登录';
     }
@@ -101,22 +114,43 @@ export class ChatController {
     if (this.token) this.connect();
   }
 
+  private async loadAuthConfig() {
+    const response = await this.request('GET', '/auth/config');
+    const config = z.object({ dev_login: z.boolean() }).parse(await response.json());
+    this.devLoginAvailable = config.dev_login;
+    this.error = null;
+    this.notify();
+  }
+
   private async request(method: string, path: string, body?: unknown) {
     const token = this.token;
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), 15000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await fetch(`${this.baseURL}${path}`, {
-        method,
-        signal: abort.signal,
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
+      const request = async () => {
+        const response = await fetch(`${this.baseURL}${path}`, {
+          method,
+          cache: 'no-store',
+          signal: abort.signal,
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        return { status: response.status, body: await response.text() };
+      };
+      const response = await Promise.race([
+        request(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('连接超时，请检查网络后重试'));
+            abort.abort();
+          }, 15000);
+        }),
+      ]);
       if (response.status >= 400) {
-        const text = await response.text();
+        const text = response.body;
         if (response.status === 401 && token && this.token === token) this.clearSession();
         throw new ApiError(
           response.status === 401
@@ -133,7 +167,7 @@ export class ChatController {
           response.status,
         );
       }
-      return response;
+      return { json: async (): Promise<unknown> => JSON.parse(response.body) };
     } finally {
       clearTimeout(timer);
     }
@@ -192,21 +226,26 @@ export class ChatController {
     this.lastPosition = this.readUpTo = undefined;
     this.hasMoreHistory = true;
     this.messages = [];
-    host.clearSession();
+    clearSession();
     this.notify();
   }
 
   private connect() {
-    if (this.disposed || !this.token || this.connecting || this.connected) return;
+    if (
+      this.disposed ||
+      this.suspended ||
+      !navigator.onLine ||
+      !this.token ||
+      this.connecting ||
+      this.connected
+    )
+      return;
     this.connecting = true;
     const generation = ++this.connection;
     clearTimeout(this.reconnectTimer);
     const endpoint = this.baseURL.replace(/^http/, 'ws') + '/ws';
     try {
-      const {
-        WebSocket: LynxWebSocket,
-      }: typeof import('@lynx-js/websocket') = require('@lynx-js/websocket');
-      const channel = new LynxWebSocket(endpoint);
+      const channel = new WebSocket(endpoint);
       this.channel = channel;
       this.authTimer = setTimeout(() => this.disconnect(generation), 10000);
       channel.onopen = () => {
@@ -219,9 +258,10 @@ export class ChatController {
           }),
         );
       };
-      channel.onmessage = (event) => {
+      channel.onmessage = (event: MessageEvent<unknown>) => {
         if (generation !== this.connection || this.disposed) return;
         try {
+          if (typeof event.data !== 'string') throw new Error('Expected a text frame');
           const frame = frameSchema.parse(JSON.parse(event.data));
           if (frame.type === 'delivered') {
             clearTimeout(this.deliveryTimers.get(frame.client_message_id));
@@ -271,12 +311,24 @@ export class ChatController {
     this.deliveryTimers.forEach(clearTimeout);
     this.deliveryTimers.clear();
     const delay = [1, 2, 4, 8, 15][Math.min(this.reconnectAttempt++, 4)] ?? 15;
-    this.reconnectTimer = setTimeout(() => this.connect(), delay * 1000);
+    if (!this.suspended) this.reconnectTimer = setTimeout(() => this.connect(), delay * 1000);
     this.notify();
   }
   reconnect() {
+    this.suspended = false;
     clearTimeout(this.reconnectTimer);
+    if (!this.token && !this.initializing && navigator.onLine) {
+      void this.loadAuthConfig().catch(() => {
+        this.error = '连接失败，请检查网络后重试';
+        this.notify();
+      });
+    }
     this.connect();
+  }
+  suspend() {
+    this.suspended = true;
+    clearTimeout(this.reconnectTimer);
+    this.disconnect(this.connection);
   }
 
   async loadHistory(older = false) {
@@ -352,7 +404,7 @@ export class ChatController {
     const trimmed = text.trim();
     if (!trimmed || Array.from(trimmed).length > 32000 || !this.token) return false;
     const token = this.token;
-    const id = await messageID();
+    const id = crypto.randomUUID();
     if (this.token !== token || this.disposed) return false;
     this.messages = [
       ...this.messages,
