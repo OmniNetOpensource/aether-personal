@@ -113,7 +113,7 @@ func (s *server) listenOnce(ctx context.Context) error {
 }
 
 func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
-	// 登录靠第一条消息中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Flutter Web 可能部署在其他域名）。
+	// 登录靠第一条消息中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Lynx Web 可能部署在其他域名）。
 	connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
