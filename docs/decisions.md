@@ -42,6 +42,7 @@
 | 本地 dev 数据库 | Docker Compose，端口 `${POSTGRES_PORT:-5432}` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
+| 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
 | 部署方式 | 通用 Docker 部署；阿里云新加坡仅为维护者实例位置 | [01](wiki/01-overview.md#部署) |
 | 模型与发信费用 | Key 由部署企业配置，费用由该企业承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |

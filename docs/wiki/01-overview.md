@@ -218,6 +218,8 @@ Main 正文解析为 Markdown token，再渲染成 Lynx 元素；保留表格、
 
 ## 代码托管
 
+2026-10-27，用户要求默认直接在 `main` 开发，不再自行创建独立开发分支。开始前先获取远端最新 `main` 并同步已有工作；推送公开仓库仍需用户授权。
+
 - GitHub 个人账号 `OmniNetOpensource` 下的公开仓库 `aether-personal`，许可协议 Apache-2.0。
 - 维护者提交使用 GitHub noreply 邮箱，避免在公开仓库中暴露真实邮箱；发布前已从文档和提交历史中移除维护者本机路径。
 - `.gitignore` 忽略系统文件、编辑器目录、`.env` 类文件和 `/backend/bin/`。
