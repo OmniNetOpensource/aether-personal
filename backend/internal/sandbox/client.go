@@ -30,6 +30,7 @@ const (
 type Client struct {
 	baseURL    string
 	apiKey     string
+	headerName string
 	httpClient *http.Client
 }
 
@@ -57,7 +58,7 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
 	}
 	client := *httpClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{baseURL: strings.TrimRight(baseURL, "/") + "/v1", apiKey: apiKey, httpClient: &client}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/") + "/v1", apiKey: apiKey, headerName: "OPEN-SANDBOX-API-KEY", httpClient: &client}
 }
 
 func (c *Client) Create(ctx context.Context, userID, allocationID uuid.UUID, image string) (Environment, error) {
@@ -281,7 +282,7 @@ func (c *Client) request(ctx context.Context, method, requestPath string, body i
 	if err != nil {
 		return nil, errors.New("invalid sandbox provider request")
 	}
-	request.Header.Set("OPEN-SANDBOX-API-KEY", c.apiKey)
+	request.Header.Set(c.headerName, c.apiKey)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

@@ -40,7 +40,7 @@ type Runner struct {
 	settings      config.Config
 	httpClient    *http.Client
 	webTools      webTools
-	sandbox       *sandbox.Client
+	sandbox       sandbox.Provider
 	wakeSignal    chan struct{}
 	recapWake     chan struct{}
 	activeSlots   chan struct{}
@@ -58,7 +58,7 @@ func NewRunner(pool *pgxpool.Pool, settings config.Config) *Runner {
 		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{}, modelContexts: map[string]int64{},
 	}
 	if settings.SandboxURL != "" {
-		runner.sandbox = sandbox.NewClient(settings.SandboxURL, settings.SandboxAPIKey, client)
+		runner.sandbox = sandbox.NewProvider(settings.SandboxProvider, settings.SandboxURL, settings.SandboxAPIKey, settings.SandboxDomain, client)
 	}
 	return runner
 }

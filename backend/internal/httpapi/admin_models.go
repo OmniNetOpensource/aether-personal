@@ -71,7 +71,7 @@ func (s *server) availableModels(ctx context.Context) ([]adminModel, error) {
 		if entry.ID == "" || len(entry.ID) > 160 || entry.Name == "" || utf8.RuneCountInString(entry.Name) > 200 || !slices.Contains(entry.SupportedParameters, "tools") || !slices.Contains(entry.Architecture.OutputModalities, "text") {
 			continue
 		}
-		if s.appConfig.SandboxURL != "" && !slices.Contains(entry.Architecture.InputModalities, "image") {
+		if s.sandboxClient != nil && !slices.Contains(entry.Architecture.InputModalities, "image") {
 			continue
 		}
 		if entry.TopProvider.MaxCompletionTokens != nil && *entry.TopProvider.MaxCompletionTokens > 0 {
@@ -95,7 +95,7 @@ func (s *server) adminModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model catalog unavailable; retry later", http.StatusBadGateway)
 		return
 	}
-	writeAdminJSON(w, map[string]any{"items": models, "requires_image": s.appConfig.SandboxURL != "", "fetched_at": time.Now().UTC()})
+	writeAdminJSON(w, map[string]any{"items": models, "requires_image": s.sandboxClient != nil, "fetched_at": time.Now().UTC()})
 }
 
 func (s *server) adminModelSettings(w http.ResponseWriter, r *http.Request) {

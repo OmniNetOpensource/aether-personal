@@ -20,7 +20,7 @@ type server struct {
 	httpClient     *http.Client
 	runner         *agent.Runner
 	connections    *chatConnections
-	sandboxClient  *sandbox.Client
+	sandboxClient  sandbox.Provider
 	desktopViewers sync.Map
 }
 
@@ -34,7 +34,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 		connections:  newChatConnections(),
 	}
 	if appConfig.SandboxURL != "" {
-		s.sandboxClient = sandbox.NewClient(appConfig.SandboxURL, appConfig.SandboxAPIKey, nil)
+		s.sandboxClient = sandbox.NewProvider(appConfig.SandboxProvider, appConfig.SandboxURL, appConfig.SandboxAPIKey, appConfig.SandboxDomain, nil)
 	}
 	go s.listenForUserMessages()
 

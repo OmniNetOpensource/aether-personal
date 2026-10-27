@@ -79,7 +79,11 @@ func (r *Runner) ensureUserSandbox(ctx context.Context, connection *pgxpool.Conn
 			return "", sandboxUnavailable(ctx, connection, err, "get persistent sandbox")
 		}
 	}
-	stateContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	readyTimeout := 30 * time.Second
+	if r.settings.SandboxProvider == "aliyun" {
+		readyTimeout = 3 * time.Minute
+	}
+	stateContext, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
 	if environment.State == "pausing" {
 		if err := r.waitForSandboxState(stateContext, connection, environment.ID, "paused"); err != nil {
