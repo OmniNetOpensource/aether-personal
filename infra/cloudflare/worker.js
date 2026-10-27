@@ -4,8 +4,9 @@ const apiMethods = new Map([
   ['/auth/verify', 'POST'],
   ['/auth/logout', 'POST'],
   ['/messages', 'GET'],
-  ['/sandbox', 'GET'],
-  ['/sandbox/desktop', 'GET'],
+  // Sandbox routes are temporarily disabled; the reserved-path check returns 404.
+  // ['/sandbox', 'GET'],
+  // ['/sandbox/desktop', 'GET'],
   ['/ws', 'GET'],
   ['/healthz', 'GET'],
 ]);

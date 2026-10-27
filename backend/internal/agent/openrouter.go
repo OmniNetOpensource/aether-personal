@@ -76,6 +76,8 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 	if r.sandbox != nil {
 		prompt += sandboxPrompt
 		tools = append(append([]json.RawMessage{}, tools...), sandboxExecutionTools...)
+	} else {
+		prompt += "\nExecution tools are limited to search and fetch_url. Linux sandbox, shell/code execution, local file access and desktop/browser automation are disabled. Do not claim to use these unavailable capabilities.\n"
 	}
 	system, _ := json.Marshal(map[string]string{"role": "system", "content": prompt})
 	messages := []json.RawMessage{system}
@@ -87,7 +89,9 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 			Name string `json:"name"`
 		}
 		if json.Unmarshal(retained[index], &observation) == nil && observation.Name == "sandbox_observation" {
-			if observationsLeft == 0 {
+			if r.sandbox == nil {
+				retained[index] = json.RawMessage(`{"role":"user","name":"sandbox_observation","content":"Historical desktop image omitted. Sandbox and desktop tools are currently disabled."}`)
+			} else if observationsLeft == 0 {
 				retained[index] = json.RawMessage(`{"role":"user","name":"sandbox_observation","content":"Older desktop image omitted. Take a fresh screenshot before acting on the desktop."}`)
 			} else {
 				observationsLeft--

@@ -57,7 +57,7 @@ func NewRunner(pool *pgxpool.Pool, settings config.Config) *Runner {
 		webTools:   webTools{httpClient: client, serpAPIKey: settings.SERPAPIKey, parallelAPIKey: settings.ParallelAPIKey, everyInfraAPIKey: settings.EveryInfraAPIKey},
 		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{}, modelContexts: map[string]int64{},
 	}
-	if settings.SandboxURL != "" {
+	if config.SandboxEnabled && settings.SandboxURL != "" {
 		runner.sandbox = sandbox.NewProvider(settings.SandboxProvider, settings.SandboxURL, settings.SandboxAPIKey, settings.SandboxDomain, client)
 	}
 	return runner

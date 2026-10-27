@@ -33,7 +33,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 		runner:       runner,
 		connections:  newChatConnections(),
 	}
-	if appConfig.SandboxURL != "" {
+	if config.SandboxEnabled && appConfig.SandboxURL != "" {
 		s.sandboxClient = sandbox.NewProvider(appConfig.SandboxProvider, appConfig.SandboxURL, appConfig.SandboxAPIKey, appConfig.SandboxDomain, nil)
 	}
 	go s.listenForUserMessages()
@@ -48,8 +48,13 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 	mux.HandleFunc("POST /auth/verify", s.verifyLoginCode)
 	mux.Handle("POST /auth/logout", s.requireSession(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /messages", s.requireSession(http.HandlerFunc(s.listMessages)))
-	mux.Handle("GET /sandbox", s.requireSession(http.HandlerFunc(s.sandboxStatus)))
-	mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
+	if config.SandboxEnabled {
+		mux.Handle("GET /sandbox", s.requireSession(http.HandlerFunc(s.sandboxStatus)))
+		mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
+	} else {
+		mux.HandleFunc("GET /sandbox", http.NotFound)
+		mux.HandleFunc("GET /sandbox/", http.NotFound)
+	}
 	mux.HandleFunc("POST /admin/login", s.adminLogin)
 	mux.Handle("POST /admin/logout", s.requireAdmin(http.HandlerFunc(s.adminLogout)))
 	mux.Handle("GET /admin/me", s.requireAdmin(http.HandlerFunc(s.adminMe)))

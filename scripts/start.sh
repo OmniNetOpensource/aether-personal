@@ -43,7 +43,8 @@ backend_port="$(
   [[ "${APP_ENV:-}" == dev ]] || fail "此脚本仅用于 APP_ENV=dev。"
   printf '%s' "${PORT:-8080}"
 )"
-sandbox_url="$(cd "$project_dir/backend"; . ./.env; printf '%s' "${SANDBOX_URL:-}")"
+# Sandbox startup is temporarily disabled for the web-only release.
+# sandbox_url="$(cd "$project_dir/backend"; . ./.env; printf '%s' "${SANDBOX_URL:-}")"
 
 node --input-type=module - "$backend_port" "$admin_port" <<'JS'
 import net from 'node:net';
@@ -98,21 +99,21 @@ make frontend
 printf '\n[2/4] 启动数据库并执行迁移……\n'
 make -C backend db-up
 make -C backend migrate
-if [[ "$sandbox_url" == http://127.0.0.1:* || "$sandbox_url" == http://localhost:* ]]; then
-  [[ -f infra/sandbox/.env ]] || fail "本机沙盒已启用，但缺少 infra/sandbox/.env；配置方式见 infra/sandbox/README.md。"
-  sandbox_port="$(. ./infra/sandbox/.env; printf '%s' "${SANDBOX_PORT:-18090}")"
-  [[ "${sandbox_url%/}" == "http://127.0.0.1:$sandbox_port" || "${sandbox_url%/}" == "http://localhost:$sandbox_port" ]] || fail "SANDBOX_URL 与 infra/sandbox/.env 中的端口不一致。"
-  sandbox_image="$(cd backend; . ./.env; printf '%s' "${SANDBOX_IMAGE:-}")"
-  if [[ "$sandbox_image" == aether-personal-desktop:dev ]] && ! docker image inspect "$sandbox_image" >/dev/null 2>&1; then
-    make sandbox-build
-  fi
-  printf '\n启动配置中的本机 Linux 沙盒管理服务……\n'
-  make sandbox-up >"$log_dir/sandbox.log" 2>&1 || {
-    tail -n 30 "$log_dir/sandbox.log" >&2
-    fail "本机沙盒启动失败，详见 $log_dir/sandbox.log。"
-  }
-  wait_ready "${sandbox_url%/}/health" "" "$log_dir/sandbox.log"
-fi
+# if [[ "$sandbox_url" == http://127.0.0.1:* || "$sandbox_url" == http://localhost:* ]]; then
+#   [[ -f infra/sandbox/.env ]] || fail "本机沙盒已启用，但缺少 infra/sandbox/.env；配置方式见 infra/sandbox/README.md。"
+#   sandbox_port="$(. ./infra/sandbox/.env; printf '%s' "${SANDBOX_PORT:-18090}")"
+#   [[ "${sandbox_url%/}" == "http://127.0.0.1:$sandbox_port" || "${sandbox_url%/}" == "http://localhost:$sandbox_port" ]] || fail "SANDBOX_URL 与 infra/sandbox/.env 中的端口不一致。"
+#   sandbox_image="$(cd backend; . ./.env; printf '%s' "${SANDBOX_IMAGE:-}")"
+#   if [[ "$sandbox_image" == aether-personal-desktop:dev ]] && ! docker image inspect "$sandbox_image" >/dev/null 2>&1; then
+#     make sandbox-build
+#   fi
+#   printf '\n启动配置中的本机 Linux 沙盒管理服务……\n'
+#   make sandbox-up >"$log_dir/sandbox.log" 2>&1 || {
+#     tail -n 30 "$log_dir/sandbox.log" >&2
+#     fail "本机沙盒启动失败，详见 $log_dir/sandbox.log。"
+#   }
+#   wait_ready "${sandbox_url%/}/health" "" "$log_dir/sandbox.log"
+# fi
 printf '\n[3/4] 构建后端……\n'
 (cd backend && go build -o "$log_dir/server" ./cmd/server)
 
@@ -139,7 +140,7 @@ wait_ready "http://127.0.0.1:$admin_port/" "$admin_pid" "$log_dir/admin.log"
 
 printf '\n启动完成\n聊天：http://127.0.0.1:%s\n看板：http://127.0.0.1:%s\n' "$backend_port" "$admin_port"
 printf 'dev 聊天点击「开发测试登录」即可进入；看板使用独立管理员密码登录。\n'
-printf '按 Ctrl+C 关闭后端与看板；数据库和沙盒服务保留运行。\n\n'
+printf '按 Ctrl+C 关闭后端与看板；数据库保留运行。\n\n'
 tail -n 10 -f "$log_dir/backend.log" "$log_dir/admin.log" &
 service_pids+=("$!")
 

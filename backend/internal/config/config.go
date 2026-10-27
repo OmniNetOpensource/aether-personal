@@ -11,6 +11,9 @@ import (
 
 const DefaultMaxOutputTokens = 8192
 
+// Sandbox execution and desktop viewing are temporarily disabled for the web-only release.
+const SandboxEnabled = false
+
 type Config struct {
 	MaxOutputTokens     int32
 	AdminPasswordSalt   []byte
@@ -86,37 +89,39 @@ func Load() (Config, error) {
 
 	sandboxProvider, sandboxDomain, sandboxURL, sandboxAPIKey, sandboxImage := "", "", "", "", ""
 	sandboxIdleSeconds := 300
-	sandboxProvider = os.Getenv("SANDBOX_PROVIDER")
-	if sandboxProvider == "" {
-		sandboxProvider = "opensandbox"
-	}
-	if sandboxProvider != "opensandbox" && sandboxProvider != "aliyun" {
-		return Config{}, fmt.Errorf("SANDBOX_PROVIDER must be opensandbox or aliyun")
-	}
-	sandboxDomain = os.Getenv("SANDBOX_DOMAIN")
-	sandboxURL = os.Getenv("SANDBOX_URL")
-	sandboxAPIKey = os.Getenv("SANDBOX_API_KEY")
-	sandboxImage = os.Getenv("SANDBOX_IMAGE")
-	if sandboxURL != "" {
-		parsed, err := url.Parse(sandboxURL)
-		if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-			return Config{}, fmt.Errorf("SANDBOX_URL must be an HTTP(S) origin without credentials, path, query or fragment")
+	if SandboxEnabled {
+		sandboxProvider = os.Getenv("SANDBOX_PROVIDER")
+		if sandboxProvider == "" {
+			sandboxProvider = "opensandbox"
 		}
-		if sandboxProvider == "aliyun" {
-			if parsed.Scheme != "https" || !strings.HasSuffix(parsed.Hostname(), ".e2b.fc.aliyuncs.com") || parsed.Port() != "" || !strings.HasPrefix(parsed.Hostname(), "api.") || sandboxDomain != strings.TrimPrefix(parsed.Hostname(), "api.") {
-				return Config{}, fmt.Errorf("aliyun requires its regional HTTPS API origin and matching SANDBOX_DOMAIN")
+		if sandboxProvider != "opensandbox" && sandboxProvider != "aliyun" {
+			return Config{}, fmt.Errorf("SANDBOX_PROVIDER must be opensandbox or aliyun")
+		}
+		sandboxDomain = os.Getenv("SANDBOX_DOMAIN")
+		sandboxURL = os.Getenv("SANDBOX_URL")
+		sandboxAPIKey = os.Getenv("SANDBOX_API_KEY")
+		sandboxImage = os.Getenv("SANDBOX_IMAGE")
+		if sandboxURL != "" {
+			parsed, err := url.Parse(sandboxURL)
+			if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+				return Config{}, fmt.Errorf("SANDBOX_URL must be an HTTP(S) origin without credentials, path, query or fragment")
+			}
+			if sandboxProvider == "aliyun" {
+				if parsed.Scheme != "https" || !strings.HasSuffix(parsed.Hostname(), ".e2b.fc.aliyuncs.com") || parsed.Port() != "" || !strings.HasPrefix(parsed.Hostname(), "api.") || sandboxDomain != strings.TrimPrefix(parsed.Hostname(), "api.") {
+					return Config{}, fmt.Errorf("aliyun requires its regional HTTPS API origin and matching SANDBOX_DOMAIN")
+				}
+			}
+			if sandboxAPIKey == "" || sandboxImage == "" {
+				return Config{}, fmt.Errorf("SANDBOX_API_KEY and SANDBOX_IMAGE are required when SANDBOX_URL is configured")
 			}
 		}
-		if sandboxAPIKey == "" || sandboxImage == "" {
-			return Config{}, fmt.Errorf("SANDBOX_API_KEY and SANDBOX_IMAGE are required when SANDBOX_URL is configured")
+		if value := os.Getenv("SANDBOX_IDLE_SECONDS"); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 30 || parsed > 86400 {
+				return Config{}, fmt.Errorf("SANDBOX_IDLE_SECONDS must be between 30 and 86400")
+			}
+			sandboxIdleSeconds = parsed
 		}
-	}
-	if value := os.Getenv("SANDBOX_IDLE_SECONDS"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 30 || parsed > 86400 {
-			return Config{}, fmt.Errorf("SANDBOX_IDLE_SECONDS must be between 30 and 86400")
-		}
-		sandboxIdleSeconds = parsed
 	}
 
 	maxOutputTokens := int32(DefaultMaxOutputTokens)
