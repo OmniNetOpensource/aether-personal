@@ -1,3 +1,5 @@
+-- 本文件是 recap 行动摘要的查询集合：维护摘要状态、领取待摘要用户、保存摘要，并记录步骤活动供摘要引用（sqlc 据此生成代码）。
+
 -- name: ListRecapUsers :many
 SELECT user_id FROM active_agent_users
 UNION SELECT user_id FROM recap_state WHERE active;
@@ -77,7 +79,7 @@ SELECT jsonb_build_object(
         SELECT jsonb_build_object('agent', CASE WHEN s.subagent_id IS NULL THEN 'Main' ELSE s.subagent_id::text END,
             'task', CASE WHEN s.subagent_id IS NOT NULL THEN (SELECT left(m.content->>'content', 1200) FROM messages m
                 WHERE m.user_id = s.user_id AND m.subagent_id = s.subagent_id AND m.sender = 'main' ORDER BY m.id LIMIT 1) END,
-            'activity', s.activity, 'waiting_until', s.resume_after) AS item
+            'activity', s.activity) AS item
         FROM steps s WHERE s.user_id = sqlc.arg(user_id) AND s.finished_at IS NULL
         ORDER BY s.started_at LIMIT 32
     ) agents),

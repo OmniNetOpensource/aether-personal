@@ -88,7 +88,7 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 }
 
 const getLastContextUsage = `-- name: GetLastContextUsage :one
-SELECT requested_model, request_body, coalesce(input_tokens, 0)::integer AS input_tokens
+SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM model_calls WHERE user_id = $1
  AND subagent_id IS NOT DISTINCT FROM $2::uuid
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL
@@ -102,14 +102,13 @@ type GetLastContextUsageParams struct {
 
 type GetLastContextUsageRow struct {
 	RequestedModel string
-	RequestBody    []byte
 	InputTokens    int32
 }
 
 func (q *Queries) GetLastContextUsage(ctx context.Context, arg GetLastContextUsageParams) (GetLastContextUsageRow, error) {
 	row := q.db.QueryRow(ctx, getLastContextUsage, arg.UserID, arg.SubagentID)
 	var i GetLastContextUsageRow
-	err := row.Scan(&i.RequestedModel, &i.RequestBody, &i.InputTokens)
+	err := row.Scan(&i.RequestedModel, &i.InputTokens)
 	return i, err
 }
 
@@ -207,6 +206,33 @@ func (q *Queries) GetUnfinishedStep(ctx context.Context, arg GetUnfinishedStepPa
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const hasStepAssistantMessage = `-- name: HasStepAssistantMessage :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = $1 AND role = 'assistant')
+`
+
+func (q *Queries) HasStepAssistantMessage(ctx context.Context, stepID *uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasStepAssistantMessage, stepID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const hasStepToolResult = `-- name: HasStepToolResult :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = $1 AND role = 'tool' AND content->>'tool_call_id' = $2::text)
+`
+
+type HasStepToolResultParams struct {
+	StepID     *uuid.UUID
+	ToolCallID string
+}
+
+func (q *Queries) HasStepToolResult(ctx context.Context, arg HasStepToolResultParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasStepToolResult, arg.StepID, arg.ToolCallID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertAgentMessage = `-- name: InsertAgentMessage :exec
@@ -534,12 +560,6 @@ SELECT candidates.user_id, candidates.subagent_id FROM (
     UNION
     SELECT user_id, subagent_id FROM model_calls WHERE outcome = 'in_flight' AND purpose <> 'recap'
 ) AS candidates
-WHERE NOT EXISTS (
-    SELECT 1 FROM steps AS deferred
-    WHERE deferred.user_id = candidates.user_id
-        AND deferred.subagent_id IS NOT DISTINCT FROM candidates.subagent_id
-        AND deferred.finished_at IS NULL AND deferred.resume_after > now()
-)
 ORDER BY candidates.user_id, candidates.subagent_id NULLS FIRST
 `
 
@@ -569,9 +589,11 @@ func (q *Queries) ListRunnableAgents(ctx context.Context) ([]ListRunnableAgentsR
 }
 
 const lockUserMessages = `-- name: LockUserMessages :exec
+
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || $1::uuid::text, 0))
 `
 
+// 本文件是消息与 Agent 运行时的核心查询集合：消息写入与投递、上下文读取、步骤推进和运行时锁，是对话主循环的数据基础（sqlc 据此生成代码）。
 // 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
 func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockUserMessages, userID)

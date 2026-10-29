@@ -1,3 +1,5 @@
+// 本文件负责调用 OpenRouter 模型：组装含工具与交付约束的请求、记录每次调用的请求响应与用量，并按可重试规则处理失败。
+
 package agent
 
 import (
@@ -64,6 +66,7 @@ type modelRequest struct {
 	Model       string            `json:"model"`
 	Messages    []json.RawMessage `json:"messages"`
 	Tools       []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage   `json:"tool_choice,omitempty"`
 	MaxTokens   int32             `json:"max_tokens"`
 }
 
@@ -73,32 +76,9 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 		prompt, tools = subagentPrompt, subagentTools
 	}
 	prompt += "\nCurrent time (UTC): " + time.Now().UTC().Format(time.RFC3339) + "\n"
-	if r.sandbox != nil {
-		prompt += sandboxPrompt
-		tools = append(append([]json.RawMessage{}, tools...), sandboxExecutionTools...)
-	} else {
-		prompt += "\nExecution tools are limited to search and fetch_url. Linux sandbox, shell/code execution, local file access and desktop/browser automation are disabled. Do not claim to use these unavailable capabilities.\n"
-	}
 	system, _ := json.Marshal(map[string]string{"role": "system", "content": prompt})
 	messages := []json.RawMessage{system}
-	observationsLeft := 4
-	retained := make([]json.RawMessage, len(contextMessages))
-	copy(retained, contextMessages)
-	for index := len(retained) - 1; index >= 0; index-- {
-		var observation struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(retained[index], &observation) == nil && observation.Name == "sandbox_observation" {
-			if r.sandbox == nil {
-				retained[index] = json.RawMessage(`{"role":"user","name":"sandbox_observation","content":"Historical desktop image omitted. Sandbox and desktop tools are currently disabled."}`)
-			} else if observationsLeft == 0 {
-				retained[index] = json.RawMessage(`{"role":"user","name":"sandbox_observation","content":"Older desktop image omitted. Take a fresh screenshot before acting on the desktop."}`)
-			} else {
-				observationsLeft--
-			}
-		}
-	}
-	for _, message := range retained {
+	for _, message := range contextMessages {
 		var summary struct {
 			Name    string `json:"name"`
 			Content string `json:"content"`
@@ -109,7 +89,12 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 		messages = append(messages, message)
 	}
 
-	return modelRequest{Model: model, Messages: messages, Tools: tools, MaxTokens: outputLimit}
+	var toolChoice json.RawMessage
+	delivery := inspectDelivery(contextMessages, address)
+	if delivery.corrected && !delivery.satisfied {
+		toolChoice = json.RawMessage(`{"type":"function","function":{"name":"send_message"}}`)
+	}
+	return modelRequest{Model: model, Messages: messages, Tools: tools, ToolChoice: toolChoice, MaxTokens: outputLimit}
 }
 
 func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams) (response chatResponse, retryable bool, err error) {
@@ -174,7 +159,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 				for _, call := range message.ToolCalls {
 					name := call.Function.Name
 					switch name {
-					case "send_message", "assign_subagents", "schedule", "search", "fetch_url", "run_command", "get_command", "stop_command", "read_file", "write_file", "desktop":
+					case "send_message", "assign_subagents", "schedule", "search", "fetch_url":
 					default:
 						name = "other"
 					}

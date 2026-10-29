@@ -1,3 +1,5 @@
+-- 本文件是管理看板的查询集合：汇总运行指标，并分页列出用户、Agent 与模型调用，供看板接口读取（sqlc 据此生成代码）。
+
 -- name: AdminSnapshot :one
 WITH calls AS (
  SELECT c.* FROM model_calls c JOIN users u ON u.id = c.user_id WHERE c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
@@ -30,7 +32,7 @@ WITH calls AS (
  SELECT c.requested_model AS model, count(*) AS attempts, coalesce(sum(c.cost),0)::text AS cost_known_usd
  FROM calls c GROUP BY c.requested_model ORDER BY count(*) DESC, c.requested_model LIMIT 100
 ), tool_counts AS (
- SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','fetch_url','run_command','get_command','stop_command','read_file','write_file','desktop') THEN tool.name ELSE 'other' END AS name, count(*) AS count
+ SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','fetch_url') THEN tool.name ELSE 'other' END AS name, count(*) AS count
  FROM calls c CROSS JOIN LATERAL unnest(c.tool_names) AS tool(name) GROUP BY 1
 )
 SELECT jsonb_build_object(
@@ -148,7 +150,7 @@ SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_
  'context_tokens_after',c.context_tokens_after,'summary_through_sequence',c.summary_through_sequence,
  'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
- 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','fetch_url','run_command','get_command','stop_command','read_file','write_file','desktop') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
+ 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','fetch_url') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
 )::jsonb AS payload FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR c.user_id = sqlc.narg(user_id)::uuid)
   AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')

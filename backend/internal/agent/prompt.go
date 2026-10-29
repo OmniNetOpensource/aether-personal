@@ -1,3 +1,5 @@
+// 本文件存放 Main 与 Subagent 的系统提示词：规定身份、只通过工具沟通以及调研与表达方式，是模型行为契约的文字来源。
+
 package agent
 
 import "encoding/json"
@@ -97,9 +99,13 @@ Delivery to Main is not evidence that the scheduled work is complete.
 
 const completionPrompt = `
 Turn completion protocol: a send_message tool result of "delivered" confirms the
-message reached its recipient. Never send that same message again. Once all
-current work has been completed and reported, or you are waiting for delegated
-work, end your turn with the exact private control marker [DONE] and no tool
+message reached its recipient. The last tool call before ending must be a
+successfully delivered send_message: to=user for Main, to=main for a Subagent.
+Any later tool call requires another message before ending, including schedule
+operations and dispatching or messaging Subagents. When waiting for background
+work, send a concise useful update before ending. Do not repeat delivered results.
+Once current work has been reported, end your turn with the exact private
+control marker [DONE] and no tool
 calls. This marker is the sole exception to the ban on direct assistant text;
 it is consumed by the runtime and never shown to the user. Do not send [DONE]
 through send_message. A progress update alone does not complete unfinished work.

@@ -13,6 +13,7 @@ import (
 )
 
 const adminSnapshot = `-- name: AdminSnapshot :one
+
 WITH calls AS (
  SELECT c.id, c.step_id, c.user_id, c.subagent_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence FROM model_calls c JOIN users u ON u.id = c.user_id WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($4::uuid IS NULL OR c.user_id = $4::uuid)
@@ -44,7 +45,7 @@ WITH calls AS (
  SELECT c.requested_model AS model, count(*) AS attempts, coalesce(sum(c.cost),0)::text AS cost_known_usd
  FROM calls c GROUP BY c.requested_model ORDER BY count(*) DESC, c.requested_model LIMIT 100
 ), tool_counts AS (
- SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','fetch_url','run_command','get_command','stop_command','read_file','write_file','desktop') THEN tool.name ELSE 'other' END AS name, count(*) AS count
+ SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','fetch_url') THEN tool.name ELSE 'other' END AS name, count(*) AS count
  FROM calls c CROSS JOIN LATERAL unnest(c.tool_names) AS tool(name) GROUP BY 1
 )
 SELECT jsonb_build_object(
@@ -80,6 +81,7 @@ type AdminSnapshotParams struct {
 	Search    string
 }
 
+// 本文件是管理看板的查询集合：汇总运行指标，并分页列出用户、Agent 与模型调用，供看板接口读取（sqlc 据此生成代码）。
 func (q *Queries) AdminSnapshot(ctx context.Context, arg AdminSnapshotParams) ([]byte, error) {
 	row := q.db.QueryRow(ctx, adminSnapshot,
 		arg.FromAt,
@@ -225,7 +227,7 @@ SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_
  'context_tokens_after',c.context_tokens_after,'summary_through_sequence',c.summary_through_sequence,
  'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
- 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','fetch_url','run_command','get_command','stop_command','read_file','write_file','desktop') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
+ 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','fetch_url') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
 )::jsonb AS payload FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($3::uuid IS NULL OR c.user_id = $3::uuid)
   AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')

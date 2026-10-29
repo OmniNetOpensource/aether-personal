@@ -1,3 +1,5 @@
+-- 本文件是消息与 Agent 运行时的核心查询集合：消息写入与投递、上下文读取、步骤推进和运行时锁，是对话主循环的数据基础（sqlc 据此生成代码）。
+
 -- name: LockUserMessages :exec
 -- 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || sqlc.arg(user_id)::uuid::text, 0));
@@ -27,6 +29,12 @@ ON CONFLICT (user_id, client_message_id) DO NOTHING;
 INSERT INTO messages (user_id, subagent_id, role, content, step_id)
 VALUES ($1, $2, $3, $4, $5);
 
+-- name: HasStepAssistantMessage :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = sqlc.arg(step_id) AND role = 'assistant');
+
+-- name: HasStepToolResult :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = sqlc.arg(step_id) AND role = 'tool' AND content->>'tool_call_id' = sqlc.arg(tool_call_id)::text);
+
 -- name: DeliverAgentMessage :exec
 INSERT INTO messages (user_id, subagent_id, sequence, role, content, sender, sender_subagent_id)
 VALUES ($1, $2, NULL, 'user', $3, $4, $5);
@@ -49,12 +57,6 @@ SELECT candidates.user_id, candidates.subagent_id FROM (
     UNION
     SELECT user_id, subagent_id FROM model_calls WHERE outcome = 'in_flight' AND purpose <> 'recap'
 ) AS candidates
-WHERE NOT EXISTS (
-    SELECT 1 FROM steps AS deferred
-    WHERE deferred.user_id = candidates.user_id
-        AND deferred.subagent_id IS NOT DISTINCT FROM candidates.subagent_id
-        AND deferred.finished_at IS NULL AND deferred.resume_after > now()
-)
 ORDER BY candidates.user_id, candidates.subagent_id NULLS FIRST;
 
 -- name: ListAgentContext :many
@@ -182,7 +184,7 @@ WHERE m.user_id = sqlc.arg(user_id) AND m.subagent_id IS NULL AND m.role = 'assi
 ORDER BY m.sequence DESC LIMIT 1;
 
 -- name: GetLastContextUsage :one
-SELECT requested_model, request_body, coalesce(input_tokens, 0)::integer AS input_tokens
+SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM model_calls WHERE user_id = sqlc.arg(user_id)
  AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL

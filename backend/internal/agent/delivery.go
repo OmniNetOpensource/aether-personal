@@ -1,16 +1,15 @@
+// 本文件负责交付检查：确认 Agent 结束前最后一次工具调用是成功送达的 send_message，没送达时只给一次纠正机会，避免私有正文被误当成已回复。
+
 package agent
 
 import (
 	"encoding/json"
 	"errors"
-	"strings"
-
-	"github.com/google/uuid"
 )
 
-var errMissingDelivery = errors.New("assistant returned private terminal text without send_message")
+var errMissingDelivery = errors.New("assistant ended without a final delivered send_message to its recipient")
 
-const deliveryCorrection = `Runtime delivery check: your preceding response contained private text but did not communicate the current result. Private assistant text is never forwarded. Send the useful result or concrete blocker through send_message: to=user for Main, to=main for a Subagent. Do not repeat messages already successfully delivered or disclose private reasoning. If Main is genuinely waiting for background work, yield with empty content. This is the only delivery correction for this incoming message.`
+const deliveryCorrection = `Runtime delivery check: you tried to end your turn, but your last tool call was not a successfully delivered send_message to your recipient. Call send_message now: to=user for Main, to=main for a Subagent. Send the current result, concrete blocker, or a concise update if waiting for background work. Private assistant text is never forwarded. Do not disclose private reasoning or repeat already delivered results. This is the only delivery correction for this attempt to end the turn.`
 
 type deliveryState struct {
 	satisfied bool
@@ -21,6 +20,7 @@ type deliveryState struct {
 func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryState {
 	var state deliveryState
 	calls := map[string]toolCall{}
+	lastToolID := ""
 	for _, raw := range messages {
 		var message struct {
 			Role              string          `json:"role"`
@@ -43,9 +43,6 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 				clear(calls)
 				continue
 			}
-			if message.Name == "sandbox_observation" {
-				continue
-			}
 			state = deliveryState{}
 			clear(calls)
 		case "system":
@@ -54,6 +51,10 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 			}
 		case "assistant":
 			clear(calls)
+			if len(message.ToolCalls) > 0 {
+				state.satisfied = false
+				lastToolID = message.ToolCalls[len(message.ToolCalls)-1].ID
+			}
 			for _, call := range message.ToolCalls {
 				calls[call.ID] = call
 			}
@@ -63,51 +64,22 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 				continue
 			}
 			delete(calls, message.ToolCallID)
-			if isSandboxTool(call.Function.Name) {
-				state.satisfied = false
+			if call.ID != lastToolID || call.Function.Name != "send_message" || text != "delivered" {
+				continue
 			}
-			switch call.Function.Name {
-			case "search", "fetch_url":
-				state.satisfied = false
-			case "send_message":
-				arguments, err := parseSendMessage(call)
-				if err != nil || text != "delivered" {
-					continue
-				}
-				if address.subagentID != nil {
-					state.satisfied = arguments.To == "main" || state.satisfied
-				} else if arguments.To == "user" {
-					state.satisfied = true
-				} else if _, err := uuid.Parse(arguments.To); err == nil {
-					state.satisfied = true // Main 已发送后续任务，可以等待回报。
-				}
-			case "assign_subagents":
-				var result struct {
-					SubagentIDs []uuid.UUID `json:"subagent_ids"`
-				}
-				if address.subagentID == nil && json.Unmarshal([]byte(text), &result) == nil && len(result.SubagentIDs) > 0 {
-					state.satisfied = true
-				}
+			arguments, err := parseSendMessage(call)
+			if err != nil {
+				continue
+			}
+			recipient := "user"
+			if address.subagentID != nil {
+				recipient = "main"
+			}
+			state.satisfied = arguments.To == recipient
+			if state.satisfied {
+				state.corrected = false
 			}
 		}
 	}
 	return state
-}
-
-func hasPrivateText(content json.RawMessage) bool {
-	var text string
-	if json.Unmarshal(content, &text) == nil {
-		return strings.TrimSpace(text) != ""
-	}
-	var blocks []struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(content, &blocks) == nil {
-		for _, block := range blocks {
-			if strings.TrimSpace(block.Text) != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
