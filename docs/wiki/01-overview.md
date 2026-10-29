@@ -34,7 +34,7 @@ flowchart LR
         TOOLS["搜索 · HTTP/MCP<br/>浏览器 · 代码隔离环境"]
     end
 
-    APP <-->|"HTTP 登录与历史<br/>WebSocket 收发与推送"| API
+    APP <-->|"WebSocket 登录、历史、<br/>收发与推送"| API
     API <--> DB
     RUNTIME <--> DB
     API -->|"唤醒"| RUNTIME
@@ -52,13 +52,15 @@ flowchart LR
 | 组件 | 职责 | 状态 |
 | --- | --- | --- |
 | React 界面 | 邮箱登录、Main 消息、Markdown、回执、失败重发与真实思考动态 | 本地实现 |
-| TypeScript 连接管理 | WebSocket 第一帧认证、重连、按 position 补消息、历史翻页、重发沿用 client_message_id | 复用既有协议 |
+| TypeScript 连接管理 | 主页打开即连 WebSocket、收到 `ready` 前显示 loading、`hello` 携带令牌、重连按 position 补消息、历史翻页与登录命令走同一连接、重发沿用 client_message_id；服务器事件在 `serverEvents.ts` 定义、由 `ServerEventRelay.ts` 统一中转 | 本地实现 |
 | 浏览器存储 | localStorage 保存登录，兼容早期 Flutter 与 Lynx 的键；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
 | PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
 
 保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。Subagent 和工具过程留在后台，Main 的实际消息进入聊天，行动摘要显示在聊天底部，见 [05](05-main-runtime.md#行动摘要-agent开发中)。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
-中文名为「阿芒」，英文名为 Aether。保留用户指定的深绿背景黄色毛绒角色图标，原图位于 `frontend/public/app-icon.png`；管理看板独立部署的副本位于 `admin/public/app-icon.png`。界面沿用森林绿 `#204b32`、柔黄 `#f6cf83` 与奶油白 `#fffcf4`，前端色值集中在 `frontend/src/palette.css`。使用系统字体，避免离线应用外壳依赖大型字体下载。
+2026-10-28，用户要求输入框外围透明，单行时文字与图标垂直居中，多行时加号和发送按钮固定在输入框底部，文字向上扩展，并在左侧增加加号。输入框以透明外围的浮层覆盖消息区，滚动内容为输入框实际高度预留底部空间；多行输入与已选文件改变高度时同步更新。用户确认本次加号仅提供本地文件选择入口，支持显示文件名和移除选择；不上传文件、不随聊天发送文件。
+
+中文名为「阿芒」，英文名为 Aether。保留用户指定的深绿背景黄色毛绒角色图标，原图位于 `frontend/public/app-icon.png`；管理看板独立部署的副本位于 `admin/public/app-icon.png`。界面沿用森林绿 `#204b32`、柔黄 `#f6cf83` 与奶油白 `#fffcf4`，前端色值集中在 `frontend/src/palette.css`。使用系统字体，避免离线应用外壳依赖大型字体下载。2026-10-28，用户要求整体字号略微放大：正文与输入框由 16px 调整为 18px，其余文字同步增加 2px，并相应增加行高，改善阅读舒适度。
 
 Main 正文由 marked 解析，再渲染成 React DOM，保留表格、代码块、列表、粗体、引用与来源链接。HTML 作为文本显示，远程图片显示替代文字；链接只允许无账号密码的 HTTP(S)，新窗口使用 `noopener noreferrer`。用户消息显示原文。Enter 发送、Shift+Enter 换行，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
 
@@ -68,15 +70,15 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 用户曾在线打开并完成缓存后，可在断网时打开应用、起草消息；聊天历史仍从服务器读取，重新打开后的离线界面不提供历史消息副本。发送消息、Main 推理和历史同步需要网络。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知、后台持续连接尚未实现。
 
-代码位于 `frontend/src/`，构建工具沿用 Rsbuild，依赖固定在 `frontend/package-lock.json`。`npm run build` 只生成 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录，HTTP 与 WebSocket 契约不变。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+代码位于 `frontend/src/`，构建工具沿用 Rsbuild，依赖固定在 `frontend/package-lock.json`。`npm run build` 只生成 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录，聊天 WebSocket 契约不变。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 
 | 组件 | 职责 | 状态 |
 | --- | --- | --- |
 | 健康检查 | `GET /healthz`，同时检查数据库连接 | `已实现` |
-| 认证 API | 邮箱验证码登录、退出，见 [03 认证](03-auth.md) | `已实现` |
-| 消息 API | WebSocket 收发与推送、`GET /messages` 历史翻页，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
+| 认证 | 邮箱验证码登录、退出，全部走聊天 WebSocket 命令，见 [03 认证](03-auth.md) | `已实现` |
+| 消息 API | WebSocket 登录、历史翻页、收发与推送；服务器事件定义与中转在 `events.go`，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
 | Main 运行时 | 按用户串行运行 Main，调用模型与工具，见 [05 Main 运行时](05-main-runtime.md) | `已实现` |
 | `send_message` | Main 发消息给用户或 Subagent，Subagent 发给 Main | `已实现` |
 | `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `仅设计` |
@@ -98,7 +100,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`fetch_url` | Serper、Parallel、EveryInfra，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
-| Linux 沙盒工作环境 | 2026-10-27 暂时停用，仅保留联网执行工具；已有实现保留，见 [07](07-sandbox.md) | `暂时停用` |
+| Linux 沙盒工作环境 | 2026-10-29 起先不考虑，已有实现已删除，见 [07](07-sandbox.md) | 不在当前范围 |
 
 ## 语义澄清
 
@@ -133,7 +135,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。
-- Web/PWA 通过 HTTP + WebSocket 与后端交互，支持断线恢复。
+- Web/PWA 打开主页即通过 WebSocket 与后端交互，登录、历史与收发共用一条连接，支持断线恢复。
 
 ## 关键设计
 
@@ -150,7 +152,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | `backend/` | Go 后端 | 有代码 |
 | `frontend/` | React Web/PWA、TypeScript 连接管理与静态构建 | 本地实现，移动真机待验收 |
 | `admin/` | 管理看板页面与 Node 同源代理，独立运行和部署 | 有代码 |
-| `infra/` | dev/prod 环境与部署配置 | dev 与沙盒配置已存在；生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
+| `infra/` | dev/prod 环境与部署配置 | 生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
 
 后端内部：
@@ -159,7 +161,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | --- | --- |
 | `backend/cmd/server/` | 程序入口：读取配置、建立数据库连接池、启动 HTTP 服务；启动时唤醒仍有待读消息的用户 |
 | `backend/internal/config/` | 启动时一次性读取环境变量 |
-| `backend/internal/httpapi/` | HTTP 路由、认证、WebSocket、历史消息 |
+| `backend/internal/httpapi/` | HTTP 路由、WebSocket 聊天（登录、历史与收发）、服务器事件定义 |
 | `backend/internal/agent/` | Main 运行时：运行循环、调用 OpenRouter、系统提示词与工具定义 |
 | `backend/internal/database/` | sqlc 生成的数据库访问代码（不要手改） |
 | `backend/db/migrations/` | goose 迁移文件 |
@@ -223,7 +225,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 ## 部署
 
 - 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
-- 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime；2026-10-27 起沙盒暂时停用。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
+- 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
 - 目前只部署一台后端，但代码按多台的要求编写。
 
@@ -236,3 +238,21 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 根目录 `make dev` 构建 Web/PWA、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 TypeScript；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
 
 用户在 2026-10-22 明确技术实现由开发者决定，仅产品决策询问用户。该要求替代此前逐项询问技术微决策的工作方式，已确认产品选择继续记录在 Wiki 与决策总览。
+
+用户在 2026-10-29 进一步明确：没说改就不要改。代理可以先调查现状、核对是否符合预期并汇报结论与建议，但未经用户明确说改，不动代码与文档。理由是改动的时机与范围由用户决定，调查结论先经用户确认，避免代理把讨论当成已授权的执行。
+
+## 代码注释
+
+2026-10-28，用户要求写代码时给每一个小模块前写上注释，方便人类阅读。
+
+选择理由：读代码的人先看注释就知道这一小块负责什么、为什么存在，再看实现确认细节，不必逐行推断作者的意图。这里的小模块包括文件、类型、函数／方法、组件，以及函数内可独立理解的一段逻辑；每处用一两句说明职责即可，不逐行复述代码，模块内部的其他注释仍只写代码本身表达不了的约束。
+
+同一天，用户进一步要求每个文件开头都写文件头注释，并且更新文件时同步更新它，这样一眼扫过文件列表或刚打开文件就知道该不该继续读。确认的范围是手写源文件：后端与前端的手写代码、手写 SQL 查询（`backend/db/queries/`）、管理看板与 Worker 脚本、运维脚本。排除三类：sqlc 生成代码（重新生成会被覆盖，且约定不手改）、已落地的历史迁移（不应改动既有迁移内容）、JSON 等不支持注释的配置文件。Go 文件的文件头与 `package` 之间留一空行：紧贴 `package` 的注释会被 Go 工具当成整个包的文档注释，同一包每个文件都写就会互相冲突；留空行后它只是普通的文件头注释。带 shebang 的脚本把文件头放在 shebang 的下一行，因为第一行必须是解释器声明。
+
+## 写代码前的预期核对
+
+2026-10-28，用户要求在写代码之前先核对预期：把所有可能失败的点列出来，由用户确定该失败状态是否走得到。
+
+选择理由：过度防御大多不是写代码时手多，而是动手前没有区分「这个状态到底能不能到达」。不可达的状态一旦写了处理，代码就要长期背着对应的分支、状态和复核，主流程也随之变难读。先由用户——最清楚业务约束的人——判定可达性，确认不可达的就不写处理，确认可达的才设计失败处理；这样防御只出现在真实存在的地方。与「仅产品决策询问用户」并行：可达性属于对预期和业务约束的确认，不是把技术实现逐项拿去问。
+
+第一个按此方式处理的例子是上下文压缩：其干净输入输出的约定见 [05 Main 运行时](05-main-runtime.md) 中 `prepareContext` 的说明。

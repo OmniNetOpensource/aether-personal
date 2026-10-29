@@ -1,6 +1,6 @@
 # 09 Web 生产部署
 
-2026-10-26，用户选择向公众开放注册，并确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。选择理由是将页面分发和公网入口交给 Cloudflare，保留现有 Go、PostgreSQL 与 Linux 沙盒架构。
+2026-10-26，用户选择向公众开放注册，并确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。选择理由是将页面分发和公网入口交给 Cloudflare，保留现有 Go 与 PostgreSQL 架构。
 
 ## 服务位置
 
@@ -10,13 +10,12 @@
 | Go API、Agent Runtime | 阿里云新加坡的应用主机 | `origin-aether.forkicks.fun`，要求源站凭证 |
 | PostgreSQL 18 + pgvector | 应用主机的独立生产数据卷 | 不发布宿主机端口 |
 | 管理看板 | 应用主机的独立 Node 容器 | `admin-aether.forkicks.fun`，独立管理员密码 |
-| 用户 Linux 环境 | 暂时停用，本次不部署 | 不配置云沙箱或桌面入口，见 [07](07-sandbox.md#当前状态暂时停用2026-10-27) |
 
 源站和管理子域名由部署实现选定。当前文件提供部署基础，不表示服务器、DNS 或线上服务已经创建。
 
 ## 本地准备
 
-从远端最新 `main` 的基础整理发布版本。不要把 `.env`、数据库或开发机的沙盒状态打包进去。推送公开 GitHub 仓库需要用户授权，也可以将已检查的源码归档直接传到服务器。
+从远端最新 `main` 的基础整理发布版本。不要把 `.env` 或数据库打包进去。推送公开 GitHub 仓库需要用户授权，也可以将已检查的源码归档直接传到服务器。
 
 在仓库根目录构建 Web 并检查 Worker 打包：
 
@@ -24,7 +23,7 @@
 make edge-dry-run
 ```
 
-`frontend/build/web` 是静态资源目录。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API；沙盒及桌面入口当前关闭。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
+`frontend/build/web` 是静态资源目录。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
 `infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他企业部署时修改这些公开配置，不能使用维护者的域名。
 
@@ -96,7 +95,7 @@ make edge-deploy
 - 每用户模型用量与并发限制、全局费用上限。具体额度、重置周期和超额后的用户体验待产品确认。
 - 真实 Resend 收信、真实模型回复、WebSocket 断线补消息和管理看板权限验收。
 
-`/healthz` 只检查数据库，不能证明模型和邮件可用。2026-10-27 用户决定本次只启用联网执行工具，沙盒代码开关关闭，已有 `SANDBOX_*` 配置也不会启用工具；生产 Compose 已注释这些变量。沙盒隔离、备份与恢复、容量限制等验收留到恢复该功能时进行。
+`/healthz` 只检查数据库，不能证明模型和邮件可用。当前执行工具只有搜索与网页读取。
 
 ## 备份与更新
 

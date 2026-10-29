@@ -1,8 +1,8 @@
 # 阿芒 · aether-personal
 
-企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖 纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作、外部工具与隔离执行，以及 dev/prod 环境。
+企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作与外部工具，以及 dev/prod 环境。
 
-当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。2026-10-27 起暂时停用沙箱与桌面功能，执行工具只保留搜索和网页读取。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
+当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。执行工具目前只有搜索和网页读取。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
 
 ## 已确认方向
 
@@ -12,7 +12,7 @@
 | 产品名称 | 中文「阿芒」，英文 Aether |
 | 前端 | React + React DOM + TypeScript；纯 Web 应用，移动端使用 PWA |
 | 后端 | Go |
-| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡，当前沙盒暂时停用；生产部署待完成 |
+| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡；生产部署待完成 |
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
@@ -27,26 +27,25 @@
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
 | Main Agent | 每用户固定一个逻辑 Main，按用户串行运行，状态持久化到 PostgreSQL |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
-| Linux 沙盒工作环境 | 暂时停用；保留实现与历史数据，后续恢复再验收生产隔离与持久化 |
+| Linux 沙盒工作环境 | 2026-10-29 起先不考虑，已有实现已删除 |
 | 处理中收到新消息 | 当前模型请求或工具调用结束后，在下一次模型调用前加入新消息 |
 | 环境 | 实现时同时考虑 dev 和 prod |
 
 ## 完整交付范围
 
-- Web/PWA Main 聊天界面，HTTP、WebSocket 和断线恢复。
-- Go API：认证、收发消息、WebSocket。
+- Web/PWA Main 聊天界面：主页打开即建 WebSocket，登录、历史、收发全走同一连接，支持断线恢复。
+- Go API：聊天 WebSocket（认证、历史、收发与推送）、管理与健康检查 HTTP 接口。
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[数据模型](docs/wiki/02-data-model.md)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
 - Schedule：Main 与 Subagent 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
-- Main 可直接执行或委派任务，与 Subagent 共用执行工具（联网工具与可选的 Linux 沙盒工具）；消息和派发权限按角色区分。
+- Main 可直接执行或委派任务，与 Subagent 共用联网执行工具；消息和派发权限按角色区分。
 - Main 在耗时任务中通过 `send_message` 汇报关键进展，完成后发送结果，禁止直接输出正文。历史检索 `search_message`、`read_message` 尚待实现。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。
 - Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知。
 - 按用户权限搜索和读取历史消息。
 - 通过 OpenRouter 调用模型。
 - 搜索、HTTP API、MCP 等外部服务调用。
-- 在隔离 Linux 工作环境中运行终端、代码、浏览器、图形桌面与后台进程，支持文件处理和软件安装与使用，范围见 [Linux 沙盒工作环境](docs/wiki/07-sandbox.md)。
 - dev/prod 环境配置及对应的验证。
 
 上述范围不代表各项已经实现，当前状态见架构 Wiki。技术实现由开发者判断，影响用户体验和产品范围的决定先与用户确认。
@@ -76,7 +75,7 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-前端工程位于 `frontend/`，React 直接渲染标准 DOM。Web 与移动 PWA 共用 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 API。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
+前端工程位于 `frontend/`，React 直接渲染标准 DOM。Web 与移动 PWA 共用 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
 
 ## 本地开发
 
@@ -90,7 +89,7 @@ cp backend/.env.example backend/.env
 make dev
 ```
 
-打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面、HTTP API 和 WebSocket。本地 dev 默认自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
+打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面与 WebSocket。页面打开后先显示 loading，WebSocket 就绪后本地 dev 自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
 
 检查代码和真实数据库运行时：
 
@@ -136,20 +135,13 @@ make db-down   # 停止本地 PostgreSQL
 | `RESEND_API_KEY` | `prod` 必填，Resend 的 API Key |
 | `EMAIL_FROM` | `prod` 必填，验证码邮件发件人，如 `Aether <noreply@company.com>`；域名需先在 Resend 后台验证 |
 
-本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试，也可直接调用 `POST /auth/dev`；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
+本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
 
-邮箱验证码接口仍可直接调用（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）：
-
-```sh
-curl -X POST localhost:8080/auth/code -d '{"email":"me@example.com"}'
-curl -X POST localhost:8080/auth/verify -d '{"email":"me@example.com","code":"<日志中的验证码>"}'
-# 返回 {"token":"..."}，之后的请求带上 Authorization: Bearer <token>
-curl -X POST localhost:8080/auth/logout -H "Authorization: Bearer <token>"
-```
+登录、历史与收发都走主页建立的聊天 WebSocket，没有对应的 HTTP 接口：页面在收到后端 `ready` 事件前显示 loading，dev 随即在同一连接上自动完成开发登录，prod 在同一连接上发送邮箱与验证码命令（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）。协议见 [消息与实时通信](docs/wiki/04-messaging.md#websocket)。
 
 ## 项目资料
 
-生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册；防滥用、用户用量控制与沙盒生产隔离仍须完成后才能公开上线。
+生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册；防滥用与用户用量控制仍须完成后才能公开上线。
 
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。

@@ -8,7 +8,15 @@
 
 > 把 messages 表里，没有发给用户的消息全部发给用户不就行了嘛？
 
-因此：打开聊天页面时，App 与后端建立一条 WebSocket 双向通道，发消息与实时推送走 WebSocket，登录与历史消息走 HTTP。谁产生消息就写入 `messages` 表，谁需要就从表里查，PostgreSQL 的 `LISTEN/NOTIFY` 只负责“该去查了”的提醒。
+2026-10-28，用户进一步要求：
+
+> 修改一下项目的架构：访问主页直接与后端进行 web socket 连接，此时显示 loading 态，连接好了之后直接通过这个通道进行通信。
+
+> 我想定义一下后端会传来的事件类型们，然后在一个文件里专门中转这些事件
+
+因此：访问主页时前端立刻与后端建立一条 WebSocket 双向通道，收到后端 `ready` 事件前只显示 loading 态；连接就绪后，登录、历史消息、发消息与实时推送全部走这条通道，前端不再为聊天调用 HTTP 接口。谁产生消息就写入 `messages` 表，谁需要就从表里查，PostgreSQL 的 `LISTEN/NOTIFY` 只负责“该去查了”的提醒。
+
+服务器事件先集中定义、再由一个文件统一中转：后端事件结构只定义在 `backend/internal/httpapi/events.go`，该文件的 `eventRelay` 是聊天 WebSocket 唯一的写出口；前端在 `frontend/src/serverEvents.ts` 定义对应的校验结构，`frontend/src/ServerEventRelay.ts` 是前端唯一接触聊天 WebSocket 的文件，它把原始帧校验为事件后转交给 `ChatController`，其余前端代码不直接处理原始帧。
 
 ## 整体结构
 
@@ -31,6 +39,8 @@ sequenceDiagram
     participant Runner as 后端 A 或 B：Main 运行时
     participant Model as OpenRouter
 
+    App->>WS: hello {token?, last_position?}
+    WS-->>App: ready {authenticated, history}
     App->>WS: send_message {client_message_id, text}
     WS->>DB: 事务：按用户加写入锁，插入消息（sequence 为空），NOTIFY
     WS-->>App: delivered {client_message_id}
@@ -57,20 +67,38 @@ sequenceDiagram
 
 ## WebSocket
 
-使用 `coder/websocket` 库，连接地址 `GET /ws`。
+使用 `coder/websocket` 库，连接地址 `GET /ws`。前端打开主页就连接，此时显示 loading；后端回 `ready` 后才进入登录页或聊天页，之后所有聊天通信都走这条连接。
 
-- 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后由 App 发送的第一条消息验证登录，5 秒内未收到或验证失败即断开。不把令牌放在网址中，避免被写入访问日志。
-- 登录靠第一条消息中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
-- 后端每 30 秒发送心跳 ping；连接断开时 App 自动重连。
-- 不合规则的消息（类型未知、缺 `client_message_id`、文字为空或超过 32,000 字符）直接断开连接，原因 `invalid send_message`。正常使用的 App 不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露，也省去 App 处理错误回复的代码。日后若有正常用户也会触发的限制（如频率限制），再为那种情况设计错误回复。
-- 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。
+- 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后前端立刻发送 `hello`，其中可携带已有登录令牌；5 秒内未收到 `hello` 即断开。不把令牌放在网址中，避免被写入访问日志。未带令牌或令牌已失效也能连上，后端回未登录的 `ready`，登录命令在同一条连接上继续进行。
+- 登录靠 `hello` 中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
+- 后端每 30 秒发送心跳 ping；连接断开时前端自动重连，重连时仍先发 `hello`。
+- 不合规则的 `send_message`（缺 `client_message_id`、文字为空或超过 32,000 字符）直接断开连接，原因 `invalid send_message`。正常使用的前端不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露。登录与历史翻页是用户可重试的请求，其失败通过 `request_failed` 事件按 `request_id` 回复，不关闭连接。
+- 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。连接未登录时不注册唤醒，登录成功后才绑定用户。
 
-| 方向 | 消息 | 说明 |
-| --- | --- | --- |
-| App → 后端 | `{"type": "auth", "token": "...", "last_position": "..."}` | 第一条消息；`last_position` 为最后收到的消息位置，用于重连补齐，首次连接可省略 |
-| App → 后端 | `{"type": "send_message", "client_message_id": "...", "text": "..."}` | 发消息 |
-| 后端 → App | `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
-| 后端 → App | `{"type": "messages", "messages": [...], "read_up_to": "...", "main_thinking": false, "activity": {...}}` | 新消息、当前已读位置与 Main 处理状态 |
+前端发往后端的命令：
+
+| 命令 | 说明 |
+| --- | --- |
+| `{"type": "hello", "token": "...", "last_position": "..."}` | 连接后的第一帧；`last_position` 为最后收到的消息位置，用于重连补齐，首次连接可省略，令牌也可省略 |
+| `{"type": "request_code", "request_id": "...", "email": "..."}` | 未登录时请求邮箱验证码 |
+| `{"type": "verify_code", "request_id": "...", "email": "...", "code": "..."}` | 未登录时用验证码登录 |
+| `{"type": "dev_login", "request_id": "..."}` | 未登录时请求开发测试登录，仅 dev 后端接受 |
+| `{"type": "load_history", "request_id": "...", "before": "..."}` | 已登录时向前翻一页历史，`before` 可省略取最新一页 |
+| `{"type": "logout", "request_id": "..."}` | 退出当前会话，连接保持未登录状态 |
+| `{"type": "send_message", "client_message_id": "...", "text": "..."}` | 发消息 |
+
+后端发往前端的事件只在 `events.go` 与 `serverEvents.ts` 两处对应定义，并分别由后端 `eventRelay` 与前端 `ServerEventRelay` 中转：
+
+| 事件 | 说明 |
+| --- | --- |
+| `{"type": "ready", "authenticated": false, "dev_login": false}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
+| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}}` | 在当前连接上登录成功，带最新一页历史 |
+| `{"type": "code_sent", "request_id": "..."}` | 验证码已发送 |
+| `{"type": "history", "request_id": "...", "messages": [...], "read_up_to": "..."}` | 一页历史消息 |
+| `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
+| `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
+| `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
+| `{"type": "messages", "messages": [...], "read_up_to": "...", "main_thinking": false, "activity": {...}}` | 新消息、当前已读位置与 Main 处理状态 |
 
 > 重连字段叫 `last_position` 而非 `last_message_id`：Main 一行里可能有多条消息，它们的 `id`（工具调用 ID）各不相同但 `position`（行 ID）相同，分开命名避免前端误把消息 `id` 当作重连位置。不用 `sequence`：用户消息在 Main 读到前 `sequence` 为空，且 `sequence` 顺序不等于写入顺序；行 ID 在写入时即生成，并由写入锁保证与写入顺序一致。
 
@@ -105,7 +133,7 @@ sequenceDiagram
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
 - 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息，以及当前已读位置，推送给 App。
 - 已读位置用一个值 `read_up_to` 表示（最后一条已读的用户消息）：待读消息总是一次性按顺序补号，已读只会从前往后连续推进。
-- App 重连时在 `auth` 中带上最后收到的位置，后端从其后补齐；首次连接从最新一条开始，之前的消息通过历史接口获取。
+- 前端重连时在 `hello` 中带上最后收到的位置，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
 - 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。
 
 ## Main 思考气泡 `开发中`
@@ -129,7 +157,7 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 ## 历史消息
 
-`GET /messages?before=<位置>`，需要登录。从最新往前翻页，每页 50 条用户可见的消息，返回格式与 WebSocket 的 `messages` 相同（不含 `type`）。
+已登录连接发送 `load_history` 命令，后端回 `history` 事件。从最新往前翻页，每页 50 条用户可见的消息；首次连接的最新一页直接随 `ready` 或 `authenticated` 事件带回，不必再单独请求。
 
 - 以 UUIDv7 的消息 ID 作翻页位置，因为待读消息没有序号。
 - 部分行（Main 未发消息给用户的 `assistant` 行）不产生可见消息，因此后端会继续往前查，直到凑满一页或没有更早的行。

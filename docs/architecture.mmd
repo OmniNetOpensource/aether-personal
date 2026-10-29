@@ -1,6 +1,6 @@
 flowchart TD
     subgraph L1["第一层：React Web 应用 · 移动端 PWA"]
-        CLIENT["Main 聊天界面：HTTP · WebSocket · 断线恢复"]
+        CLIENT["Main 聊天界面：WebSocket · 断线恢复"]
     end
 
     subgraph L2["第二层：Go 后端"]
@@ -29,7 +29,7 @@ flowchart TD
         RECAP <-->|"读取行动 / 保存动态快照"| DB
         RECAP -->|"通知连接读取最新动态"| API
 
-        TOOLS["Main / Subagent 共用执行工具<br/>已实现：search · fetch_url<br/>开发中：Linux 命令 · 文件 · 桌面<br/>待实现：其他 HTTP/MCP"]
+        TOOLS["Main / Subagent 共用执行工具<br/>已实现：search · fetch_url<br/>待实现：其他 HTTP/MCP"]
         SUB <-->|"工具调用 / 结果"| TOOLS
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 对外消息与事件"| MESSAGES
@@ -47,17 +47,15 @@ flowchart TD
         SUB <-->|"保存 Run 状态与执行轨迹"| DB
     end
 
-    subgraph L3["第三层：外部服务 / 隔离的执行环境"]
+    subgraph L3["第三层：外部服务"]
         MODEL["模型供应商 API"]
         EXTERNAL["外部服务：搜索 · HTTP API · MCP"]
-        SANDBOX["OpenSandbox：每用户一个持久 Linux<br/>浏览器 · 代码 · 文件 · 桌面<br/>开发环境：空闲暂停 / 按需恢复"]
     end
 
     ADMIN["管理看板：admin/ · 模型调用观测与模型配置<br/>同一仓库 / 独立部署，开发中"]
     ADMIN <-->|"独立密码登录 / 管理会话 / 观测与模型配置"| API
-    CLIENT <-->|"HTTP 历史记录 / WebSocket 收发消息与推送"| API
+    CLIENT <-->|"WebSocket 登录 / 历史 / 收发消息与推送"| API
     MAIN <-->|"模型推理 / 消息、派发与执行工具请求"| MODEL
     SUB <-->|"模型推理 / 执行工具的调用请求"| MODEL
     RECAP <-->|"独立模型请求 / 动态摘要"| MODEL
     TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL
-    TOOLS <-->|"隔离任务执行 / 结果"| SANDBOX
