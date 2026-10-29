@@ -1,3 +1,5 @@
+// 本文件是 Markdown 渲染组件：把助手消息文本解析为安全的 React 元素，只放行 http/https 链接。
+
 import { marked } from 'marked';
 import { decodeHTML } from 'entities';
 import type { Token, Tokens } from 'marked';

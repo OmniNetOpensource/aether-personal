@@ -57,6 +57,7 @@ func (q *Queries) GetAdminSession(ctx context.Context, arg GetAdminSessionParams
 }
 
 const useAdminLoginAttempt = `-- name: UseAdminLoginAttempt :execrows
+
 INSERT INTO admin_login_attempts (singleton, attempts, window_started_at)
 VALUES (true, 1, now())
 ON CONFLICT (singleton) DO UPDATE
@@ -68,6 +69,7 @@ WHERE admin_login_attempts.attempts < 10
     OR admin_login_attempts.window_started_at <= now() - interval '1 minute'
 `
 
+// 本文件是管理员认证的查询集合：记录登录尝试、管理会话的创建与校验，供管理员登录接口使用（sqlc 据此生成代码）。
 func (q *Queries) UseAdminLoginAttempt(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, useAdminLoginAttempt)
 	if err != nil {

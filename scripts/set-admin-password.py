@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 本文件是管理员密码设置脚本：交互读取新密码、生成哈希并写回环境配置文件，默认 backend/.env。
 """设置环境配置文件中的管理员密码哈希，默认 backend/.env。"""
 
 import argparse

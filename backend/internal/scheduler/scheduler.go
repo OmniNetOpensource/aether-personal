@@ -1,3 +1,5 @@
+// 本文件是定时安排的后台调度器：周期扫描到期安排、投递给对应用户的 Main，并计算下一次 cron 触发时间。
+
 package scheduler
 
 import (

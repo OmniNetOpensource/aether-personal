@@ -1,3 +1,5 @@
+-- 本文件是定时安排的查询集合：创建与维护 schedule、扫描到期安排并在投递后推进下一次触发（sqlc 据此生成代码）。
+
 -- name: CreateSchedule :one
 INSERT INTO schedules (user_id, title, context, run_at, cron, timezone, status, next_run_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

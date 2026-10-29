@@ -1,4 +1,5 @@
 #!/bin/sh
+# 本文件是生产数据库备份脚本：通过 Docker Compose 导出一份带时间戳的数据库转储到本地备份目录。
 set -eu
 umask 077
 

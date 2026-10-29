@@ -1,3 +1,5 @@
+// 本文件是管理看板的独立服务入口：托管看板静态页面，并把管理 API 请求代理到后端。
+
 import http from 'node:http';
 import https from 'node:https';
 import { readFile } from 'node:fs/promises';

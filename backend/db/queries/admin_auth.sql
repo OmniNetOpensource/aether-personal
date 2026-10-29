@@ -1,3 +1,5 @@
+-- 本文件是管理员认证的查询集合：记录登录尝试、管理会话的创建与校验，供管理员登录接口使用（sqlc 据此生成代码）。
+
 -- name: UseAdminLoginAttempt :execrows
 INSERT INTO admin_login_attempts (singleton, attempts, window_started_at)
 VALUES (true, 1, now())

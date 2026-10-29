@@ -1,3 +1,5 @@
+// 本文件负责行动摘要（recap）：Agent 持续工作时周期性唤醒摘要流程，把 Main 与 Subagent 的进展总结成简短状态供聊天界面显示。
+
 package agent
 
 import (

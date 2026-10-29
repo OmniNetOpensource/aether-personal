@@ -1,3 +1,5 @@
+-- 本文件是用户认证的查询集合：保存与核销邮箱验证码、按邮箱建号、以及登录会话的创建与续期（sqlc 据此生成代码）。
+
 -- name: SaveLoginCode :execrows
 -- 同一邮箱 60 秒内重复请求时不覆盖，返回 0 行。
 INSERT INTO login_codes (email, code_hash, expires_at)

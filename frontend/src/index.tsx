@@ -1,3 +1,5 @@
+// 本文件是前端入口：把 React 应用挂载到页面根节点、引入全局样式，并同步可视视口尺寸供移动端布局使用。
+
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import './style.css';

@@ -1,3 +1,5 @@
+// 本文件负责发送登录验证码邮件：prod 通过 Resend 发信，dev 改为打印到日志方便本地登录。
+
 package httpapi
 
 import (

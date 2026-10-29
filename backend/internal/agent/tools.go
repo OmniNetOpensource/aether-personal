@@ -1,3 +1,5 @@
+// 本文件实现数据库类工具的分发：执行 send_message、assign_subagents 与 schedule，把文本投递给用户或 Agent 并落库。
+
 package agent
 
 import (

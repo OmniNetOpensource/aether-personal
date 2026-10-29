@@ -76,6 +76,7 @@ func (q *Queries) GetActiveSession(ctx context.Context, tokenHash []byte) (GetAc
 }
 
 const saveLoginCode = `-- name: SaveLoginCode :execrows
+
 INSERT INTO login_codes (email, code_hash, expires_at)
 VALUES ($1, $2, now() + interval '10 minutes')
 ON CONFLICT (email) DO UPDATE
@@ -91,6 +92,7 @@ type SaveLoginCodeParams struct {
 	CodeHash []byte
 }
 
+// 本文件是用户认证的查询集合：保存与核销邮箱验证码、按邮箱建号、以及登录会话的创建与续期（sqlc 据此生成代码）。
 // 同一邮箱 60 秒内重复请求时不覆盖，返回 0 行。
 func (q *Queries) SaveLoginCode(ctx context.Context, arg SaveLoginCodeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveLoginCode, arg.Email, arg.CodeHash)

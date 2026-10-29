@@ -1,3 +1,5 @@
+// 本文件是 PWA 构建后处理脚本：生成多尺寸应用图标与带版本哈希的 Service Worker，写入构建输出目录。
+
 import { createHash } from 'node:crypto';
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';

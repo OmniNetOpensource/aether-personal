@@ -111,6 +111,7 @@ func (q *Queries) InterruptModelCalls(ctx context.Context, arg InterruptModelCal
 }
 
 const startModelCall = `-- name: StartModelCall :one
+
 WITH step AS (
  UPDATE steps AS source SET model = $1 WHERE source.id = $7
  RETURNING source.id, source.user_id, source.subagent_id
@@ -130,6 +131,7 @@ type StartModelCallParams struct {
 	StepID                 uuid.UUID
 }
 
+// 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断，并判断 Agent 是否还有待执行的步骤（sqlc 据此生成代码）。
 func (q *Queries) StartModelCall(ctx context.Context, arg StartModelCallParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, startModelCall,
 		arg.RequestedModel,

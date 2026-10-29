@@ -1,3 +1,5 @@
+-- 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断，并判断 Agent 是否还有待执行的步骤（sqlc 据此生成代码）。
+
 -- name: StartModelCall :one
 WITH step AS (
  UPDATE steps AS source SET model = sqlc.arg(requested_model) WHERE source.id = sqlc.arg(step_id)

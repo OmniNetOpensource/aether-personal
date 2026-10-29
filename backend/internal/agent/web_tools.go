@@ -1,3 +1,5 @@
+// 本文件实现联网工具 search 与 fetch_url：调用外部搜索与抓取服务，控制调用节奏，并把网页内容裁剪成模型可用的文本。
+
 package agent
 
 import (

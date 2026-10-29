@@ -1,3 +1,5 @@
+// 本文件实现 Agent 的 schedule 工具：供模型创建、查看、修改与删除定时安排，并把数据库记录转换成工具返回值。
+
 package scheduler
 
 import (

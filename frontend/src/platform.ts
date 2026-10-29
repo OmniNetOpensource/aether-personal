@@ -1,3 +1,5 @@
+// 本文件是浏览器平台适配：读写与清除本地会话（兼容旧版本存储键），并提供安全链接判断供 Markdown 渲染使用。
+
 import { z } from 'zod';
 
 export async function readSession() {

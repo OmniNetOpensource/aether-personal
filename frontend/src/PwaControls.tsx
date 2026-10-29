@@ -1,3 +1,5 @@
+// 本文件是 PWA 控件组件：注册 Service Worker、检测新版本并提示更新，注册失败时提示离线启动不可用。
+
 import { useEffect, useState } from 'react';
 
 export function PwaControls() {
