@@ -1,16 +1,17 @@
+/* 本文件是聊天应用的全局样式：定义页面布局、消息气泡、输入框与登录页等全部界面外观。 */
 @import './palette.css';
 
 :root {
   font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: var(--text);
-  font-size: 15px;
+  font-size: 17px;
 }
 * {
   box-sizing: border-box;
 }
 body {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 18px;
+  line-height: 28px;
   color: var(--text);
 }
 .loading {
@@ -26,6 +27,7 @@ body {
   color: var(--text-muted);
 }
 .chat-page {
+  position: relative;
   width: 100%;
   flex: 1;
   min-height: 0;
@@ -38,28 +40,12 @@ body {
   width: 100%;
   min-height: 0;
 }
-.chat-toolbar {
-  flex-shrink: 0;
-  min-height: 56px;
-  width: 100%;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--forest-border);
-}
-.chat-name {
-  color: var(--on-forest);
-  font-size: 16px;
-  font-weight: 600;
-}
 .message-content {
-  padding: 16px 32px 22px;
+  padding: 16px 32px calc(22px + var(--composer-height, 90px));
 }
 .date {
-  font-size: 11px;
-  line-height: 17px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
   text-align: center;
   margin-top: 12px;
@@ -115,8 +101,8 @@ body {
   white-space: pre-wrap;
 }
 .delivery {
-  font-size: 11px;
-  line-height: 17px;
+  font-size: 13px;
+  line-height: 20px;
   margin: 5px 5px 0 0;
 }
 .retry {
@@ -124,10 +110,15 @@ body {
 }
 .error {
   color: var(--error);
-  font-size: 13px;
+  font-size: 15px;
 }
 .composer-padding {
-  flex-shrink: 0;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: transparent;
+  pointer-events: none;
   padding: 10px 26px 20px;
   padding-bottom: max(20px, env(safe-area-inset-bottom));
 }
@@ -136,6 +127,7 @@ body {
   display: flex;
   flex-direction: row;
   align-items: flex-end;
+  pointer-events: auto;
   padding: 3px 5px 3px 4px;
   border: 1px solid var(--line-strong);
   border-radius: 25px;
@@ -145,10 +137,10 @@ body {
   flex: 1;
   min-width: 0;
   height: auto;
-  min-height: 44px;
-  max-height: 156px;
-  font-size: 16px;
-  line-height: 24px;
+  min-height: 48px;
+  max-height: 160px;
+  font-size: 18px;
+  line-height: 28px;
   color: var(--text);
   padding: 10px 14px;
   background: transparent;
@@ -167,12 +159,70 @@ body {
   justify-content: center;
 }
 .send-arrow {
-  font-size: 28px;
-  line-height: 32px;
+  width: 24px;
+  height: 24px;
+  display: block;
   color: var(--forest-deep);
 }
+.attach-button,
+.send-button {
+  margin-bottom: 3px;
+}
+.attach-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+}
+.attach-button:hover {
+  background: var(--surface-muted);
+  color: var(--forest);
+}
+.attach-button svg {
+  width: 24px;
+  height: 24px;
+}
+.selected-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  max-height: 132px;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.selected-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 8px 4px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 22px;
+}
+.selected-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remove-file {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 22px;
+  line-height: 1;
+}
 .composer-error {
-  margin: 0 26px;
+  margin: 0 0 8px;
+  pointer-events: auto;
 }
 .thinking {
   display: flex;
@@ -200,8 +250,8 @@ body {
   gap: 5px;
 }
 .recap-body {
-  font-size: 12px;
-  line-height: 19px;
+  font-size: 14px;
+  line-height: 22px;
   color: var(--on-forest-muted);
   opacity: 0.75;
 }
@@ -251,18 +301,18 @@ body {
   font-weight: 600;
 }
 .h1 {
-  font-size: 20px;
-  line-height: 30px;
+  font-size: 22px;
+  line-height: 33px;
 }
 .h2 {
-  font-size: 18px;
-  line-height: 27px;
+  font-size: 20px;
+  line-height: 30px;
 }
 .code-inline,
 .code-body {
   font-family: monospace;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 15px;
+  line-height: 23px;
   background: var(--surface-muted);
 }
 .code-block {
@@ -328,16 +378,16 @@ body {
   overflow: hidden;
 }
 .login-title {
-  font-size: 28px;
-  line-height: 42px;
+  font-size: 30px;
+  line-height: 45px;
   font-weight: 600;
   letter-spacing: -0.8px;
   margin-top: 28px;
 }
 .login-subtitle {
   color: var(--text-muted);
-  font-size: 15px;
-  line-height: 24px;
+  font-size: 17px;
+  line-height: 28px;
   margin-top: 10px;
   margin-bottom: 30px;
 }
@@ -349,7 +399,7 @@ body {
   border-radius: 14px;
   padding: 18px;
   margin-bottom: 16px;
-  font-size: 15px;
+  font-size: 17px;
 }
 .login-error {
   margin-bottom: 16px;
@@ -492,10 +542,6 @@ button.link {
 .message-input:focus-visible {
   outline: 0;
 }
-.composer:focus-within {
-  outline: 2px solid var(--gold);
-  outline-offset: 2px;
-}
 .send-button:disabled {
   background: var(--surface-muted);
   opacity: 1;
@@ -519,7 +565,7 @@ button.link {
 }
 .login-button {
   color: var(--gold-soft);
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
 }
 .login-title {
@@ -530,29 +576,22 @@ button.link {
   margin-bottom: 30px;
 }
 .login-input {
-  font-size: 16px;
+  font-size: 18px;
 }
 .change-email {
   margin-top: 16px;
   padding: 0;
-}
-.app-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px 12px;
 }
 .app-button {
   padding: 7px 12px;
   border-radius: 10px;
   background: var(--forest-hover);
   color: var(--on-forest);
-  font-size: 12px;
+  font-size: 14px;
   white-space: nowrap;
 }
 .connection-status {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--on-forest-muted);
 }
 .load-older {
@@ -561,7 +600,7 @@ button.link {
   padding: 8px 12px;
   background: transparent;
   color: var(--on-forest-muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 .code-block {
   overflow-x: auto;
@@ -598,9 +637,6 @@ td {
   margin-right: 0;
 }
 @media (max-width: 699px) {
-  .chat-toolbar {
-    padding: 8px 16px;
-  }
   .login-center {
     padding: 18px;
   }

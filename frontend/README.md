@@ -10,7 +10,7 @@ React、React DOM 与 TypeScript 实现邮箱登录和 Main 聊天。桌面直�
 make dev
 ```
 
-打开 [本地聊天](http://127.0.0.1:8080)。Go 同源提供页面、认证、历史消息和 WebSocket。dev 页面默认自动进入固定开发用户 `dev@example.com`，无需点击登录；自动登录失败时可点击「开发测试登录」重试。prod 使用邮箱验证码。
+打开 [本地聊天](http://127.0.0.1:8080)。Go 同源提供页面与 WebSocket，认证与历史消息都走这条连接。dev 页面默认自动进入固定开发用户 `dev@example.com`，无需点击登录；自动登录失败时可点击「开发测试登录」重试。prod 使用邮箱验证码。
 
 仅开发前端时，先启动 `8080` 端口的后端，再在 `frontend/` 执行：
 
@@ -19,7 +19,7 @@ npm ci
 npm run dev
 ```
 
-打开命令输出的 `localhost:3000` 地址。Rsbuild 支持 React 热更新，`/auth`、`/messages` 与 `/ws` 代理至本地后端。端口已占用时可使用 `npm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
+打开命令输出的 `localhost:3000` 地址。Rsbuild 支持 React 热更新，只有 `/ws` 代理至本地后端：页面打开即建立 WebSocket，收到后端 `ready` 事件前显示 loading，登录、历史与收发都走这条连接。端口已占用时可使用 `npm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
 
 构建与类型检查：
 
@@ -52,8 +52,12 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/App.tsx` | 登录、聊天布局、滚动、输入与页面前后台生命周期 |
-| `src/chat.ts` | HTTP 边界校验、认证、原生 WebSocket、历史、回执与幂等重发 |
+| `src/App.tsx` | 页面入口与前后台生命周期：loading、登录页与聊天页切换 |
+| `src/ChatController.ts` | 界面状态：登录、历史、消息回执、思考动态、重连与幂等重发，只处理已校验的服务器事件 |
+| `src/serverEvents.ts` | 后端发来的全部事件类型定义与校验结构，与后端 `events.go` 一一对应 |
+| `src/ServerEventRelay.ts` | 前端唯一接触聊天 WebSocket 的文件：连接、发 `hello` 与命令、校验并中转服务器事件 |
+| `src/ChatPage.tsx`、`src/ChatMessageList.tsx`、`src/MessageComposer.tsx` | 聊天布局、消息列表滚动与输入发送 |
+| `src/LoginPage.tsx` | 邮箱验证码与开发测试登录表单 |
 | `src/Markdown.tsx` | Markdown token 渲染为 React DOM，不执行 HTML，不加载远程图片 |
 | `src/platform.ts` | 浏览器登录存储与来源链接校验 |
 | `src/PwaControls.tsx` | Service Worker 注册、离线启动状态与显式更新 |
@@ -61,7 +65,7 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 | `public/manifest.webmanifest` | PWA 名称、启动地址、窗口模式与图标清单 |
 | `scripts/build-pwa.mjs` | 生成图标、按构建内容生成静态资源缓存与 Service Worker |
 
-沙盒和桌面功能沿用当前停用决定，本次没有恢复入口。迁移前的本地 Lynx 源码和未提交 Android 工程保存在被 Git 忽略的 `.local/legacy-lynx-20261027/`，不参与构建。
+迁移前的本地 Lynx 源码和未提交 Android 工程保存在被 Git 忽略的 `.local/legacy-lynx-20261027/`，不参与构建。
 
 ## 本地验收
 

@@ -1,3 +1,5 @@
+// 本文件是 Rsbuild 构建配置：设定 React 入口、页面标题与 PWA 元信息、开发代理，并把产物输出到 build/web。
+
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
@@ -6,8 +8,6 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/auth': 'http://127.0.0.1:8080',
-      '/messages': 'http://127.0.0.1:8080',
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
     },
   },
