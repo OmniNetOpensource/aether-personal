@@ -168,6 +168,18 @@ func (q *Queries) GetReadUpTo(ctx context.Context, userID uuid.UUID) (uuid.UUID,
 	return id, err
 }
 
+const getStepModelReply = `-- name: GetStepModelReply :one
+SELECT model_reply FROM steps WHERE id = $1
+`
+
+// 进程中断后复用已保存的模型回复，避免同一步骤再次请求模型。
+func (q *Queries) GetStepModelReply(ctx context.Context, stepID uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getStepModelReply, stepID)
+	var model_reply []byte
+	err := row.Scan(&model_reply)
+	return model_reply, err
+}
+
 const getSubagent = `-- name: GetSubagent :one
 SELECT id, user_id, status, created_at, started_at FROM subagents WHERE user_id = $1 AND id = $2
 `
@@ -645,6 +657,22 @@ type SaveCompactedContextSizeParams struct {
 
 func (q *Queries) SaveCompactedContextSize(ctx context.Context, arg SaveCompactedContextSizeParams) error {
 	_, err := q.db.Exec(ctx, saveCompactedContextSize, arg.StepID, arg.ContextTokensAfter)
+	return err
+}
+
+const saveStepModelReply = `-- name: SaveStepModelReply :exec
+UPDATE steps SET model_reply = $1::jsonb
+WHERE id = $2 AND model_reply IS NULL
+`
+
+type SaveStepModelReplyParams struct {
+	Payload []byte
+	StepID  uuid.UUID
+}
+
+// 只在尚未保存时写入，恢复过程不会覆盖第一次拿到的回复。
+func (q *Queries) SaveStepModelReply(ctx context.Context, arg SaveStepModelReplyParams) error {
+	_, err := q.db.Exec(ctx, saveStepModelReply, arg.Payload, arg.StepID)
 	return err
 }
 

@@ -1,10 +1,11 @@
+// 本文件负责聊天历史的读取与转换：分页查询消息、转换成前端使用的消息结构，并计算已读位置。
+
 package httpapi
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"slices"
 	"time"
 
@@ -30,26 +31,15 @@ type chatMessages struct {
 	ReadUpTo *uuid.UUID    `json:"read_up_to"`
 }
 
-func (s *server) listMessages(w http.ResponseWriter, r *http.Request) {
-	session := r.Context().Value(sessionContextKey{}).(database.GetActiveSessionRow)
-	before := uuid.Max
-	if value := r.URL.Query().Get("before"); value != "" {
-		parsed, err := uuid.Parse(value)
-		if err != nil {
-			http.Error(w, "invalid before", http.StatusBadRequest)
-			return
-		}
-		before = parsed
-	}
-
+// historyPage 从 before 往前取一页用户可见消息，供 ready、authenticated 与 history 事件共用。
+func (s *server) historyPage(ctx context.Context, userID uuid.UUID, before uuid.UUID) (chatMessages, error) {
 	// 部分行（Main 未发消息给用户的 assistant 行）不产生消息，因此按行翻页直到凑满一页或没有更早的行。
 	var rowsNewestFirst []database.ListChatRowsAfterRow
 	messageCount := 0
 	for messageCount < historyPageSize {
-		rows, err := s.queries.ListChatRowsBefore(r.Context(), database.ListChatRowsBeforeParams{UserID: session.UserID, ID: before})
+		rows, err := s.queries.ListChatRowsBefore(ctx, database.ListChatRowsBeforeParams{UserID: userID, ID: before})
 		if err != nil {
-			internalError(w, "list chat rows failed", err)
-			return
+			return chatMessages{}, err
 		}
 		for _, row := range rows {
 			rowsNewestFirst = append(rowsNewestFirst, database.ListChatRowsAfterRow(row))
@@ -62,13 +52,11 @@ func (s *server) listMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.Reverse(rowsNewestFirst)
 
-	readUpTo, err := s.readUpTo(r.Context(), session.UserID)
+	readUpTo, err := s.readUpTo(ctx, userID)
 	if err != nil {
-		internalError(w, "get read position failed", err)
-		return
+		return chatMessages{}, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(chatMessages{Messages: chatMessagesFromRows(rowsNewestFirst), ReadUpTo: readUpTo})
+	return chatMessages{Messages: chatMessagesFromRows(rowsNewestFirst), ReadUpTo: readUpTo}, nil
 }
 
 func chatMessagesFromRows(rows []database.ListChatRowsAfterRow) []chatMessage {

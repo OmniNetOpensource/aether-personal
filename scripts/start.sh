@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# 本文件是本地一键启动脚本：同时拉起后端、前端与管理看板等开发服务，并统一转发退出信号。
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,9 +44,6 @@ backend_port="$(
   [[ "${APP_ENV:-}" == dev ]] || fail "此脚本仅用于 APP_ENV=dev。"
   printf '%s' "${PORT:-8080}"
 )"
-# Sandbox startup is temporarily disabled for the web-only release.
-# sandbox_url="$(cd "$project_dir/backend"; . ./.env; printf '%s' "${SANDBOX_URL:-}")"
-
 node --input-type=module - "$backend_port" "$admin_port" <<'JS'
 import net from 'node:net';
 const ports = process.argv.slice(2).map(Number);
@@ -99,21 +97,6 @@ make frontend
 printf '\n[2/4] 启动数据库并执行迁移……\n'
 make -C backend db-up
 make -C backend migrate
-# if [[ "$sandbox_url" == http://127.0.0.1:* || "$sandbox_url" == http://localhost:* ]]; then
-#   [[ -f infra/sandbox/.env ]] || fail "本机沙盒已启用，但缺少 infra/sandbox/.env；配置方式见 infra/sandbox/README.md。"
-#   sandbox_port="$(. ./infra/sandbox/.env; printf '%s' "${SANDBOX_PORT:-18090}")"
-#   [[ "${sandbox_url%/}" == "http://127.0.0.1:$sandbox_port" || "${sandbox_url%/}" == "http://localhost:$sandbox_port" ]] || fail "SANDBOX_URL 与 infra/sandbox/.env 中的端口不一致。"
-#   sandbox_image="$(cd backend; . ./.env; printf '%s' "${SANDBOX_IMAGE:-}")"
-#   if [[ "$sandbox_image" == aether-personal-desktop:dev ]] && ! docker image inspect "$sandbox_image" >/dev/null 2>&1; then
-#     make sandbox-build
-#   fi
-#   printf '\n启动配置中的本机 Linux 沙盒管理服务……\n'
-#   make sandbox-up >"$log_dir/sandbox.log" 2>&1 || {
-#     tail -n 30 "$log_dir/sandbox.log" >&2
-#     fail "本机沙盒启动失败，详见 $log_dir/sandbox.log。"
-#   }
-#   wait_ready "${sandbox_url%/}/health" "" "$log_dir/sandbox.log"
-# fi
 printf '\n[3/4] 构建后端……\n'
 (cd backend && go build -o "$log_dir/server" ./cmd/server)
 

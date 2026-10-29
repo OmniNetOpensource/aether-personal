@@ -111,20 +111,6 @@ type RecapState struct {
 	UpdatedAt         time.Time
 }
 
-type SandboxOperation struct {
-	ID                uuid.UUID
-	UserID            uuid.UUID
-	StepID            uuid.UUID
-	ToolCallID        string
-	ToolName          string
-	Args              []byte
-	State             string
-	ProviderCommandID *string
-	Result            []byte
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-}
-
 type Schedule struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
@@ -170,7 +156,6 @@ type Step struct {
 	StartedAt    time.Time
 	FinishedAt   *time.Time
 	ModelReply   []byte
-	ResumeAfter  *time.Time
 	Purpose      string
 	Activity     []byte
 }
@@ -187,14 +172,4 @@ type User struct {
 	ID        uuid.UUID
 	Email     string
 	CreatedAt time.Time
-}
-
-type UserSandbox struct {
-	UserID         uuid.UUID
-	AllocationID   uuid.UUID
-	ProviderID     *string
-	ProvisionState string
-	LastActivityAt time.Time
-	LastError      *string
-	CreatedAt      time.Time
 }

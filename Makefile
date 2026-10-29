@@ -1,4 +1,4 @@
-.PHONY: dev frontend admin check check-integration check-live check-research sandbox-up sandbox-build sandbox-create sandbox-status sandbox-pause sandbox-resume edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-up prod-status prod-backup
+.PHONY: dev frontend admin check check-integration check-live check-research edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-up prod-status prod-backup
 
 PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
 
@@ -61,12 +61,3 @@ RESEARCH_OUTPUT ?= $(CURDIR)/docs/experiments/agent-research/$(shell date +%Y%m%
 check-research:
 	$(MAKE) -C backend db-up
 	cd backend && set -a && . ./.env && set +a && TEST_DATABASE_URL="$$DATABASE_URL" RUN_LIVE_AGENT_RESEARCH=1 AGENT_RESEARCH_OUTPUT="$(RESEARCH_OUTPUT)" go test ./internal/agent -run TestLiveAgentResearch -count=1 -v -timeout 75m
-
-sandbox-up:
-	docker compose -f infra/sandbox/compose.yaml --env-file infra/sandbox/.env up -d --build
-
-sandbox-build:
-	docker build -t aether-personal-desktop:dev infra/sandbox
-
-sandbox-create sandbox-status sandbox-pause sandbox-resume:
-	set -a && . ./infra/sandbox/.env && set +a && python3 infra/sandbox/sandbox.py $(patsubst sandbox-%,%,$@)

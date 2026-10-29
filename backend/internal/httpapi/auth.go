@@ -1,3 +1,5 @@
+// 本文件负责用户会话认证：处理邮箱验证码登录的核心校验、创建与查找会话。
+
 package httpapi
 
 import (
@@ -6,7 +8,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,111 +20,73 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type sessionContextKey struct{}
+const devUserEmail = "dev@example.com"
 
-func (s *server) requestLoginCode(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Email string `json:"email"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	email, valid := parseEmail(request.Email)
+// requestLoginCodeByEmail 生成并发送验证码；返回空字符串表示成功，否则返回 request_failed 事件的 code。
+func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail string) string {
+	email, valid := parseEmail(rawEmail)
 	if !valid {
-		http.Error(w, "invalid email", http.StatusBadRequest)
-		return
+		return requestFailedInvalidEmail
 	}
 
 	number, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
-		internalError(w, "generate login code failed", err)
-		return
+		slog.Error("generate login code failed", "error", err)
+		return requestFailedInternal
 	}
 	code := fmt.Sprintf("%06d", number.Int64())
 	codeHash := sha256.Sum256([]byte(code))
 
-	savedRows, err := s.queries.SaveLoginCode(r.Context(), database.SaveLoginCodeParams{
+	savedRows, err := s.queries.SaveLoginCode(ctx, database.SaveLoginCodeParams{
 		Email:    email,
 		CodeHash: codeHash[:],
 	})
 	if err != nil {
-		internalError(w, "save login code failed", err)
-		return
+		slog.Error("save login code failed", "error", err)
+		return requestFailedInternal
 	}
 	if savedRows == 0 {
-		http.Error(w, "please wait before requesting another code", http.StatusTooManyRequests)
-		return
+		return requestFailedTooFrequent
 	}
 
-	if err := s.sendLoginCode(r.Context(), email, code); err != nil {
-		internalError(w, "send login code failed", err)
-		return
+	if err := s.sendLoginCode(ctx, email, code); err != nil {
+		slog.Error("send login code failed", "error", err)
+		return requestFailedInternal
 	}
-	w.WriteHeader(http.StatusNoContent)
+	return ""
 }
 
-func (s *server) verifyLoginCode(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Email string `json:"email"`
-		Code  string `json:"code"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	email, valid := parseEmail(request.Email)
+// verifyLoginCodeByEmail 核对验证码并签发会话；成功返回令牌，失败返回 request_failed 事件的 code。
+func (s *server) verifyLoginCodeByEmail(ctx context.Context, rawEmail string, code string) (string, string) {
+	email, valid := parseEmail(rawEmail)
 	if !valid {
-		http.Error(w, "invalid email", http.StatusBadRequest)
-		return
+		return "", requestFailedInvalidEmail
 	}
 
-	savedCodeHash, err := s.queries.UseLoginCodeAttempt(r.Context(), email)
+	savedCodeHash, err := s.queries.UseLoginCodeAttempt(ctx, email)
 	if errors.Is(err, pgx.ErrNoRows) {
-		http.Error(w, "invalid or expired code", http.StatusBadRequest)
-		return
+		return "", requestFailedInvalidCode
 	}
 	if err != nil {
-		internalError(w, "use login code attempt failed", err)
-		return
+		slog.Error("use login code attempt failed", "error", err)
+		return "", requestFailedInternal
 	}
-	inputCodeHash := sha256.Sum256([]byte(request.Code))
+	inputCodeHash := sha256.Sum256([]byte(code))
 	if subtle.ConstantTimeCompare(savedCodeHash, inputCodeHash[:]) != 1 {
-		http.Error(w, "invalid or expired code", http.StatusBadRequest)
-		return
+		return "", requestFailedInvalidCode
 	}
 
-	token, err := s.createUserSession(r.Context(), email)
+	token, err := s.createUserSession(ctx, email)
 	if err != nil {
-		internalError(w, "create login session failed", err)
-		return
+		slog.Error("create login session failed", "error", err)
+		return "", requestFailedInternal
 	}
 
-	if err := s.queries.DeleteLoginCode(r.Context(), email); err != nil {
-		internalError(w, "delete login code failed", err)
-		return
+	if err := s.queries.DeleteLoginCode(ctx, email); err != nil {
+		slog.Error("delete login code failed", "error", err)
+		return "", requestFailedInternal
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
-}
-
-func (s *server) authConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]bool{"dev_login": s.appConfig.AppEnv == "dev"})
-}
-
-func (s *server) devLogin(w http.ResponseWriter, r *http.Request) {
-	const email = "dev@example.com"
-	token, err := s.createUserSession(r.Context(), email)
-	if err != nil {
-		internalError(w, "create dev session failed", err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": email})
+	return token, ""
 }
 
 func (s *server) createUserSession(ctx context.Context, email string) (string, error) {
@@ -142,37 +105,6 @@ func (s *server) createUserSession(ctx context.Context, email string) (string, e
 		return "", err
 	}
 	return token, nil
-}
-
-func (s *server) logout(w http.ResponseWriter, r *http.Request) {
-	session := r.Context().Value(sessionContextKey{}).(database.GetActiveSessionRow)
-	if err := s.queries.DeleteSession(r.Context(), session.ID); err != nil {
-		internalError(w, "delete session failed", err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *server) requireSession(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !found {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		session, err := s.findSession(r.Context(), token)
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if err != nil {
-			internalError(w, "find session failed", err)
-			return
-		}
-
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, session)))
-	})
 }
 
 func (s *server) findSession(ctx context.Context, token string) (database.GetActiveSessionRow, error) {

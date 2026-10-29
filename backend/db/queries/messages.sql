@@ -192,3 +192,12 @@ ORDER BY started_at DESC LIMIT 1;
 
 -- name: SaveCompactedContextSize :exec
 UPDATE model_calls SET context_tokens_after = $2 WHERE step_id = $1 AND purpose = 'compact' AND outcome = 'succeeded';
+
+-- name: GetStepModelReply :one
+-- 进程中断后复用已保存的模型回复，避免同一步骤再次请求模型。
+SELECT model_reply FROM steps WHERE id = sqlc.arg(step_id);
+
+-- name: SaveStepModelReply :exec
+-- 只在尚未保存时写入，恢复过程不会覆盖第一次拿到的回复。
+UPDATE steps SET model_reply = sqlc.arg(payload)::jsonb
+WHERE id = sqlc.arg(step_id) AND model_reply IS NULL;

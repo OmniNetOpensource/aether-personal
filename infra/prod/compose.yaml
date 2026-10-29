@@ -43,12 +43,6 @@ services:
       PARALLEL_API_KEY: ${PARALLEL_API_KEY:-}
       EVERYINFRA_API_KEY: ${EVERYINFRA_API_KEY:-}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
-      # SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-opensandbox}
-      # SANDBOX_DOMAIN: ${SANDBOX_DOMAIN:-}
-      # SANDBOX_URL: ${SANDBOX_URL:-}
-      # SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
-      # SANDBOX_IMAGE: ${SANDBOX_IMAGE:-}
-      # SANDBOX_IDLE_SECONDS: ${SANDBOX_IDLE_SECONDS:-300}
     depends_on:
       postgres: { condition: service_healthy }
     healthcheck:

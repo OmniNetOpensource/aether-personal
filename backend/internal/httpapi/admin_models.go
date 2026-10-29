@@ -1,3 +1,5 @@
+// 本文件实现管理看板的模型配置接口：拉取可用模型目录，读取并保存 Main 与 Subagent 的运行时模型设置。
+
 package httpapi
 
 import (
@@ -58,7 +60,6 @@ func (s *server) availableModels(ctx context.Context) ([]adminModel, error) {
 				MaxCompletionTokens *int32 `json:"max_completion_tokens"`
 			} `json:"top_provider"`
 			Architecture struct {
-				InputModalities  []string `json:"input_modalities"`
 				OutputModalities []string `json:"output_modalities"`
 			} `json:"architecture"`
 		} `json:"data"`
@@ -69,9 +70,6 @@ func (s *server) availableModels(ctx context.Context) ([]adminModel, error) {
 	models := []adminModel{}
 	for _, entry := range catalog.Data {
 		if entry.ID == "" || len(entry.ID) > 160 || entry.Name == "" || utf8.RuneCountInString(entry.Name) > 200 || !slices.Contains(entry.SupportedParameters, "tools") || !slices.Contains(entry.Architecture.OutputModalities, "text") {
-			continue
-		}
-		if s.sandboxClient != nil && !slices.Contains(entry.Architecture.InputModalities, "image") {
 			continue
 		}
 		if entry.TopProvider.MaxCompletionTokens != nil && *entry.TopProvider.MaxCompletionTokens > 0 {
@@ -95,7 +93,7 @@ func (s *server) adminModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model catalog unavailable; retry later", http.StatusBadGateway)
 		return
 	}
-	writeAdminJSON(w, map[string]any{"items": models, "requires_image": s.sandboxClient != nil, "fetched_at": time.Now().UTC()})
+	writeAdminJSON(w, map[string]any{"items": models, "fetched_at": time.Now().UTC()})
 }
 
 func (s *server) adminModelSettings(w http.ResponseWriter, r *http.Request) {

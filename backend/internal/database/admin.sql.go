@@ -24,7 +24,7 @@ WITH calls AS (
   AND ($8::text IS NULL OR c.outcome = $8::text)
   AND ($9::text = '' OR strpos(lower(u.email), lower($9::text)) > 0)
 ), legacy AS (
- SELECT s.id, s.user_id, s.subagent_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.model_reply, s.resume_after, s.purpose, s.activity FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
+ SELECT s.id, s.user_id, s.subagent_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.model_reply, s.purpose, s.activity FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
   AND ($4::uuid IS NULL OR s.user_id = $4::uuid)
   AND ($5::text = 'all' OR ($5::text = 'main' AND s.subagent_id IS NULL)
        OR ($5::text = 'subagent' AND s.subagent_id = $6::uuid))

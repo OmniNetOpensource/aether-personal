@@ -18,8 +18,5 @@
 /docs/experiments/main-role-ab/
 /docs/experiments/agent-research/
 
-# 本地沙盒 ID、截图与运行记录
-/infra/sandbox/.local/
-
 # 生产数据库本地备份
 /infra/prod/.local/

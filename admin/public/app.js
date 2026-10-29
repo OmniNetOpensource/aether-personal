@@ -1,3 +1,5 @@
+// 本文件是管理看板的前端脚本（原生 JS、无构建步骤）：负责管理员登录，以及运行概览、模型调用、模型配置三页的数据加载与渲染。
+
 const root = document.querySelector('#app');
 const dialog = document.querySelector('#detail');
 const tabs = { overview: ['运行概览', '从用户到每一次调用，了解 Agent 正在如何工作。'], calls: ['模型调用', '真实请求尝试、提供方返回用量与结果。'] };
@@ -234,7 +236,7 @@ function detailFrame(title, subtitle) {
 function detailsGrid(items) { const grid = el('dl', 'details-grid'); for (const [label, value] of items) { const group = el('div'); group.append(el('dt', '', label), value instanceof Node ? value : el('dd', '', value == null ? '未知' : String(value))); grid.append(group); } return grid; }
 async function callDetails(call) {
   const content = detailFrame('模型调用详情', '调用元数据与实际请求、响应 JSON');
-  content.append(detailsGrid([['用途', call.purpose === 'recap' ? '运行动态摘要' : call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 / 后估算 Token', call.context_tokens_before == null ? '—' : `${number(call.context_tokens_before)} / ${call.context_tokens_after == null ? '未提交' : number(call.context_tokens_after)}`], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['调用 ID', call.id], ['用户', call.email], ['Agent', call.purpose === 'recap' ? 'Recap' : call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['提供方生成 ID', call.provider_generation_id], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
+  content.append(detailsGrid([['用途', call.purpose === 'recap' ? '运行动态摘要' : call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : number(call.context_tokens_before)], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['调用 ID', call.id], ['用户', call.email], ['Agent', call.purpose === 'recap' ? 'Recap' : call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['提供方生成 ID', call.provider_generation_id], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
   const note = el('div', 'data-note', '请求中断或连接失败时，提供方可能已执行并计费。未知费用不等于 0。'); content.append(note);
   const payloadPanel = el('section', 'request-json');
   payloadPanel.append(el('h3', '', '请求与响应 JSON'), el('p', 'muted', '按本次实际调用保存，包含消息上下文与工具定义；不含 HTTP 认证头。'));
@@ -368,7 +370,7 @@ function modelSettingsPage(content) {
   const error = el('div', 'form-error'); error.id = 'model-save-error'; error.setAttribute('role', 'alert'); form.append(error);
   form.onsubmit = (event) => { event.preventDefault(); saveModelSettings(); };
   content.append(form);
-  content.append(el('p', 'model-catalog-note', `来自 OpenRouter 当前目录，共 ${number(state.catalog.items.length)} 个支持工具调用${state.catalog.requires_image ? '与图像输入' : ''}的模型。`));
+  content.append(el('p', 'model-catalog-note', `来自 OpenRouter 当前目录，共 ${number(state.catalog.items.length)} 个支持工具调用的模型。`));
   updateModelSaveButton();
 }
 function updateModelSaveButton() {

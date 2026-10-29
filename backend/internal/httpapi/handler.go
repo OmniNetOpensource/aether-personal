@@ -1,27 +1,25 @@
+// 本文件是 httpapi 包的总入口：创建 server 并注册健康检查、管理与 WebSocket 等全部 HTTP 路由。
+
 package httpapi
 
 import (
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type server struct {
-	databasePool   *pgxpool.Pool
-	queries        *database.Queries
-	appConfig      config.Config
-	httpClient     *http.Client
-	runner         *agent.Runner
-	connections    *chatConnections
-	sandboxClient  sandbox.Provider
-	desktopViewers sync.Map
+	databasePool *pgxpool.Pool
+	queries      *database.Queries
+	appConfig    config.Config
+	httpClient   *http.Client
+	runner       *agent.Runner
+	connections  *chatConnections
 }
 
 func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner) http.Handler {
@@ -33,28 +31,10 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 		runner:       runner,
 		connections:  newChatConnections(),
 	}
-	if config.SandboxEnabled && appConfig.SandboxURL != "" {
-		s.sandboxClient = sandbox.NewProvider(appConfig.SandboxProvider, appConfig.SandboxURL, appConfig.SandboxAPIKey, appConfig.SandboxDomain, nil)
-	}
 	go s.listenForUserMessages()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.HandleFunc("GET /auth/config", s.authConfig)
-	if appConfig.AppEnv == "dev" {
-		mux.HandleFunc("POST /auth/dev", s.devLogin)
-	}
-	mux.HandleFunc("POST /auth/code", s.requestLoginCode)
-	mux.HandleFunc("POST /auth/verify", s.verifyLoginCode)
-	mux.Handle("POST /auth/logout", s.requireSession(http.HandlerFunc(s.logout)))
-	mux.Handle("GET /messages", s.requireSession(http.HandlerFunc(s.listMessages)))
-	if config.SandboxEnabled {
-		mux.Handle("GET /sandbox", s.requireSession(http.HandlerFunc(s.sandboxStatus)))
-		mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
-	} else {
-		mux.HandleFunc("GET /sandbox", http.NotFound)
-		mux.HandleFunc("GET /sandbox/", http.NotFound)
-	}
 	mux.HandleFunc("POST /admin/login", s.adminLogin)
 	mux.Handle("POST /admin/logout", s.requireAdmin(http.HandlerFunc(s.adminLogout)))
 	mux.Handle("GET /admin/me", s.requireAdmin(http.HandlerFunc(s.adminMe)))
