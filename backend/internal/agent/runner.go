@@ -329,40 +329,12 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 		if err := json.Unmarshal(reply.response.Choices[0].Message, &message); err != nil {
 			return err
 		}
-		// 先把助手消息落库，工具调用从此在历史里可见；随后逐个执行工具并立刻保存各自的回执，全部齐了再结束本步。
+		// 先把助手消息落库，工具调用从此在历史里可见；随后并行执行全部工具，全部齐了再结束本步。
 		if err := r.saveAssistantMessage(ctx, connection, address, reply.stepID, reply.response.Choices[0].Message); err != nil {
 			return err
 		}
-		// 按模型点名的顺序逐个执行工具：已有回执说明中断前已经执行完，跳过；没有的执行后立刻存回执。
-		// 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
-		for _, call := range message.ToolCalls {
-			saved, err := queries.HasStepToolResult(ctx, database.HasStepToolResultParams{StepID: &reply.stepID, ToolCallID: call.ID})
-			if err != nil {
-				return err
-			}
-			if saved {
-				continue
-			}
-			// 登记为事务外的工具在 whileRequest 里执行，期间持续检查执行锁连接还活着。
-			if tool, ok := toolByName(call.Function.Name); ok && tool.outsideTransaction {
-				result, err := whileRequest(ctx, connection, func(requestContext context.Context) (string, error) {
-					return tool.execute(requestContext, r, nil, address, call.Function.Arguments)
-				})
-				if ctx.Err() != nil || connection.Conn().IsClosed() {
-					return errors.Join(ctx.Err(), err)
-				}
-				if err != nil {
-					result = "Error: " + err.Error()
-				}
-				if err := r.saveToolResult(ctx, connection, address, reply.stepID, call, result); err != nil {
-					return err
-				}
-				continue
-			}
-			// 其余工具与回执在同一事务里提交。未登记的名字也走这里，回执说明该工具不可用。
-			if err := r.executeDatabaseToolAndSaveResult(ctx, connection, address, reply.stepID, call); err != nil {
-				return err
-			}
+		if err := r.executeToolCalls(ctx, connection, address, reply.stepID, message.ToolCalls); err != nil {
+			return err
 		}
 		// 全部工具都有回执后结束本步，再唤醒调度进入下一轮。
 		if err := r.finishReply(ctx, connection, address, reply.stepID, reply.response, message, reply.delivery); err != nil {
@@ -370,6 +342,104 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 		}
 		r.Wake(address.userID)
 	}
+}
+
+// executeToolCalls 并行执行一步里模型点名的全部工具，不设并发上限：已有回执的跳过（中断恢复靠它去重），
+// 其余每个调用起一个协程。执行锁连接由调用方独占，不能被多个协程同时使用，所以每个工具都改走连接池：
+// 数据库工具在各自从池中取连接的事务里执行并连回执一起提交，联网工具执行完立刻用池中连接单独存回执；
+// 批次执行期间另有看守协程定期 ping 锁连接，连接失效就取消整批，等看守退出后调用方才继续用锁连接。
+// 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
+func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, calls []toolCall) error {
+	queries := database.New(connection)
+	// 先在锁连接上串行核对回执、排出待执行列表：同一步恢复时已完成的工具不再重跑，重复的调用 ID 只执行第一个。
+	pending := make([]toolCall, 0, len(calls))
+	seen := map[string]bool{}
+	for _, call := range calls {
+		if seen[call.ID] {
+			continue
+		}
+		seen[call.ID] = true
+		saved, err := queries.HasStepToolResult(ctx, database.HasStepToolResultParams{StepID: &stepID, ToolCallID: call.ID})
+		if err != nil {
+			return err
+		}
+		if !saved {
+			pending = append(pending, call)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	batchContext, cancelBatch := context.WithCancel(ctx)
+	defer cancelBatch()
+	// 看守协程在整批工具执行期间看住执行锁连接：连接一断就关掉它并取消整批，避免失去执行权后还继续干活。
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		heartbeat := time.NewTicker(5 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case <-batchContext.Done():
+				return
+			case <-heartbeat.C:
+				pingContext, cancelPing := context.WithTimeout(batchContext, 2*time.Second)
+				err := connection.Ping(pingContext)
+				cancelPing()
+				if err == nil {
+					continue
+				}
+				if batchContext.Err() != nil {
+					return
+				}
+				closeContext, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
+				connection.Conn().Close(closeContext)
+				cancelClose()
+				cancelBatch()
+				return
+			}
+		}
+	}()
+	// 全部待执行工具同时开工，每个协程只写自己下标的结果槽，等待结束后按调用顺序取第一个硬错误。
+	toolErrors := make([]error, len(pending))
+	var waitGroup sync.WaitGroup
+	for index, call := range pending {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整步按中断处理。
+			if tool, ok := toolByName(call.Function.Name); ok && tool.outsideTransaction {
+				result, err := tool.execute(batchContext, r, nil, address, call.Function.Arguments)
+				if err != nil {
+					if batchContext.Err() != nil {
+						toolErrors[index] = err
+						return
+					}
+					result = "Error: " + err.Error()
+				}
+				toolErrors[index] = r.saveToolResult(batchContext, address, stepID, call, result)
+				return
+			}
+			// 其余工具与回执在同一事务里提交。未登记的名字也走这里，回执说明该工具不可用。
+			toolErrors[index] = r.executeDatabaseToolAndSaveResult(batchContext, address, stepID, call)
+		}()
+	}
+	waitGroup.Wait()
+	cancelBatch()
+	<-watcherDone
+	// 上下文取消或锁连接失效属于整步中断：已存的回执保留，未存的由失败收尾补中断回执。
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if connection.Conn().IsClosed() {
+		return errors.New("agent lock connection lost during tool execution")
+	}
+	for _, err := range toolErrors {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // modelResult 是一次模型请求的原始结果，retryable 标记这次失败是否值得重试。
@@ -453,7 +523,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 	}
 }
 
-// whileRequest 在等待一次外部请求（模型或联网工具）期间看住执行锁连接：
+// whileRequest 在等待一次模型请求期间看住执行锁连接（并行工具批次有自己的看守，见 executeToolCalls）：
 // HTTP 请求进行时这条连接是空闲的，靠每 5 秒 ping 一次确认它还活着，连接一断就取消请求，避免失去执行权后还继续干活。
 func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, request func(context.Context) (T, error)) (T, error) {
 	requestContext, cancel := context.WithCancel(ctx)
@@ -510,13 +580,14 @@ func (r *Runner) saveAssistantMessage(ctx context.Context, connection *pgxpool.C
 	})
 }
 
-// saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过。
-func (r *Runner) saveToolResult(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, call toolCall, result string) error {
+// saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
+// 工具并行执行时从连接池取连接保存，同一用户的插入由 LockUserMessages 在数据库内串行排队。
+func (r *Runner) saveToolResult(ctx context.Context, address agentAddress, stepID uuid.UUID, call toolCall, result string) error {
 	content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
 	if err != nil {
 		return err
 	}
-	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
 			return err
@@ -530,8 +601,9 @@ func (r *Runner) saveToolResult(ctx context.Context, connection *pgxpool.Conn, a
 
 // executeDatabaseToolAndSaveResult 在一个事务里执行单个数据库工具并保存它的回执：
 // 工具的写入与回执要么一起提交、要么一起回滚，所以恢复时看到有回执就代表工具已经生效，不会重复执行。
-func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, call toolCall) error {
-	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
+// 每个工具从连接池取自己的连接开事务，同一批工具才能真正并行；同一用户的消息插入由 LockUserMessages 串行排队。
+func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, address agentAddress, stepID uuid.UUID, call toolCall) error {
+	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
 			return err

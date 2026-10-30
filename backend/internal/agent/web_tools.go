@@ -1,4 +1,4 @@
-// 本文件实现联网工具 search 与 fetch_url：调用外部搜索与抓取服务，控制调用节奏，并把网页内容裁剪成模型可用的文本。
+// 本文件实现联网工具 search 与 fetch_url：调用外部搜索与抓取服务，并把网页内容裁剪成模型可用的文本。
 
 package agent
 
@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
@@ -22,12 +21,8 @@ import (
 const maxWebResponseBytes = 8 << 20
 
 type webTools struct {
-	httpClient  *http.Client
-	services    *services.Store
-	searchMutex sync.Mutex
-	nextSearch  time.Time
-	fetchMutex  sync.Mutex
-	nextFetch   time.Time
+	httpClient *http.Client
+	services   *services.Store
 }
 
 type webSearchResult struct {
@@ -55,9 +50,6 @@ func (t *webTools) search(ctx context.Context, args json.RawMessage) (string, er
 	if input.Platform == "google" {
 		credentials, err := t.services.Load(ctx, services.Serper)
 		if err != nil {
-			return "", err
-		}
-		if err := waitForWebCall(ctx, &t.searchMutex, &t.nextSearch); err != nil {
 			return "", err
 		}
 		requestContext, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -242,9 +234,6 @@ func (t *webTools) fetchParallel(ctx context.Context, pageURL string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if err := waitForWebCall(ctx, &t.fetchMutex, &t.nextFetch); err != nil {
-		return "", err
-	}
 	ctx, cancel := context.WithTimeout(ctx, 80*time.Second)
 	defer cancel()
 	var response struct {
@@ -381,24 +370,6 @@ func decodeWebArguments(args json.RawMessage, result any) error {
 		return errors.New("tool arguments must contain one JSON object")
 	}
 	return nil
-}
-
-func waitForWebCall(ctx context.Context, mutex *sync.Mutex, next *time.Time) error {
-	mutex.Lock()
-	start := time.Now()
-	if next.After(start) {
-		start = *next
-	}
-	*next = start.Add(2 * time.Second)
-	mutex.Unlock()
-	timer := time.NewTimer(time.Until(start))
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return ctx.Err()
-	}
 }
 
 func boundedWebError(message string) string {

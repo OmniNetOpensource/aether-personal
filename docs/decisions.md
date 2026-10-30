@@ -126,7 +126,7 @@
 | Subagent 模型 | `SUBAGENT_MODEL` 提供初始默认；管理端可独立切换或跟随 Main，保存后重启仍保留 | [05](wiki/05-main-runtime.md#模型) |
 | 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理），并要求耗时任务主动汇报进度；`send_message` 仅 Agent 间，Subagent 保持工具汇报契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 模型调用失败 | 不向用户显示，记日志与 `steps.error`；2026-10-30 模型单次请求与含上下文准备、重试和退避的一轮调用均限 10 分钟，临时错误最多重试 3 次；联网工具独立保留 120 秒 | [05](wiki/05-main-runtime.md#模型调用失败) |
-| 工具执行与恢复 | 2026-10-28 确认先保存助手消息、逐个工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 工具执行与恢复 | 2026-10-28 确认先保存助手消息、工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单；2026-10-30 改为同一步工具全部并行执行、不设并发上限，每个工具从连接池取自己的连接，锁连接由看守协程统一盯守；同日去掉联网工具原有的全局 2 秒启动间隔，调用立即发出 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Subagent | 与 Main 只通过消息联系；状态由运行时维护；收到消息即唤醒；暂无强制中断 | [05](wiki/05-main-runtime.md#subagent-已实现) |
 | 近期实现顺序 | 已完成 Subagent 联网与主对话；当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | Subagent 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
