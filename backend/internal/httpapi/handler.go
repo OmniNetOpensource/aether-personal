@@ -49,6 +49,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 	mux.Handle("GET /admin/models", s.requireAdmin(http.HandlerFunc(s.adminModels)))
 	mux.Handle("GET /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.adminModelSettings)))
 	mux.Handle("PUT /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.updateAdminModelSettings)))
+	mux.Handle("GET /admin/quotas", s.requireAdmin(http.HandlerFunc(s.adminQuotas)))
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)

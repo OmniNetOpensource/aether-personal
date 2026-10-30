@@ -21,7 +21,7 @@ const apiMethods = new Map([
   ['/admin/login', 'POST'], ['/admin/logout', 'POST'],
   ['/admin/me', 'GET'], ['/admin/snapshot', 'GET'], ['/admin/calls', 'GET'], ['/admin/timeline', 'GET'],
  ['/admin/models', 'GET'], ['/admin/model-settings', 'GET PUT'],
- ['/admin/services', 'GET'],
+ ['/admin/services', 'GET'], ['/admin/quotas', 'GET'],
 ].map(([path, methods]) => [path, new Set(methods.split(' '))]));
 function fail(response, status, message) {
   if (response.headersSent) return response.destroy();

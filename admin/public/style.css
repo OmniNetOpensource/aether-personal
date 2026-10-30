@@ -1450,7 +1450,14 @@ dialog::backdrop {
 .service-status.saved { color:var(--forest); background:var(--surface-muted); }
 .service-status.unreadable { color:var(--error); background:var(--error-soft); }
 .service-card > .service-current { margin:0 0 6px; color:var(--text-secondary); }
-.service-card > .service-updated { margin:0 0 22px; color:var(--text-muted); font-size:11px; }
+.service-card > .service-updated { margin:0 0 6px; color:var(--text-muted); font-size:11px; }
+.service-card > .service-quota { margin:0 0 22px; color:var(--text-secondary); font-size:12px; line-height:1.7; }
+
+/* API 额度面板沿用指标卡片，六个服务在概览里三列排布，窄屏自动收拢。 */
+.quota-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
+.quota-card { background:var(--surface-muted); }
+@media(max-width:960px) { .quota-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:640px) { .quota-grid { grid-template-columns:1fr; } }
 .service-card .model-picker { margin-bottom:16px; }
 .service-card .model-picker input { width:100%; min-width:0; }
 .service-card .form-error { margin:10px 0; }
@@ -1485,6 +1492,7 @@ dialog::backdrop {
 .tool-card { margin-top:10px; padding:10px 12px 12px; border:1px solid var(--line-strong); border-radius:9px; background:var(--surface-muted); }
 .tool-card .timeline-fold { background:var(--surface); }
 .tool-card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.tool-card > .copy-id, .timeline-node > .copy-id { margin-top:8px; }
 .tool-card-head strong { font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--forest); }
 .tool-links { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; }
 .timeline-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }

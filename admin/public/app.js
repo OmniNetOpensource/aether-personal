@@ -6,7 +6,7 @@ const tabs = { overview: ['运行概览', '从用户到每一次调用，了解 
 tabs.models = ['模型配置', '选择 Main 与 Subagent 使用的模型，应用后从下一次请求生效。'];
 tabs.services = ['服务配置', '管理模型、邮件与联网服务的 API Key，保存后从下一次请求生效。'];
 const outcomeLabels = { in_flight: '请求中', succeeded: '成功', http_error: 'HTTP 错误', transport_error: '连接异常', invalid_response: '响应异常', interrupted: '中断 · 结果未知', processing: '处理中', idle: '空闲', failed: '失败' };
-const state = { token: sessionStorage.getItem('aether_admin_token'), me: null, tab: 'overview', hours: 24, user: '', agent: '', model: '', outcome: '', snapshot: null, calls: null, timeline: null, timelineOpen: new Map(), timelineFull: new Map(), window: null, controller: null, generation: 0, updated: null };
+const state = { token: sessionStorage.getItem('aether_admin_token'), me: null, tab: 'overview', hours: 24, user: '', agent: '', model: '', outcome: '', snapshot: null, calls: null, timeline: null, timelineOpen: new Map(), timelineFull: new Map(), window: null, controller: null, generation: 0, updated: null, quotas: null, quotasAt: null };
 const number = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value ?? 0);
 const compact = (value) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value ?? 0);
 const time = (value) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
@@ -54,6 +54,7 @@ function clearAdminData() {
   state.user = ''; state.agent = ''; state.model = ''; state.outcome = '';
   state.modelConfig = null; state.catalog = null; state.modelDraft = null; state.modelSaving = false;
   state.serviceConfig = null; state.serviceSaving = false;
+  state.quotas = null; state.quotasAt = null;
   state.window = null; state.updated = null; state.agentOptionsUser = null; state.browsingPages = false;
   if (dialog.open) dialog.close();
   document.querySelector('#detail-content').replaceChildren();
@@ -132,6 +133,8 @@ async function refresh(newWindow = true) {
     if (state.tab === 'calls') requests.push(api(`/admin/calls?${query()}`, { signal: controller.signal }));
     if (state.tab === 'timeline' && state.user) requests.push(api(`/admin/timeline?${new URLSearchParams({ user_id: state.user, agent: state.agent || 'main' })}`, { signal: controller.signal }));
     const [snapshot, list] = await Promise.all(requests);
+    // 概览的额度面板顺带更新，但额度查询慢或失败不能拖住概览本身。
+    if (state.tab === 'overview') await loadQuotas();
     if (generation !== state.generation) return;
     state.snapshot = snapshot;
     if (state.tab === 'calls') state.calls = list;
@@ -195,8 +198,57 @@ function distribution(items, labelKey, countKey, mode) {
   const list = el('div', 'distribution'); if (!items.length) return empty('暂无记录', '有新调用后将显示分布。'); const max = Math.max(...items.map((item) => item[countKey]), 1);
   for (const item of items.slice(0, 8)) { const row = el('div', 'distribution-row'); const line = el('div', 'distribution-top'); const name = el('span', '', mode === 'model' ? shortModel(item[labelKey]) : item[labelKey]); name.title = item[labelKey]; line.append(name, el('strong', '', number(item[countKey]))); const track = el('div', 'bar-track'); const bar = el('div', 'bar'); bar.style.width = `${item[countKey] / max * 100}%`; track.append(bar); row.append(line, track); list.append(row); } return list;
 }
+// loadQuotas 向后端实时查询各供应商额度；一分钟内复用上次结果，避免概览每 15 秒自动刷新都去打供应商。
+async function loadQuotas(force = false) {
+  if (!force && state.quotasAt && Date.now() - state.quotasAt < 60000) return;
+  const generation = state.generation;
+  try {
+    const data = await api('/admin/quotas', { signal: state.controller.signal });
+    if (generation !== state.generation || !state.me) return;
+    state.quotas = data;
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== state.generation) return;
+    if (error.status === 401 || error.status === 403) { accessLost(error); return; }
+  }
+  state.quotasAt = Date.now();
+}
+// quotaAmount 按供应商的计价单位格式化一个额度数字，未知时不显示成 0。
+function quotaAmount(value, unit) {
+  if (value == null) return '未知';
+  if (unit === 'USD') return `$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (unit === 'CNY') return `¥${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (unit === 'credits') return `${number(value)} 次`;
+  if (unit === '封/月') return `${number(value)} 封`;
+  if (unit === 'Token') return compact(value);
+  return String(value);
+}
+// quotaHeadline 是额度卡片的大数字：查得到显示剩余，查不到显示原因类别，不伪造数字。
+function quotaHeadline(item) {
+  if (item.status === 'ok') return quotaAmount(item.remaining, item.unit);
+  return { unlimited: '不限额', not_configured: '未配置', unreadable: '无法解密', unsupported: '无法查询', error: '查询失败' }[item.status] || '查询失败';
+}
+// quotaNote 组合供应商说明与已用／上限，让管理员一眼看出还剩多少、总共多少。
+function quotaNote(item) {
+  const parts = [];
+  if (item.detail) parts.push(item.detail);
+  if (item.status === 'ok' && item.limit != null) parts.push(`已用 ${quotaAmount(item.used, item.unit)} / 上限 ${quotaAmount(item.limit, item.unit)}`);
+  return parts.join(' · ') || '暂无说明';
+}
+// quotaPanel 是概览页的额度汇总：六个服务各一张卡片，并提供绕过一分钟缓存的手动刷新。
+function quotaPanel() {
+  const refreshQuota = button('刷新额度', async (event) => {
+    event.currentTarget.disabled = true;
+    await loadQuotas(true);
+    if (state.me && state.tab === 'overview') render();
+  }, 'text-button');
+  if (!state.quotas?.items) return panel('API 额度', '各供应商剩余额度，由后端用已保存的 Key 实时查询。', el('div', 'loading-card', '正在查询各供应商额度…'), refreshQuota);
+  const grid = el('div', 'quota-grid');
+  for (const item of state.quotas.items) grid.append(card(item.name, quotaHeadline(item), quotaNote(item), 'quota-card'));
+  return panel('API 额度', '各供应商剩余额度以供应商返回为准；查不到的服务会说明原因，不会显示估算数字。', grid, refreshQuota);
+}
 function overview(content) {
   content.append(metricCards());
+  content.append(quotaPanel());
   const m = state.snapshot.metrics; const coverage = el('div', 'coverage');
   coverage.append(el('span', 'coverage-icon', '◉'), el('span', '', `费用为提供方已知小计，${m.cost_unknown} 次未知；输入 / 输出 Token 分别有 ${m.input_unknown} / ${m.output_unknown} 次未知。`)); content.append(coverage);
   const legend = el('div', 'legend'); legend.append(el('span', 'legend-success', '调用尝试'), el('span', 'legend-error', '失败'));
@@ -320,11 +372,13 @@ function assistantNode(item, results, email) {
   const more = loadFullButton(item); if (more) node.append(more);
   return node;
 }
-// toolCard 把一次工具调用与它的结果放在一起；assign_subagents 的结果可直接跳到对应 Subagent。
+// toolCard 把一次工具调用与它的结果放在一起，并展示可复制的工具调用 ID；assign_subagents 的结果可直接跳到对应 Subagent。
 function toolCard(toolCall, result) {
   const card = el('div', 'tool-card'); const head = el('div', 'tool-card-head');
   head.append(el('strong', '', toolCall.name), result ? el('span', 'timeline-meta', time(result.at)) : el('span', 'timeline-meta pending', '尚未返回结果'));
-  card.append(head, foldable(`${toolCall.id}:args`, '参数', prettyArguments(toolCall.arguments)));
+  card.append(head);
+  if (toolCall.id) card.append(copyChip('工具调用 ID', toolCall.id));
+  card.append(foldable(`${toolCall.id}:args`, '参数', prettyArguments(toolCall.arguments)));
   if (!result) return card;
   const view = fullView(result);
   card.append(foldable(`${toolCall.id}:result`, '结果', view.text));
@@ -338,6 +392,7 @@ function toolCard(toolCall, result) {
 function toolResultNode(item) {
   const view = fullView(item);
   const node = timelineNode('tool', '工具结果', item.at, [el('span', 'timeline-meta', '对应的调用在更早的记录中')]);
+  if (item.tool_call_id) node.append(copyChip('工具调用 ID', item.tool_call_id));
   node.append(foldable(`${item.id}:text`, '结果', view.text));
   const more = loadFullButton(item); if (more) node.append(more);
   return node;
@@ -596,9 +651,14 @@ async function refreshServiceSettings() {
   const generation = ++state.generation;
   const refreshButton = root.querySelector('#refresh'); refreshButton.disabled = true;
   try {
-    const config = await api('/admin/services', { signal: controller.signal });
+    // 服务配置与额度明细一起加载；额度查询失败不阻断凭证管理。
+    const [config, quotas] = await Promise.all([
+      api('/admin/services', { signal: controller.signal }),
+      api('/admin/quotas', { signal: controller.signal }).catch((error) => { if (error.status === 401 || error.status === 403) throw error; return null; }),
+    ]);
     if (generation !== state.generation || !state.me) return;
     state.serviceConfig = config;
+    if (quotas) { state.quotas = quotas; state.quotasAt = Date.now(); }
     root.querySelector('#load-error').hidden = true;
     root.querySelector('#updated').textContent = `${time(new Date().toISOString())} 已更新`;
     render();
@@ -627,6 +687,9 @@ function serviceSettingsPage(content) {
     form.append(heading, el('p', 'muted', descriptions[service.id]));
     const existing = service.status === 'not_configured' ? '当前没有 API Key' : service.key_suffix ? `当前 Key · •••• ${service.key_suffix}` : '当前 Key 已隐藏';
     form.append(el('p', 'service-current', existing), el('p', 'service-updated', service.updated_at ? `最近修改 ${time(service.updated_at)}` : '尚未保存'));
+    // 每张卡片补一行该服务的剩余额度明细，与概览面板共用同一次查询结果。
+    const serviceQuota = state.quotas?.items?.find((item) => item.id === service.id);
+    form.append(el('p', 'service-quota', serviceQuota ? `剩余额度：${quotaHeadline(serviceQuota)}${serviceQuota.detail ? ` · ${serviceQuota.detail}` : ''}` : '剩余额度：暂时无法读取'));
     if (service.status === 'unreadable') form.append(el('p', 'form-error', '无法读取当前凭证。请核对部署加密主密钥，或重新输入 Key 替换。'));
     const label = el('label', 'model-picker', '新的 API Key');
     const key = el('input'); key.type = 'password'; key.autocomplete = 'new-password'; key.maxLength = 8192; key.spellcheck = false; key.placeholder = '输入新 Key；留空保留当前值'; key.setAttribute('aria-label', `${service.name} 新的 API Key`);
@@ -675,5 +738,5 @@ function serviceSettingsPage(content) {
     function refreshControl(disabled) { root.querySelector('#refresh').disabled = disabled; }
     grid.append(form);
   }
-  content.append(grid, el('p', 'model-catalog-note', '“已保存”仅表示凭证已保存，不代表权限、额度或服务可用性已经验证。'));
+  content.append(grid, el('p', 'model-catalog-note', '“已保存”仅表示凭证已保存；剩余额度为打开页面时向供应商实时查询的结果，查询失败或无查询接口时会说明原因。'));
 }
