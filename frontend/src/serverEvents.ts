@@ -30,6 +30,8 @@ export const requestFailedCodeSchema = z.enum([
   'unauthorized',
   'already_authenticated',
   'internal',
+  'verification_required',
+  'login_unavailable',
 ]);
 
 export const serverEventSchema = z.discriminatedUnion('type', [
@@ -37,6 +39,7 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     type: z.literal('ready'),
     authenticated: z.boolean(),
     dev_login: z.boolean(),
+    turnstile_site_key: z.string().optional(),
     email: z.string().optional(),
     history: chatPageSchema.optional(),
   }),

@@ -23,16 +23,19 @@ const (
 	requestFailedUnauthorized         = "unauthorized"
 	requestFailedAlreadyAuthenticated = "already_authenticated"
 	requestFailedInternal             = "internal"
+	requestFailedVerificationRequired = "verification_required"
+	requestFailedLoginUnavailable     = "login_unavailable"
 )
 
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
 // 已登录时同时带上最新一页历史，前端收到后才结束 loading 态。
 type readyEvent struct {
-	Type          string        `json:"type"`
-	Authenticated bool          `json:"authenticated"`
-	DevLogin      bool          `json:"dev_login"`
-	Email         string        `json:"email,omitempty"`
-	History       *chatMessages `json:"history,omitempty"`
+	Type             string        `json:"type"`
+	Authenticated    bool          `json:"authenticated"`
+	DevLogin         bool          `json:"dev_login"`
+	Email            string        `json:"email,omitempty"`
+	History          *chatMessages `json:"history,omitempty"`
+	TurnstileSiteKey string        `json:"turnstile_site_key,omitempty"`
 }
 
 // authenticatedEvent 在同一条连接上完成登录（验证码或开发登录）后发出。

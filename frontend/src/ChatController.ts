@@ -29,6 +29,10 @@ function requestFailedMessage(code: RequestFailedCode): string {
       return '请输入有效的邮箱地址';
     case 'too_frequent':
       return '请求过于频繁，请稍后再试';
+    case 'verification_required':
+      return '安全验证已失效，请完成验证后重试';
+    case 'login_unavailable':
+      return '登录服务暂不可用，请稍后再试';
     case 'invalid_code':
       return '验证码不正确或已过期';
     case 'dev_login_unavailable':
@@ -60,6 +64,7 @@ export class ChatController {
   email = '';
   iconURL = '/app-icon.png';
   devLoginAvailable = false;
+  turnstileSiteKey = '';
   error: string | null = null;
   token: string | null = null;
   private baseURL = '';
@@ -170,6 +175,7 @@ export class ChatController {
         clearTimeout(this.readyTimer);
         this.reconnectAttempt = 0;
         this.devLoginAvailable = event.dev_login;
+        this.turnstileSiteKey = event.turnstile_site_key ?? '';
         this.error = null;
         if (event.authenticated) {
           this.connected = true;
@@ -280,7 +286,7 @@ export class ChatController {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(command.request_id);
         reject(new Error('连接超时，请检查网络后重试'));
-      }, 15000);
+      }, command.type === 'request_code' ? 30000 : 15000);
       this.pendingRequests.set(command.request_id, { resolve, reject, timer });
       if (!this.socketOpen || !this.relay.send(command)) {
         clearTimeout(timer);
@@ -311,11 +317,12 @@ export class ChatController {
     this.pendingRequests.clear();
   }
 
-  async requestCode(email: string) {
+  async requestCode(email: string, turnstileToken: string) {
     await this.sendRequest({
       type: 'request_code',
       request_id: crypto.randomUUID(),
       email: email.trim(),
+      turnstile_token: turnstileToken,
     });
   }
 

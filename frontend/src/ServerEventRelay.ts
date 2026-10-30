@@ -5,7 +5,7 @@ import type { ServerEvent } from './serverEvents.js';
 
 // 前端通过聊天 WebSocket 发往后端的全部命令；hello 由中转在连接打开时自动发出。
 export type ClientCommand =
-  | { type: 'request_code'; request_id: string; email: string }
+  | { type: 'request_code'; request_id: string; email: string; turnstile_token: string }
   | { type: 'verify_code'; request_id: string; email: string; code: string }
   | { type: 'dev_login'; request_id: string }
   | { type: 'load_history'; request_id: string; before?: string }

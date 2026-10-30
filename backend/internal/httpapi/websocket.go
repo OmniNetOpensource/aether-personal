@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type clientFrame struct {
 	LastPosition    *uuid.UUID `json:"last_position"`
 	Email           string     `json:"email"`
 	Code            string     `json:"code"`
+	TurnstileToken  string     `json:"turnstile_token"`
 	Before          *uuid.UUID `json:"before"`
 	ClientMessageID uuid.UUID  `json:"client_message_id"`
 	Text            string     `json:"text"`
@@ -131,6 +133,8 @@ func (s *server) listenOnce(ctx context.Context) error {
 
 // chatWebSocket 处理一条聊天连接的整个生命周期：先经 hello 恢复会话或等待登录，再在主循环里交替做新消息推送、心跳保活与客户端命令分发。
 func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
+	// 生产源站已由 Caddy 验证 Worker 凭证，专用 IP 头只由 Worker 覆盖写入。
+	clientIP, _ := netip.ParseAddr(r.Header.Get("X-Aether-Client-IP"))
 	// 登录靠 hello 中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
 	connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
@@ -201,6 +205,9 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ready := readyEvent{Type: "ready", Authenticated: authenticated, DevLogin: devLogin, Email: email}
+	if !devLogin {
+		ready.TurnstileSiteKey = s.appConfig.TurnstileSiteKey
+	}
 	if authenticated && hello.LastPosition == nil {
 		history, err := s.historyPage(ctx, userID, uuid.Max)
 		if err != nil {
@@ -307,7 +314,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 					continue
 				}
-				if !s.handleLoginFrame(ctx, relay, frame, bindSession, &position) {
+				if !s.handleLoginFrame(ctx, relay, frame, clientIP, bindSession, &position) {
 					return
 				}
 			case "logout":
@@ -342,7 +349,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleLoginFrame 处理未登录连接上的登录命令；登录成功后把连接绑定到该用户并回 authenticated 事件。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
-func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame clientFrame, bindSession func(database.GetActiveSessionRow), position *uuid.UUID) bool {
+func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame clientFrame, clientIP netip.Addr, bindSession func(database.GetActiveSessionRow), position *uuid.UUID) bool {
 	// fail 把失败码按本次请求的 request_id 回给前端，并以“事件是否发得出”作为连接是否可用的判断。
 	fail := func(code string) bool {
 		return relay.send(ctx, requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: code}) == nil
@@ -352,7 +359,7 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	var token string
 	switch frame.Type {
 	case "request_code":
-		if code := s.requestLoginCodeByEmail(ctx, frame.Email); code != "" {
+		if code := s.requestLoginCodeByEmail(ctx, frame.Email, frame.TurnstileToken, clientIP); code != "" {
 			return fail(code)
 		}
 		return relay.send(ctx, codeSentEvent{Type: "code_sent", RequestID: frame.RequestID}) == nil
@@ -361,7 +368,7 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 			return fail(requestFailedDevLoginUnavailable)
 		}
 		var err error
-		token, err = s.createUserSession(ctx, devUserEmail)
+		token, err = s.createUserSession(ctx, s.queries, devUserEmail)
 		if err != nil {
 			slog.Error("create dev session failed", "error", err)
 			return fail(requestFailedInternal)

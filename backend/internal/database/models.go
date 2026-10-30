@@ -33,6 +33,13 @@ type LoginCode struct {
 	CreatedAt time.Time
 }
 
+type LoginRateLimit struct {
+	Scope           string
+	KeyHash         []byte
+	Attempts        int32
+	WindowStartedAt time.Time
+}
+
 type Message struct {
 	ID                     uuid.UUID
 	UserID                 uuid.UUID

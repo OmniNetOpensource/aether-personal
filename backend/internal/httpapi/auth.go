@@ -9,9 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -22,40 +20,6 @@ import (
 
 const devUserEmail = "dev@example.com"
 
-// requestLoginCodeByEmail 生成并发送验证码；返回空字符串表示成功，否则返回 request_failed 事件的 code。
-func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail string) string {
-	email, valid := parseEmail(rawEmail)
-	if !valid {
-		return requestFailedInvalidEmail
-	}
-
-	number, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
-	if err != nil {
-		slog.Error("generate login code failed", "error", err)
-		return requestFailedInternal
-	}
-	code := fmt.Sprintf("%06d", number.Int64())
-	codeHash := sha256.Sum256([]byte(code))
-
-	savedRows, err := s.queries.SaveLoginCode(ctx, database.SaveLoginCodeParams{
-		Email:    email,
-		CodeHash: codeHash[:],
-	})
-	if err != nil {
-		slog.Error("save login code failed", "error", err)
-		return requestFailedInternal
-	}
-	if savedRows == 0 {
-		return requestFailedTooFrequent
-	}
-
-	if err := s.sendLoginCode(ctx, email, code); err != nil {
-		slog.Error("send login code failed", "error", err)
-		return requestFailedInternal
-	}
-	return ""
-}
-
 // verifyLoginCodeByEmail 核对验证码并签发会话；成功返回令牌，失败返回 request_failed 事件的 code。
 func (s *server) verifyLoginCodeByEmail(ctx context.Context, rawEmail string, code string) (string, string) {
 	email, valid := parseEmail(rawEmail)
@@ -63,34 +27,43 @@ func (s *server) verifyLoginCodeByEmail(ctx context.Context, rawEmail string, co
 		return "", requestFailedInvalidEmail
 	}
 
-	savedCodeHash, err := s.queries.UseLoginCodeAttempt(ctx, email)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", requestFailedInvalidCode
-	}
+	var token string
+	failure := requestFailedInvalidCode
+	// 行锁持续到会话创建与验证码删除一起提交，保证并发正确提交也只能成功一次。
+	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
+		queries := database.New(tx)
+		savedCodeHash, err := queries.UseLoginCodeAttempt(ctx, email)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		inputCodeHash := sha256.Sum256([]byte(code))
+		if subtle.ConstantTimeCompare(savedCodeHash, inputCodeHash[:]) != 1 {
+			// 错误验证码也提交尝试次数，不能通过回滚无限猜测。
+			return nil
+		}
+		token, err = s.createUserSession(ctx, queries, email)
+		if err != nil {
+			return err
+		}
+		if err := queries.DeleteLoginCode(ctx, email); err != nil {
+			return err
+		}
+		failure = ""
+		return nil
+	})
 	if err != nil {
-		slog.Error("use login code attempt failed", "error", err)
+		slog.Error("verify login code transaction failed", "error", err)
 		return "", requestFailedInternal
 	}
-	inputCodeHash := sha256.Sum256([]byte(code))
-	if subtle.ConstantTimeCompare(savedCodeHash, inputCodeHash[:]) != 1 {
-		return "", requestFailedInvalidCode
-	}
-
-	token, err := s.createUserSession(ctx, email)
-	if err != nil {
-		slog.Error("create login session failed", "error", err)
-		return "", requestFailedInternal
-	}
-
-	if err := s.queries.DeleteLoginCode(ctx, email); err != nil {
-		slog.Error("delete login code failed", "error", err)
-		return "", requestFailedInternal
-	}
-	return token, ""
+	return token, failure
 }
 
-func (s *server) createUserSession(ctx context.Context, email string) (string, error) {
-	userID, err := s.queries.UpsertUserByEmail(ctx, email)
+// createUserSession 使用调用方的查询事务，验证码登录与开发登录共用签发逻辑。
+func (s *server) createUserSession(ctx context.Context, queries *database.Queries, email string) (string, error) {
+	userID, err := queries.UpsertUserByEmail(ctx, email)
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +71,7 @@ func (s *server) createUserSession(ctx context.Context, email string) (string, e
 	rand.Read(tokenBytes)
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
 	tokenHash := sha256.Sum256([]byte(token))
-	if err := s.queries.CreateSession(ctx, database.CreateSessionParams{
+	if err := queries.CreateSession(ctx, database.CreateSessionParams{
 		UserID:    userID,
 		TokenHash: tokenHash[:],
 	}); err != nil {

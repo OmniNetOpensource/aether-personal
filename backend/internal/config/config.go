@@ -17,6 +17,9 @@ type Config struct {
 	AdminPasswordSalt    []byte
 	AdminPasswordKey     []byte
 	ServiceEncryptionKey []byte
+	TurnstileSiteKey     string
+	TurnstileSecretKey   string
+	TurnstileHostname    string
 	AppEnv               string
 	Port                 string
 	DatabaseURL          string
@@ -99,6 +102,9 @@ func Load() (Config, error) {
 		AdminPasswordSalt:    adminPasswordSalt,
 		AdminPasswordKey:     adminPasswordKey,
 		ServiceEncryptionKey: serviceEncryptionKey,
+		TurnstileSiteKey:     strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
+		TurnstileSecretKey:   strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
+		TurnstileHostname:    strings.ToLower(strings.TrimSpace(os.Getenv("TURNSTILE_HOSTNAME"))),
 		Port:                 port,
 		DatabaseURL:          databaseURL,
 		DatabaseMaxConns:     databaseMaxConns,

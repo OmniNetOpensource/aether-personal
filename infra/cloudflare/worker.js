@@ -43,6 +43,10 @@ export default {
     origin.search = url.search;
     const forwarded = new Request(origin, request);
     forwarded.headers.set('X-Aether-Origin-Key', env.ORIGIN_AUTH_SECRET);
+    // 只信任 Cloudflare 提供的客户端地址，覆盖浏览器提交的同名头。
+    forwarded.headers.delete('X-Aether-Client-IP');
+    const clientIP = request.headers.get('CF-Connecting-IP');
+    if (clientIP) forwarded.headers.set('X-Aether-Client-IP', clientIP);
     forwarded.headers.set('Cache-Control', 'no-store');
     try {
       const response = await fetch(forwarded, { redirect: 'manual' });

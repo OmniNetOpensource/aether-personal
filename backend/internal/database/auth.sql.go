@@ -26,6 +26,16 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const deleteExpiredLoginRateLimits = `-- name: DeleteExpiredLoginRateLimits :exec
+DELETE FROM login_rate_limits WHERE window_started_at < now() - interval '2 days'
+`
+
+// 最长窗口为一天；清理超过两天的记录不会改变任何有效计数。
+func (q *Queries) DeleteExpiredLoginRateLimits(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredLoginRateLimits)
+	return err
+}
+
 const deleteLoginCode = `-- name: DeleteLoginCode :exec
 DELETE FROM login_codes WHERE email = $1
 `
@@ -129,4 +139,37 @@ func (q *Queries) UseLoginCodeAttempt(ctx context.Context, email string) ([]byte
 	var code_hash []byte
 	err := row.Scan(&code_hash)
 	return code_hash, err
+}
+
+const useLoginRateLimit = `-- name: UseLoginRateLimit :execrows
+INSERT INTO login_rate_limits (scope, key_hash, attempts)
+VALUES ($1, $2, 1)
+ON CONFLICT (scope, key_hash) DO UPDATE
+SET attempts = CASE WHEN login_rate_limits.window_started_at <= now() - $3::integer * interval '1 second'
+        THEN 1 ELSE login_rate_limits.attempts + 1 END,
+    window_started_at = CASE WHEN login_rate_limits.window_started_at <= now() - $3::integer * interval '1 second'
+        THEN now() ELSE login_rate_limits.window_started_at END
+WHERE login_rate_limits.attempts < $4::integer
+    OR login_rate_limits.window_started_at <= now() - $3::integer * interval '1 second'
+`
+
+type UseLoginRateLimitParams struct {
+	Scope         string
+	KeyHash       []byte
+	WindowSeconds int32
+	MaxAttempts   int32
+}
+
+// 原子占用一个窗口名额，未过期且已满时不更新；IP 和邮箱只保存哈希。
+func (q *Queries) UseLoginRateLimit(ctx context.Context, arg UseLoginRateLimitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useLoginRateLimit,
+		arg.Scope,
+		arg.KeyHash,
+		arg.WindowSeconds,
+		arg.MaxAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
