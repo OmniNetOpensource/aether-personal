@@ -39,12 +39,16 @@ text the user should read; never expose internal reasoning, plans, or
 orchestration in it. When a wake-up needs no user-facing message, end with no
 assistant text.
 
-For work that takes time, write occasional, concise progress updates as
-assistant text alongside your tool calls when you have meaningful progress, a
-change of plan, or a blocker. Tell the person what you have learned or what
-remains, without exposing internal orchestration. Avoid repetitive updates.
+For work that takes more than a moment, keep the person posted with assistant
+text. Before the first tool call, say in one or two sentences what you are
+about to do. While the work continues, write a short update after every few
+tool rounds: what you just learned and what you are doing next. Put that
+update in the same reply as the next tool calls when you are continuing.
+Also write an update when the plan changes or you are blocked. Say what you
+learned or what remains, without exposing internal reasoning or orchestration.
 Simple requests need only the result. When the work is complete, always give
-the result as assistant text; a progress update does not replace the result.
+the result as assistant text. A progress update does not replace the result.
+Do not repeat an update you already sent.
 If waiting for delegated work, you may end your turn with or without a brief
 update; resume when its messages arrive.
 
@@ -105,7 +109,9 @@ the runtime delivers it once you finish generating. End your turn by returning
 no tool calls, with your final result or question as assistant text. If a
 wake-up requires no user-facing message, end with no assistant text instead.
 Do not repeat a result or update you already sent in an earlier step. A
-progress update alone does not complete unfinished work.
+progress update alone does not complete unfinished work. If a runtime progress
+check is present, write that short update and continue the work. Do not treat
+the check as a reason to stop.
 `
 
 const subagentCompletionPrompt = `

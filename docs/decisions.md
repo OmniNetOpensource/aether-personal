@@ -117,12 +117,12 @@
 | 按用户串行 | `pg_try_advisory_lock`，释放后唤醒调度；周期扫描补偿漏通知 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
-| Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务以正文汇报关键进展、完成后以正文发送结果，不写正文即沉默；`send_message` 只用于给 Subagent 发指令，Subagent 仍只通过它向 Main 汇报 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
+| Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；连续 5 轮只有工具、没有用户可见正文时插入一条用户不可见的系统提醒，同一次沉默最多 3 次。不写正文即沉默；`send_message` 只用于给 Subagent 发指令 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值 | [05](wiki/05-main-runtime.md#模型) |
 | ikun Gemini | 2026-10-30 确认接入 Aether 的 Gemini 原生渠道，供 Main、Subagent 与压缩使用；保留 OpenRouter。凭证由看板管理；用户指定默认地址 `https://api.ikuncode.cc`，页面只需填写 Key | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
 | 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | Subagent 模型 | `SUBAGENT_MODEL` 提供初始默认；管理端可独立切换或跟随 Main，保存后重启仍保留 | [05](wiki/05-main-runtime.md#模型) |
-| 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理）、`send_message` 仅 Agent 间，Subagent 保持工具汇报契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
+| 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理），并要求耗时任务主动汇报进度；`send_message` 仅 Agent 间，Subagent 保持工具汇报契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 模型调用失败 | 不向用户显示，记日志与 `steps.error`；2026-10-30 模型单次请求与含上下文准备、重试和退避的一轮调用均限 10 分钟，临时错误最多重试 3 次；联网工具独立保留 120 秒 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 工具执行与恢复 | 2026-10-28 确认先保存助手消息、逐个工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Subagent | 与 Main 只通过消息联系；状态由运行时维护；收到消息即唤醒；暂无强制中断 | [05](wiki/05-main-runtime.md#subagent-已实现) |

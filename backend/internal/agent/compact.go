@@ -25,6 +25,7 @@ const compactPrompt = `Please compress your context for the next conversation. T
 
 // prepareContext 是每次调用模型前的上下文入口：组装该 Agent 的完整消息，
 // 判断要不要压缩（上次官方用量达到 token 阈值或容量上限；不再看闲置时长），需要时先完成压缩再返回最终请求和消息列表。
+// Main 若已连续多轮只调工具、没有用户可见正文，会在发出前插入一条进度提醒。
 // 输入按已确定的值信任：模型、容量、阈值都来自设置；压缩只对模型调用本身失败负责，不处理其他假想状态（见 docs/wiki/05-main-runtime.md）。
 // 存进数据库的摘要还带着投递状态，模型只看到其中的文本部分。newMessageIDs 是 prepareStep 这一步刚领到的待读消息，
 // 用来认出哪条是刚到的用户消息；没有它，光看上下文列表分不清新消息和早已被回复过的用户消息。
@@ -110,7 +111,12 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, a
 		keptMessages = messages[newUserMessageIndex:]
 	}
 	// 没达到阈值就不压缩；刚领到的用户消息之前没有原文时也不压缩（见上面新消息一段的说明）。
+	// 发出前仍可能为 Main 补一条进度提醒，所以不压缩时在这里重新组装请求。
 	if reason == "" || (newUserMessageIndex >= 0 && !newUserHistoryHasOriginal) {
+		messages, err = r.appendProgressReminder(ctx, connection, address, messages, messages)
+		if err != nil {
+			return modelRequest{}, nil, err
+		}
 		return r.agentRequest(address, messages, model, outputLimit), messages, nil
 	}
 	// 组装压缩请求：待压缩范围按原来的角色、顺序和内容原样发出，不做任何处理，只在末尾追加一条压缩指令；
@@ -180,6 +186,11 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, a
 		return modelRequest{}, nil, err
 	}
 	committed = true
+	// 提醒按压缩前的原文计数，但只追加在摘要之后：它是给接下来这次请求的提示，不应被写进摘要。
+	nextMessages, err = r.appendProgressReminder(ctx, connection, address, messages, nextMessages)
+	if err != nil {
+		return modelRequest{}, nil, err
+	}
 	// 压缩期间新到的消息留给下一轮：prepareStep 领走后，prepareContext 会读到摘要加其后的消息，不会丢。
 	return r.agentRequest(address, nextMessages, model, outputLimit), nextMessages, nil
 }

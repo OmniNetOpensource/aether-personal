@@ -40,7 +40,7 @@
 - Main Runtime：`messageList` 上下文，按用户串行处理。
 - Schedule：Main 与 Subagent 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
 - Main 可直接执行或委派任务，与 Subagent 共用联网执行工具；消息和派发权限按角色区分。
-- Main 在耗时任务中通过 `send_message` 汇报关键进展，完成后发送结果，禁止直接输出正文。历史检索 `search_message`、`read_message` 尚待实现。
+- Main 在耗时任务中用正文汇报进度，完成后用正文给结果；连续 5 轮只有工具调用时，运行时插入一条用户看不见的提醒。历史检索 `search_message`、`read_message` 尚待实现。
 - 按任务创建 Subagent，独立上下文、后台执行、限额并行。
 - Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知。
 - 按用户权限搜索和读取历史消息。
