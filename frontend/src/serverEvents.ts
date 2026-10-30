@@ -22,20 +22,6 @@ export const chatPageSchema = z.object({
   read_up_to: z.string().nullable().optional(),
 });
 
-export const activitySchema = z.discriminatedUnion('state', [
-  z.object({
-    state: z.literal('idle'),
-    revision: z.number().int().nonnegative(),
-    work_version: z.number().int().nonnegative(),
-  }),
-  z.object({
-    state: z.literal('working'),
-    summary: z.string(),
-    revision: z.number().int().nonnegative(),
-    work_version: z.number().int().nonnegative(),
-  }),
-]);
-
 export const requestFailedCodeSchema = z.enum([
   'invalid_email',
   'too_frequent',
@@ -66,7 +52,6 @@ export const serverEventSchema = z.discriminatedUnion('type', [
   chatPageSchema.extend({
     type: z.literal('messages'),
     main_thinking: z.boolean().optional(),
-    activity: activitySchema.optional(),
   }),
   z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),
   z.object({ type: z.literal('logged_out'), request_id: z.uuid() }),
@@ -79,5 +64,4 @@ export const serverEventSchema = z.discriminatedUnion('type', [
 
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 export type ChatPage = z.infer<typeof chatPageSchema>;
-export type Activity = z.infer<typeof activitySchema>;
 export type RequestFailedCode = z.infer<typeof requestFailedCodeSchema>;

@@ -83,17 +83,18 @@ func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
 		}}
 	}
 
-	var messages []chatMessage
-	for _, sent := range agent.MessagesToUser(row.Content) {
-		messages = append(messages, chatMessage{
-			ID:        sent.ToolCallID,
-			Position:  row.ID,
-			Sender:    "main",
-			Text:      sent.Text,
-			CreatedAt: row.CreatedAt,
-		})
+	// Main 的一条助手消息至多产生一条用户消息，正文就是消息内容，显示 ID 与所在行共用行 ID。
+	text := agent.AssistantTextToUser(row.Content)
+	if text == "" {
+		return nil
 	}
-	return messages
+	return []chatMessage{{
+		ID:        row.ID.String(),
+		Position:  row.ID,
+		Sender:    "main",
+		Text:      text,
+		CreatedAt: row.CreatedAt,
+	}}
 }
 
 func (s *server) readUpTo(ctx context.Context, userID uuid.UUID) (*uuid.UUID, error) {

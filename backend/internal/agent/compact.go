@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
@@ -62,6 +63,10 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, a
 	inputLimit := int64(math.MaxInt32)
 	if capacity > 0 {
 		inputLimit = capacity - int64(outputLimit) - max(1024, capacity/20)
+		// Gemini 目录给的是独立输入上限，不像 OpenRouter 总上下文容量那样扣除输出预算。
+		if strings.HasPrefix(model, "ikun:gemini-") {
+			inputLimit = capacity - max(1024, capacity/20)
+		}
 	}
 	threshold := min(int64(settings.CompactAtTokens), inputLimit)
 	reason := ""

@@ -3,7 +3,7 @@
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
 import type { ClientCommand } from './ServerEventRelay.js';
-import type { Activity, ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
+import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
 
 type Delivery = 'sending' | 'failed' | 'delivered' | 'read';
 export interface ChatMessage {
@@ -55,7 +55,6 @@ export class ChatController {
   initializing = true;
   connected = false;
   mainThinking = false;
-  activity: Activity = { state: 'idle', revision: 0, work_version: 0 };
   loadingHistory = false;
   hasMoreHistory = true;
   email = '';
@@ -130,7 +129,6 @@ export class ChatController {
     if (this.disposed) return;
     this.socketOpen = false;
     this.connected = this.mainThinking = false;
-    this.activity = { state: 'idle', revision: 0, work_version: 0 };
     clearTimeout(this.readyTimer);
     this.rejectPendingRequests(new Error('连接已断开，请稍后重试'));
     this.messages = this.messages.map((message) =>
@@ -238,9 +236,6 @@ export class ChatController {
       case 'messages':
         this.connected = true;
         this.mainThinking = event.main_thinking === true;
-        if (event.activity && event.activity.revision >= this.activity.revision) {
-          this.activity = event.activity;
-        }
         this.error = null;
         this.merge(event);
         break;
@@ -266,7 +261,6 @@ export class ChatController {
   }
 
   private clearLocalSession() {
-    this.activity = { state: 'idle', revision: 0, work_version: 0 };
     this.token = null;
     this.mainThinking = false;
     this.historyLoaded = false;

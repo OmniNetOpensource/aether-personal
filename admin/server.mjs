@@ -19,8 +19,9 @@ const staticFiles = new Map([
 ]);
 const apiMethods = new Map([
   ['/admin/login', 'POST'], ['/admin/logout', 'POST'],
-  ['/admin/me', 'GET'], ['/admin/snapshot', 'GET'], ['/admin/calls', 'GET'],
+  ['/admin/me', 'GET'], ['/admin/snapshot', 'GET'], ['/admin/calls', 'GET'], ['/admin/timeline', 'GET'],
  ['/admin/models', 'GET'], ['/admin/model-settings', 'GET PUT'],
+ ['/admin/services', 'GET'],
 ].map(([path, methods]) => [path, new Set(methods.split(' '))]));
 function fail(response, status, message) {
   if (response.headersSent) return response.destroy();
@@ -29,8 +30,11 @@ function fail(response, status, message) {
 }
 async function proxy(request, response, url) {
   const path = url.pathname.slice(4);
-  const callDetail = /^\/admin\/calls\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
-  const methods = apiMethods.get(path) || (callDetail ? new Set(['GET']) : null);
+  const callDetail = /^\/admin\/(calls|timeline\/messages)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
+  const serviceConfig = /^\/admin\/services\/(openrouter|ikun_gemini|resend|serper|parallel|everyinfra)$/.test(path);
+  const methods = apiMethods.get(path) || (callDetail ? new Set(['GET']) : serviceConfig ? new Set(['PUT']) : null);
+  // 请求详情、时间线与消息全文可能超过缓冲上限，直接流式转发。
+  const streamed = callDetail || path === '/admin/timeline';
   if (!methods) return fail(response, 404, 'Not found');
   if (!methods.has(request.method)) return fail(response, 405, 'Method not allowed');
   const chunks = [];
@@ -46,7 +50,7 @@ async function proxy(request, response, url) {
   const target = new URL(path + url.search, upstream);
   const transport = target.protocol === 'https:' ? https : http;
   const forwarded = transport.request(target, { method: request.method, headers }, (received) => {
-    if (callDetail) {
+    if (streamed) {
       response.writeHead(received.statusCode || 502, { 'Content-Type': received.headers['content-type'] || 'application/json' });
       received.on('error', () => response.destroy());
       received.pipe(response);

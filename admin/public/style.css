@@ -1,4 +1,4 @@
-/* 本文件是管理看板的全局样式：定义看板布局、表格、指标卡与模型配置页等全部界面外观。 */
+/* 本文件是管理看板的全局样式：定义看板布局、调用观测、模型选择与服务凭证配置的界面外观。 */
 :root {
   --forest: #204b32;
   --forest-deep: #173b29;
@@ -637,6 +637,43 @@ tbody tr:hover {
   overflow:hidden;
   text-overflow:ellipsis;
 }
+.request-ids {
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:6px;
+}
+.copy-id {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  max-width:100%;
+}
+.copy-id-label {
+  flex:none;
+  font-size:10px;
+  color:var(--text-muted);
+}
+.copy-id-value {
+  font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color:var(--forest);
+  user-select:all;
+}
+.copy-id-button {
+  flex:none;
+  border:1px solid var(--line);
+  background:var(--surface);
+  color:var(--forest);
+  border-radius:4px;
+  padding:2px 8px;
+  font-size:10px;
+  line-height:1.4;
+}
+.copy-id-button:hover { border-color:var(--forest-border); background:var(--gold-soft); }
+.timeline-node > .request-ids { margin:0 0 8px; }
+#detail-content .request-ids { margin:0 0 20px; }
+#detail-content .copy-id,.timeline-node .copy-id { flex-wrap:wrap; }
+#detail-content .copy-id-value,.timeline-node .copy-id-value { overflow-wrap:anywhere; white-space:normal; }
 .data-note {
   font-size:9px;
   color:var(--text-muted);
@@ -1405,3 +1442,52 @@ dialog::backdrop {
 }
 
 .compact-settings { margin-top:22px; }
+
+/* 服务配置沿用模型卡片的布局，状态与操作保持可见，长接口地址不撑开页面。 */
+.service-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+.service-heading h3 { font-size:18px; font-weight:550; }
+.service-status { padding:5px 9px; border-radius:5px; font-size:11px; color:var(--text-muted); background:var(--surface-muted); }
+.service-status.saved { color:var(--forest); background:var(--surface-muted); }
+.service-status.unreadable { color:var(--error); background:var(--error-soft); }
+.service-card > .service-current { margin:0 0 6px; color:var(--text-secondary); }
+.service-card > .service-updated { margin:0 0 22px; color:var(--text-muted); font-size:11px; }
+.service-card .model-picker { margin-bottom:16px; }
+.service-card .model-picker input { width:100%; min-width:0; }
+.service-card .form-error { margin:10px 0; }
+.service-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
+
+/* Agent 运行过程时间线：左侧竖线串起节点，圆点颜色区分输入、推理、工具与失败请求，长内容折叠显示。 */
+.timeline { list-style:none; margin:0; padding:4px 23px 24px 44px; position:relative; }
+.timeline:before { content:""; position:absolute; left:28px; top:0; bottom:16px; width:1px; background:var(--line); }
+.timeline-node { position:relative; padding:12px 0 14px; border-bottom:1px solid var(--surface-muted); }
+.timeline-node:before { content:""; position:absolute; left:-20px; top:17px; width:9px; height:9px; border-radius:50%; background:var(--line-strong); box-shadow:0 0 0 3px var(--surface); }
+.timeline-node.input:before { background:var(--gold); }
+.timeline-node.assistant:before { background:var(--forest); }
+.timeline-node.summary:before { background:var(--forest-border); }
+.timeline-node.call:before { background:var(--error-chart); }
+.timeline-node.call.in_flight:before { background:var(--gold); }
+.timeline-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin-bottom:8px; }
+.timeline-title { font-size:13px; font-weight:650; color:var(--text); }
+.timeline-time,.timeline-meta { font-size:11px; color:var(--text-muted); }
+.timeline-meta.pending { color:var(--warning); }
+.timeline-head .text-button { margin-left:auto; padding:2px; }
+.timeline-bubble { max-width:760px; padding:10px 13px; border-radius:9px; background:var(--gold-soft); color:var(--text); font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.timeline-node.runtime .timeline-bubble { background:var(--surface-muted); color:var(--text-secondary); font-size:12px; }
+.timeline-muted { margin:6px 0; font-size:12px; color:var(--text-muted); }
+.timeline-fold { margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); }
+.timeline-fold summary { display:flex; gap:10px; align-items:baseline; padding:8px 12px; cursor:pointer; font-size:12px; min-width:0; }
+.timeline-fold .fold-label { flex:none; font-weight:600; color:var(--text-secondary); }
+.timeline-fold .fold-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.timeline-fold[open] .fold-preview { display:none; }
+.timeline-fold.reasoning { background:var(--canvas); border-style:dashed; }
+.timeline-fold.reasoning .timeline-text { color:var(--text-secondary); font-style:italic; }
+.timeline-text { margin:0; padding:4px 12px 12px; max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text); }
+.tool-card { margin-top:10px; padding:10px 12px 12px; border:1px solid var(--line-strong); border-radius:9px; background:var(--surface-muted); }
+.tool-card .timeline-fold { background:var(--surface); }
+.tool-card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.tool-card-head strong { font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--forest); }
+.tool-links { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; }
+.timeline-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+.timeline-images img { max-width:min(100%,520px); border:1px solid var(--line); border-radius:8px; }
+.timeline-load { display:inline-block; margin-top:6px; }
+.timeline-more,.timeline-empty { padding:12px 0; color:var(--text-muted); font-size:12px; }

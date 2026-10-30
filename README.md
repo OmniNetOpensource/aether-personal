@@ -20,7 +20,7 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，Subagent 默认跟随 Main，可分别配置 |
+| 模型服务 | OpenRouter 与可选的 ikun Gemini；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，Subagent 默认跟随 Main，可分别配置 |
 | 密钥与费用 | OpenRouter / Resend Key 由部署的企业配置，费用由该企业承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
@@ -81,15 +81,18 @@ sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有�
 
 需要 Go `1.27.2`、Docker，以及 Node.js `^20.19.0 || >=22.12.0`（建议 Node 24）。前端依赖固定在 `frontend/package-lock.json`，不再需要 Flutter SDK。
 
-首次准备配置并填入服务密钥：
+首次准备基础配置与管理员登录：
 
 ```sh
 cp backend/.env.example backend/.env
-# 编辑 backend/.env，填写 OPENROUTER_API_KEY 及联网工具密钥
+# 用 openssl rand -base64 32 生成主密钥，填入 backend/.env 的 SERVICE_ENCRYPTION_KEY
+python3 scripts/set-admin-password.py
 make dev
 ```
 
 打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面与 WebSocket。页面打开后先显示 loading，WebSocket 就绪后本地 dev 自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
+
+另一个终端执行 `make admin`，进入 [管理看板](http://127.0.0.1:5174) 的“服务配置”页填写 OpenRouter、ikun Gemini、Resend、Serper、Parallel 和 EveryInfra 凭证。修改从下一次请求生效，无需重启。服务未配置时允许进入看板，使用该服务时报未配置。已有 `.env` 的升级方式见 [服务凭证管理](docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。
 
 检查代码和真实数据库运行时：
 
@@ -122,18 +125,13 @@ make db-down   # 停止本地 PostgreSQL
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式（dev 文本，prod JSON） |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
 | `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 或 Subagent 占一条；另有一条独立 LISTEN 连接 |
-| `OPENROUTER_API_KEY` | 必填，OpenRouter 的 API Key |
-| `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017` |
+| `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
+| `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
 | `MAX_OUTPUT_TOKENS` | 可选，单次请求输出 Token 上限，默认 `8192`，包含推理 Token；按保存时已知模型能力缩小 |
 | `SUBAGENT_MODEL` | 可选，Subagent 的初始默认模型，留空跟随 Main；可在管理看板切换 |
-| `SERP_API_KEY` | Serper Google 搜索密钥 |
-| `PARALLEL_API_KEY` | 普通网页及 Reddit 正文读取密钥 |
-| `EVERYINFRA_API_KEY` | 微信公众号、小红书搜索及正文读取密钥 |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
-| `RESEND_API_KEY` | `prod` 必填，Resend 的 API Key |
-| `EMAIL_FROM` | `prod` 必填，验证码邮件发件人，如 `Aether <noreply@company.com>`；域名需先在 Resend 后台验证 |
 
 本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
 
@@ -149,6 +147,6 @@ make db-down   # 停止本地 PostgreSQL
 
 ## 管理看板（开发中）
 
-看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`，打开 [管理看板](http://127.0.0.1:5174)。无第三方依赖或构建步骤，需要 Node.js 22.9 或更新版本。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./scripts/start.sh` 统一启动聊天前后端与看板。
+看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`，打开 [管理看板](http://127.0.0.1:5174)。无第三方依赖或构建步骤，需要 Node.js 22.9 或更新版本。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
 看板包含运行概览、模型调用和模型配置。可按用户和 Main / Subagent 筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

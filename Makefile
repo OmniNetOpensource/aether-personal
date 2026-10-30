@@ -1,4 +1,4 @@
-.PHONY: dev frontend admin check check-integration check-live check-research edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-up prod-status prod-backup
+.PHONY: dev frontend admin check check-integration check-live check-research edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup
 
 PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
 
@@ -22,6 +22,9 @@ prod-db-up:
 
 prod-migrate:
 	$(PROD_COMPOSE) run --rm migrate
+
+prod-import-services:
+	$(PROD_COMPOSE) run --rm import-services
 
 prod-up:
 	$(PROD_COMPOSE) up -d --wait api admin gateway

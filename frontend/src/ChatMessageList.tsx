@@ -20,9 +20,7 @@ export function ChatMessageList({
   const userScrolling = useRef(false);
   const loadingOlder = useRef(false);
   const messages = controller.messages;
-  const recap = controller.activity.state === 'working' ? controller.activity.summary : '';
-  const thinking =
-    controller.connected && (controller.mainThinking || controller.activity.state === 'working');
+  const thinking = controller.connected && controller.mainThinking;
   const lastUserMessageIndex = messages.reduce(
     (last, message, index) => (message.isUser ? index : last),
     -1,
@@ -34,7 +32,7 @@ export function ChatMessageList({
   };
   useLayoutEffect(() => {
     if (stickToBottom.current && !loadingOlder.current) scrollToBottom();
-  }, [messages, thinking, recap, stickToBottom]);
+  }, [messages, thinking, stickToBottom]);
   useEffect(() => {
     const resize = new ResizeObserver(() => {
       if (stickToBottom.current && !loadingOlder.current) scrollToBottom();
@@ -137,7 +135,7 @@ export function ChatMessageList({
             </div>
           );
         })}
-        {thinking && <AssistantWorkingStatus recap={recap} />}
+        {thinking && <AssistantWorkingStatus />}
       </div>
     </div>
   );

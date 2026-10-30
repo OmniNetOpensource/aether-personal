@@ -1,11 +1,12 @@
-// 本文件是管理看板的前端脚本（原生 JS、无构建步骤）：负责管理员登录，以及运行概览、模型调用、模型配置三页的数据加载与渲染。
+// 本文件是管理看板的前端脚本：负责管理员登录、调用观测、Agent 运行过程时间线、模型选择与服务凭证配置；完整 Key 只用于当次提交，不存入页面状态。
 
 const root = document.querySelector('#app');
 const dialog = document.querySelector('#detail');
-const tabs = { overview: ['运行概览', '从用户到每一次调用，了解 Agent 正在如何工作。'], calls: ['模型调用', '真实请求尝试、提供方返回用量与结果。'] };
+const tabs = { overview: ['运行概览', '从用户到每一次调用，了解 Agent 正在如何工作。'], calls: ['模型调用', '真实请求尝试、提供方返回用量与结果。'], timeline: ['运行过程', '按时间查看单个 Agent 收到的输入、推理与工具调用。'] };
 tabs.models = ['模型配置', '选择 Main 与 Subagent 使用的模型，应用后从下一次请求生效。'];
+tabs.services = ['服务配置', '管理模型、邮件与联网服务的 API Key，保存后从下一次请求生效。'];
 const outcomeLabels = { in_flight: '请求中', succeeded: '成功', http_error: 'HTTP 错误', transport_error: '连接异常', invalid_response: '响应异常', interrupted: '中断 · 结果未知', processing: '处理中', idle: '空闲', failed: '失败' };
-const state = { token: sessionStorage.getItem('aether_admin_token'), me: null, tab: 'overview', hours: 24, user: '', agent: '', model: '', outcome: '', snapshot: null, calls: null, window: null, controller: null, generation: 0, updated: null };
+const state = { token: sessionStorage.getItem('aether_admin_token'), me: null, tab: 'overview', hours: 24, user: '', agent: '', model: '', outcome: '', snapshot: null, calls: null, timeline: null, timelineOpen: new Map(), timelineFull: new Map(), window: null, controller: null, generation: 0, updated: null };
 const number = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value ?? 0);
 const compact = (value) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value ?? 0);
 const time = (value) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
@@ -49,8 +50,10 @@ function login(message = '') {
 function clearAdminData() {
   state.controller?.abort(); state.generation++;
   state.me = null; state.snapshot = null; state.calls = null;
+  state.timeline = null; state.timelineOpen.clear(); state.timelineFull.clear();
   state.user = ''; state.agent = ''; state.model = ''; state.outcome = '';
   state.modelConfig = null; state.catalog = null; state.modelDraft = null; state.modelSaving = false;
+  state.serviceConfig = null; state.serviceSaving = false;
   state.window = null; state.updated = null; state.agentOptionsUser = null; state.browsingPages = false;
   if (dialog.open) dialog.close();
   document.querySelector('#detail-content').replaceChildren();
@@ -73,7 +76,7 @@ async function logout() {
 function shell() {
   root.innerHTML = `<div class="layout"><aside class="sidebar"><a class="brand" href="/"><img class="brand-icon" src="/app-icon.png" alt="阿芒" width="34" height="34"><span>阿芒<span class="brand-sub">CONTROL ROOM</span></span></a><div class="nav-label">工作空间</div><nav aria-label="管理导航"></nav><div class="sidebar-note"><span class="live-dot"></span> 管理员工作空间<p>调用观测与模型配置</p></div><div class="account"><div class="avatar"></div><div><strong></strong><span>管理员</span></div><button id="logout" title="退出登录" aria-label="退出登录">↗</button></div></aside><main class="main"><header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong>运行概览</strong></div><div class="topbar-right"><span class="readonly">◉ 管理员</span><span class="timezone"></span></div></header><section class="workspace"><div class="page-heading"><div><div class="eyebrow">OBSERVABILITY</div><h1></h1><p></p></div><div class="refresh-group"><span id="updated">尚未刷新</span><button id="refresh" class="button">↻ 刷新</button></div></div><div class="filters"><label>时间范围<select id="range"><option value="24">最近 24 小时</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option></select></label><label>用户<select id="user-filter"><option value="">全部用户</option></select></label><label>Agent<select id="agent-filter"><option value="">全部 Agents</option></select></label><label>模型<input id="model-filter" list="model-options" placeholder="全部模型"><datalist id="model-options"></datalist></label><label id="outcome-label" hidden>请求结果<select id="outcome-filter"><option value="">全部结果</option><option value="succeeded">成功</option><option value="in_flight">请求中</option><option value="http_error">HTTP 错误</option><option value="transport_error">连接异常</option><option value="invalid_response">响应异常</option><option value="interrupted">中断</option></select></label><button id="reset" class="text-button">重置</button></div><div id="load-error" class="load-error" hidden role="alert"></div><div id="content" aria-live="polite"></div><footer class="footer"><span>按实际请求统计 · 调用详情可查看请求与响应 JSON</span><span>自动刷新 / 15 秒</span></footer></section></main></div>`;
   const nav = root.querySelector('nav');
-  const glyphs = { overview: '◫', calls: '↗', models: '⇄' };
+  const glyphs = { overview: '◫', calls: '↗', timeline: '⋮', models: '⇄', services: '⚙' };
   for (const [key, value] of Object.entries(tabs)) {
     const item = button('', () => selectTab(key), 'nav-item'); item.dataset.tab = key; item.append(el('span', 'nav-icon', glyphs[key]), el('span', '', value[0])); nav.append(item);
   }
@@ -96,12 +99,15 @@ function updateTitle() {
   root.querySelector('.page-heading p').textContent = tabs[state.tab][1];
   root.querySelector('.breadcrumb strong').textContent = tabs[state.tab][0];
   for (const item of root.querySelectorAll('.nav-item')) item.classList.toggle('selected', item.dataset.tab === state.tab);
-  root.querySelector('#outcome-label').hidden = false;
-  root.querySelector('.filters').hidden = state.tab === 'models';
-  root.querySelector('.footer span:first-child').textContent = state.tab === 'models' ? '模型配置应用于所有用户 · 已发出的请求继续使用原模型' : '按实际请求统计 · 调用详情可查看请求与响应 JSON';
-  root.querySelector('.footer span:last-child').textContent = state.tab === 'models' ? '配置页面 / 手动刷新' : '自动刷新 / 15 秒';
+  // 时间线只按用户与 Agent 定位，时间、模型与结果筛选不适用。
+  const timelinePage = state.tab === 'timeline';
+  for (const selector of ['#range', '#model-filter', '#outcome-filter']) root.querySelector(selector).parentElement.hidden = timelinePage;
+  const settingsPage = state.tab === 'models' || state.tab === 'services';
+  root.querySelector('.filters').hidden = settingsPage;
+  root.querySelector('.footer span:first-child').textContent = settingsPage ? '配置应用于所有用户 · 已发出的请求继续完成' : timelinePage ? '最新在上 · 失败、中断与请求中的调用按开始时间插入' : '按实际请求统计 · 调用详情可查看请求与响应 JSON';
+  root.querySelector('.footer span:last-child').textContent = settingsPage ? '配置页面 / 手动刷新' : '自动刷新 / 15 秒';
 }
-function selectTab(tab) { if (state.tab === tab) return; state.tab = tab; updateTitle(); if (state.snapshot || state.tab === 'models') render(); refresh(false); }
+function selectTab(tab) { if (state.tab === tab) return; state.tab = tab; updateTitle(); if (state.snapshot || state.tab === 'models' || state.tab === 'services') render(); refresh(false); }
 function loading() { const box = root.querySelector('#content'); box.replaceChildren(el('div', 'loading-card', '正在读取运行数据…')); }
 function query(extra = {}) {
   const params = new URLSearchParams({ from: state.window.from, to: state.window.to, limit: '50' });
@@ -115,6 +121,7 @@ function query(extra = {}) {
 async function refresh(newWindow = true) {
   if (!state.me) return;
   if (state.tab === 'models') return refreshModelSettings();
+  if (state.tab === 'services') return refreshServiceSettings();
   state.browsingPages = false;
   state.controller?.abort(); const controller = new AbortController(); state.controller = controller;
   const generation = ++state.generation;
@@ -123,10 +130,12 @@ async function refresh(newWindow = true) {
   try {
     const requests = [api(`/admin/snapshot?${query()}`, { signal: controller.signal })];
     if (state.tab === 'calls') requests.push(api(`/admin/calls?${query()}`, { signal: controller.signal }));
+    if (state.tab === 'timeline' && state.user) requests.push(api(`/admin/timeline?${new URLSearchParams({ user_id: state.user, agent: state.agent || 'main' })}`, { signal: controller.signal }));
     const [snapshot, list] = await Promise.all(requests);
     if (generation !== state.generation) return;
     state.snapshot = snapshot;
     if (state.tab === 'calls') state.calls = list;
+    if (state.tab === 'timeline') state.timeline = list ? { ...list, key: timelineKey() } : null;
     state.updated = snapshot.generated_at;
     root.querySelector('.footer span:last-child').textContent = '自动刷新 / 15 秒';
     root.querySelector('#load-error').hidden = true;
@@ -150,8 +159,9 @@ function updateFilters() {
   const agents = state.snapshot.agents.items;
   const knownAgents = state.agentOptionsUser === state.user ? new Map([...agentSelect.options].filter((option) => option.value).map((option) => [option.value, option.textContent])) : new Map();
   for (const agent of agents) knownAgents.set(agent.kind === 'main' ? 'main' : agent.id, agent.kind === 'main' ? 'Main' : `Subagent · ${agent.id.slice(0, 8)}`);
+  // 从时间线跳转的 Subagent 可能不在当前分页里，仍要能显示为选中项。
+  if (state.agent && !knownAgents.has(state.agent)) knownAgents.set(state.agent, `Subagent · ${state.agent.slice(0, 8)}`);
   state.agentOptionsUser = state.user;
-  if (state.user) knownAgents.set('recap', 'Recap');
   agentSelect.replaceChildren(new Option('全部 Agents', ''), ...[...knownAgents].map(([id, label]) => new Option(label, id)));
   agentSelect.disabled = !state.user; agentSelect.value = state.agent;
   root.querySelector('#model-options').replaceChildren(...state.snapshot.models.map((model) => new Option(model.model, model.model)));
@@ -167,7 +177,9 @@ function render() {
   const content = root.querySelector('#content'); content.replaceChildren();
   if (state.tab === 'overview') overview(content);
   if (state.tab === 'calls') calls(content);
+  if (state.tab === 'timeline') timelinePage(content);
   if (state.tab === 'models') modelSettingsPage(content);
+  if (state.tab === 'services') serviceSettingsPage(content);
 }
 function trendChart() {
   const values = state.snapshot.trend; if (!values.length || !values.some((item) => item.attempts)) return empty('此时间段没有调用', '新调用将自动显示在趋势中。');
@@ -207,8 +219,8 @@ function calls(content) {
   content.append(metricCards()); const list = state.calls;
   if (!list) { content.append(el('div', 'loading-card', '正在读取调用记录…')); return; }
   if (!list.items.length) { content.append(empty('没有符合条件的调用', '新日志不会根据历史步骤回填。可调整时间范围后重试。')); return; }
-  const rows = list.items.map((call) => row([time(call.started_at), identity(call.email, call.purpose === 'recap' ? 'Recap' : call.agent_id ? `Subagent · ${call.agent_id.slice(0, 8)}` : 'Main'), el('span', 'model-name', shortModel(call.requested_model)), call.purpose === 'recap' ? '动态摘要' : call.purpose === 'compact' ? '压缩' : 'Agent', pill(call.outcome), `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`, money(call.cost), duration(call.duration_ms), button('详情 →', () => callDetails(call), 'text-button')]));
-  content.append(panel('请求日志', '每次重试单独计数 · 中断代表结果未知', table(['开始时间', '用户 / Agent', '模型', '用途', '结果', '输入 / 输出 Token', '费用', '耗时', ''], rows)));
+  const rows = list.items.map((call) => row([time(call.started_at), requestIds(call), identity(call.email, call.agent_id ? `Subagent · ${call.agent_id.slice(0, 8)}` : 'Main'), el('span', 'model-name', shortModel(call.requested_model)), call.purpose === 'compact' ? '压缩' : 'Agent', pill(call.outcome), `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`, money(call.cost), duration(call.duration_ms), button('详情 →', () => callDetails(call), 'text-button')]));
+  content.append(panel('请求日志', '每次重试单独计数 · 中断代表结果未知', table(['开始时间', '请求 ID', '用户 / Agent', '模型', '用途', '结果', '输入 / 输出 Token', '费用', '耗时', ''], rows)));
   if (list.next_cursor) content.append(button('加载更多调用', (event) => loadMoreCalls(event.currentTarget), 'button load-more'));
 }
 async function loadMoreCalls(target) {
@@ -230,13 +242,181 @@ async function loadMoreCalls(target) {
     notify(error.message); target.disabled = false;
   }
 }
+// timelineKey 标识当前时间线属于哪个用户和 Agent，切换后不再显示上一个 Agent 的数据。
+function timelineKey() { return `${state.user}|${state.agent || 'main'}`; }
+function agentLabel(agent) { return agent === 'main' ? 'Main' : `Subagent · ${agent.slice(0, 8)}`; }
+function openAgentTimeline(agent) { state.agent = agent === 'main' ? '' : agent; refresh(); }
+// timelinePage 按时间降序渲染单个 Agent 的时间线：最新在上，工具结果并入对应的工具调用卡片，调用不在本页的结果单独显示。
+function timelinePage(content) {
+  if (!state.user) { content.append(empty('选择一个用户', '在上方选择用户与 Agent，查看该 Agent 的完整运行过程。')); return; }
+  const timeline = state.timeline;
+  if (!timeline || timeline.key !== timelineKey()) { content.append(el('div', 'loading-card', '正在读取运行过程…')); return; }
+  const agent = state.agent || 'main';
+  const summary = state.snapshot.agents.items.find((item) => (item.kind === 'main' ? 'main' : item.id) === agent);
+  const email = state.snapshot.users.items.find((user) => user.id === state.user)?.email ?? state.user;
+  const list = el('ol', 'timeline');
+  if (timeline.system_prompt) {
+    const node = timelineNode('runtime', '系统提示词', timeline.system_prompt.from_call_at, [el('span', 'timeline-meta', '来自最近一次请求，每次请求附带的当前时间会不同')]);
+    node.append(foldable('system-prompt', '展开查看', timeline.system_prompt.text)); list.append(node);
+  }
+  const results = new Map(timeline.items.filter((item) => item.role === 'tool').map((item) => [item.tool_call_id, item]));
+  const paired = new Set(timeline.items.flatMap((item) => (item.tool_calls ?? []).map((call) => call.id)).filter((id) => results.has(id)));
+  for (const item of [...timeline.items].reverse()) {
+    if (item.type === 'call') list.append(failedCallNode(item, email));
+    else if (item.role === 'assistant') list.append(assistantNode(item, results, email));
+    else if (item.role === 'tool') { if (!paired.has(item.tool_call_id)) list.append(toolResultNode(item)); }
+    else list.append(inputNode(item));
+  }
+  if (!timeline.items.length) list.append(el('li', 'timeline-empty', '这个 Agent 还没有已读取的消息。'));
+  if (timeline.next_cursor) { const item = el('li', 'timeline-more'); item.append(button('加载更早的记录', (event) => loadEarlierTimeline(event.currentTarget), 'button')); list.append(item); }
+  content.append(panel(`${agentLabel(agent)} · ${email}`, '最新在上，按消息顺序倒序排列；失败、中断与请求中的调用按开始时间插入。待读消息不显示。', list, summary ? pill(summary.status) : null));
+}
+// timelineNode 是时间线上一个节点的外框：左侧圆点表示类型，标题行显示时间与附加信息。
+function timelineNode(kind, title, at, extras = []) {
+  const node = el('li', `timeline-node ${kind}`); const head = el('div', 'timeline-head');
+  head.append(el('span', 'timeline-title', title), el('time', 'timeline-time', time(at)), ...extras.filter(Boolean));
+  node.append(head); return node;
+}
+// foldable 把长文本放进可折叠区域；展开状态按 key 记住，自动刷新重绘后保持不变。短文本默认展开。
+function foldable(key, label, text, className = '') {
+  const box = el('details', `timeline-fold ${className}`);
+  box.open = state.timelineOpen.get(key) ?? text.length <= 280;
+  const summary = el('summary'); summary.append(el('span', 'fold-label', label), el('span', 'fold-preview', text.replace(/\s+/g, ' ').slice(0, 120)));
+  box.append(summary, el('pre', 'timeline-text', text));
+  box.ontoggle = () => state.timelineOpen.set(key, box.open);
+  return box;
+}
+// fullView 优先使用已加载的全文；仍被截断时返回加载全文的按钮。
+function fullView(item) { return state.timelineFull.get(item.id) ?? item; }
+function loadFullButton(item) {
+  if (!item.truncated || state.timelineFull.has(item.id)) return null;
+  return button(item.image_count ? '加载全文与截图' : '加载全文', (event) => loadTimelineMessage(item.id, event.currentTarget), 'text-button timeline-load');
+}
+function prettyArguments(text) { try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; } }
+function callMeta(call) { return `${shortModel(call.response_model || call.requested_model)} · ${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)} Token · ${money(call.cost)} · ${duration(call.duration_ms)}`; }
+function inputNode(item) {
+  const view = fullView(item);
+  const senders = { user: ['input', '用户输入'], main: ['input', '来自 Main'], subagent: ['input', `来自 ${agentLabel(item.sender_subagent_id ?? '')}`], system: ['runtime', '系统通知'] };
+  const [kind, title] = item.is_summary ? ['summary', '上下文压缩摘要'] : item.name === 'sandbox_observation' ? ['runtime', '截图观察'] : senders[item.sender] ?? ['runtime', '运行时提示'];
+  const jump = item.sender === 'subagent' && item.sender_subagent_id ? button('打开该 Subagent →', () => openAgentTimeline(item.sender_subagent_id), 'text-button') : item.sender === 'main' && state.agent ? button('回到 Main →', () => openAgentTimeline('main'), 'text-button') : null;
+  const node = timelineNode(kind, title, item.at, [jump]);
+  if (item.is_summary) node.append(foldable(`${item.id}:text`, '摘要内容', view.text));
+  else if (view.text) node.append(el('div', 'timeline-bubble', view.text));
+  if (view.images?.length) { const images = el('div', 'timeline-images'); for (const url of view.images) { const image = el('img'); image.src = url; image.alt = '截图'; images.append(image); } node.append(images); }
+  else if (item.image_count) node.append(el('p', 'timeline-muted', `包含 ${item.image_count} 张截图`));
+  const more = loadFullButton(item); if (more) node.append(more);
+  return node;
+}
+function assistantNode(item, results, email) {
+  const view = fullView(item); const call = item.call;
+  const node = timelineNode('assistant', '模型回复', item.at, [el('span', 'timeline-meta', call ? callMeta(call) : '未关联请求日志'), call ? button('请求详情 →', () => callDetails({ ...call, email }), 'text-button') : null]);
+  if (call) node.append(requestIds(call));
+  const reasoning = view.reasoning;
+  if (reasoning.state === 'text') node.append(foldable(`${item.id}:reasoning`, '推理过程', reasoning.text, 'reasoning'));
+  else node.append(el('p', 'timeline-muted', reasoning.state === 'encrypted' ? '推理已加密，供应商未返回原文' : '模型未返回推理'));
+  // Main 的正文生成结束后直接发给用户；Subagent 的正文只是内部记录，它通过 send_message 向 Main 汇报。
+  if (view.text) node.append(foldable(`${item.id}:text`, state.agent ? '正文（不直接发给用户）' : '正文（直接发给用户）', view.text));
+  for (const toolCall of view.tool_calls ?? []) node.append(toolCard(toolCall, results.get(toolCall.id)));
+  const more = loadFullButton(item); if (more) node.append(more);
+  return node;
+}
+// toolCard 把一次工具调用与它的结果放在一起；assign_subagents 的结果可直接跳到对应 Subagent。
+function toolCard(toolCall, result) {
+  const card = el('div', 'tool-card'); const head = el('div', 'tool-card-head');
+  head.append(el('strong', '', toolCall.name), result ? el('span', 'timeline-meta', time(result.at)) : el('span', 'timeline-meta pending', '尚未返回结果'));
+  card.append(head, foldable(`${toolCall.id}:args`, '参数', prettyArguments(toolCall.arguments)));
+  if (!result) return card;
+  const view = fullView(result);
+  card.append(foldable(`${toolCall.id}:result`, '结果', view.text));
+  const more = loadFullButton(result); if (more) card.append(more);
+  if (toolCall.name === 'assign_subagents') {
+    let ids = []; try { ids = JSON.parse(view.text).subagent_ids ?? []; } catch {}
+    if (ids.length) { const links = el('div', 'tool-links'); for (const id of ids) links.append(button(`${agentLabel(id)} →`, () => openAgentTimeline(id), 'text-button')); card.append(links); }
+  }
+  return card;
+}
+function toolResultNode(item) {
+  const view = fullView(item);
+  const node = timelineNode('tool', '工具结果', item.at, [el('span', 'timeline-meta', '对应的调用在更早的记录中')]);
+  node.append(foldable(`${item.id}:text`, '结果', view.text));
+  const more = loadFullButton(item); if (more) node.append(more);
+  return node;
+}
+function failedCallNode(item, email) {
+  const call = item.call;
+  const node = timelineNode(`call ${call.outcome}`, call.purpose === 'compact' ? '上下文压缩请求' : '模型请求', item.at, [pill(call.outcome), button('请求详情 →', () => callDetails({ ...call, email }), 'text-button')]);
+  node.append(requestIds(call), el('p', 'timeline-muted', `${shortModel(call.requested_model)} · HTTP ${call.http_status ?? '—'} · ${call.failure_kind || '进行中'} · ${duration(call.duration_ms)}`));
+  return node;
+}
+async function loadTimelineMessage(id, target) {
+  const generation = state.generation; target.disabled = true;
+  try {
+    const full = await api(`/admin/timeline/messages/${id}`, { signal: state.controller.signal });
+    if (generation !== state.generation || !state.me) return;
+    state.timelineFull.set(id, full); render();
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== state.generation) return;
+    if (error.status === 401 || error.status === 403) { accessLost(error); return; }
+    notify(error.message); target.disabled = false;
+  }
+}
+// loadEarlierTimeline 向前翻页并暂停自动刷新，避免刷新把已加载的更早记录替换掉。
+async function loadEarlierTimeline(target) {
+  const timeline = state.timeline; const generation = state.generation; const controller = state.controller;
+  target.disabled = true;
+  try {
+    const page = await api(`/admin/timeline?${new URLSearchParams({ user_id: state.user, agent: state.agent || 'main', before: timeline.next_cursor })}`, { signal: controller.signal });
+    if (generation !== state.generation || controller.signal.aborted || !state.me) return;
+    timeline.items.unshift(...page.items); timeline.next_cursor = page.next_cursor;
+    state.browsingPages = true;
+    root.querySelector('.footer span:last-child').textContent = '分页浏览中 / 手动刷新';
+    render();
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== state.generation) return;
+    if (error.status === 401 || error.status === 403) { accessLost(error); return; }
+    notify(error.message); target.disabled = false;
+  }
+}
+// copyChip 把一条 ID 显示在按钮外面，点击「复制」写入完整值，不必从长 JSON 里挑选。
+function copyChip(label, value) {
+  const node = el('span', 'copy-id');
+  node.append(el('span', 'copy-id-label', label), el('code', 'copy-id-value', value));
+  const action = button('复制', () => {
+    const copySelection = () => {
+      const area = document.createElement('textarea');
+      area.value = value; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.left = '-9999px';
+      document.body.append(area); area.select();
+      const copied = document.execCommand('copy');
+      area.remove();
+      return copied;
+    };
+    const finish = (copied) => {
+      if (!copied) { notify('无法写入剪贴板，请手动选择 ID'); return; }
+      action.textContent = '已复制';
+      setTimeout(() => { if (action.isConnected) action.textContent = '复制'; }, 1200);
+    };
+    // 选中复制必须发生在点击当次，不能等 Clipboard API 异步失败后再做。页面没有焦点时直接走这条。
+    if (!navigator.clipboard?.writeText || !document.hasFocus()) { finish(copySelection()); return; }
+    navigator.clipboard.writeText(value).then(() => finish(true), () => finish(copySelection()));
+  }, 'copy-id-button');
+  action.setAttribute('aria-label', `复制${label}`);
+  node.append(action);
+  return node;
+}
+// requestIds 把这次模型请求在本系统中的调用 ID 放到列表、时间线与详情顶部，供直接复制。
+function requestIds(call) {
+  const box = el('div', 'request-ids');
+  box.append(copyChip('调用 ID', call.id));
+  return box;
+}
 function detailFrame(title, subtitle) {
   const content = document.querySelector('#detail-content'); content.replaceChildren(); const header = el('div', 'detail-header'); const names = el('div'); names.append(el('div', 'eyebrow teal', 'MODEL REQUEST'), el('h2', '', title), el('p', '', subtitle)); header.append(names, button('×', () => dialog.close(), 'close-button')); content.append(header); if (!dialog.open) dialog.showModal(); return content;
 }
 function detailsGrid(items) { const grid = el('dl', 'details-grid'); for (const [label, value] of items) { const group = el('div'); group.append(el('dt', '', label), value instanceof Node ? value : el('dd', '', value == null ? '未知' : String(value))); grid.append(group); } return grid; }
 async function callDetails(call) {
   const content = detailFrame('模型调用详情', '调用元数据与实际请求、响应 JSON');
-  content.append(detailsGrid([['用途', call.purpose === 'recap' ? '运行动态摘要' : call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : number(call.context_tokens_before)], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['调用 ID', call.id], ['用户', call.email], ['Agent', call.purpose === 'recap' ? 'Recap' : call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['提供方生成 ID', call.provider_generation_id], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
+  content.append(requestIds(call));
+  content.append(detailsGrid([['用途', call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : number(call.context_tokens_before)], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['用户', call.email], ['Agent', call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
   const note = el('div', 'data-note', '请求中断或连接失败时，提供方可能已执行并计费。未知费用不等于 0。'); content.append(note);
   const payloadPanel = el('section', 'request-json');
   payloadPanel.append(el('h3', '', '请求与响应 JSON'), el('p', 'muted', '按本次实际调用保存，包含消息上下文与工具定义；不含 HTTP 认证头。'));
@@ -270,7 +450,7 @@ async function callDetails(call) {
 }
 dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me && state.tab !== 'models' && !state.browsingPages) refresh(); });
-setInterval(() => { if (!document.hidden && state.me && state.tab !== 'models' && !state.browsingPages && !dialog.open && !root.querySelector('input:focus')) refresh(); }, 15_000);
+setInterval(() => { if (!document.hidden && state.me && state.tab !== 'models' && state.tab !== 'services' && !state.browsingPages && !dialog.open && !root.querySelector('input:focus')) refresh(); }, 15_000);
 if (state.token) {
   root.append(el('div', 'boot', '正在验证管理员身份…'));
   try { state.me = await api('/admin/me'); shell(); await refresh(); }
@@ -311,6 +491,7 @@ function modelSettingsPage(content) {
   const meta = el('div', 'model-config-meta');
   meta.append(pill(settings.source === 'database' ? '已保存' : '部署默认'), el('span', '', settings.updated_at ? `最近修改 ${time(settings.updated_at)} · ${settings.updated_by}` : '当前使用部署时配置的默认模型'));
   intro.append(meta); content.append(intro);
+  for (const warning of state.catalog.warnings ?? []) content.append(el('p', 'model-catalog-note', warning));
   const form = el('form', 'model-config-form');
   const cards = el('div', 'model-role-grid');
   for (const role of ['main', 'subagent']) {
@@ -344,7 +525,8 @@ function modelSettingsPage(content) {
       if (input.disabled) preview.append(el('span', '', 'Main 切换时自动同步，无需再次设置。'));
       else if (selected) {
         const perMillion = (value) => value !== '' && Number.isFinite(Number(value)) ? `$${Number(value) * 1000000}` : '未知';
-        preview.append(el('span', '', `${number(selected.context_length)} 上下文 Token`), el('span', '', `输入 ${perMillion(selected.pricing.prompt)} / 输出 ${perMillion(selected.pricing.completion)} · USD / 百万 Token`));
+        const capacity = selected.context_length > 0 ? `${number(selected.context_length)} ${selected.provider === 'ikun Gemini' ? '输入上限' : '上下文'} Token` : '模型容量未知';
+        preview.append(el('span', '', `${selected.provider} · ${capacity}`), el('span', '', `输入 ${perMillion(selected.pricing.prompt)} / 输出 ${perMillion(selected.pricing.completion)} · USD / 百万 Token`));
       } else preview.append(el('span', '', '请从可用模型目录中选择一个完整模型 ID。'));
       updateModelSaveButton();
     }
@@ -361,7 +543,7 @@ function modelSettingsPage(content) {
     input.oninput = () => { state.modelDraft[key] = Number(input.value); updateModelSaveButton(); };
     label.append(input); fields.append(label);
   }
-  compaction.append(fields, el('p', 'muted', '时间从 Main 成功回答用户开始计算；容量按各 Agent 独立判断。请求前估算 Token，响应后校准；模型容量较小时提前压缩并预留输出空间。'));
+  compaction.append(fields, el('p', 'muted', '时间从 Main 成功回答用户开始计算；Token 取上一次同模型成功请求的官方输入用量，按各 Agent 的阈值和已知输入容量触发压缩。'));
   form.append(compaction);
   const actions = el('div', 'model-save-bar');
   const note = el('div'); note.append(el('strong', '', '下一次模型请求使用新配置'), el('p', 'muted', '目录价格供估算，实际费用以请求日志为准。'));
@@ -370,7 +552,7 @@ function modelSettingsPage(content) {
   const error = el('div', 'form-error'); error.id = 'model-save-error'; error.setAttribute('role', 'alert'); form.append(error);
   form.onsubmit = (event) => { event.preventDefault(); saveModelSettings(); };
   content.append(form);
-  content.append(el('p', 'model-catalog-note', `来自 OpenRouter 当前目录，共 ${number(state.catalog.items.length)} 个支持工具调用的模型。`));
+  content.append(el('p', 'model-catalog-note', `来自已配置的 OpenRouter 与 ikun Gemini 实时目录，共 ${number(state.catalog.items.length)} 个模型候选。Gemini 目录不提供工具能力证明及渠道价格，实际可用性以请求结果为准，未返回的费用显示未知。`));
   updateModelSaveButton();
 }
 function updateModelSaveButton() {
@@ -405,4 +587,93 @@ async function saveModelSettings() {
     for (const input of root.querySelectorAll('.model-config-form input')) input.disabled = input.id === 'subagent-model-choice' && state.modelDraft.subagent_model == null;
     updateModelSaveButton();
   } }
+}
+
+// refreshServiceSettings 只读取脱敏状态；页面不自动刷新，避免覆盖正在输入的新 Key。
+async function refreshServiceSettings() {
+  state.controller?.abort();
+  const controller = new AbortController(); state.controller = controller;
+  const generation = ++state.generation;
+  const refreshButton = root.querySelector('#refresh'); refreshButton.disabled = true;
+  try {
+    const config = await api('/admin/services', { signal: controller.signal });
+    if (generation !== state.generation || !state.me) return;
+    state.serviceConfig = config;
+    root.querySelector('#load-error').hidden = true;
+    root.querySelector('#updated').textContent = `${time(new Date().toISOString())} 已更新`;
+    render();
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== state.generation) return;
+    if (error.status === 401 || error.status === 403) { accessLost(error); return; }
+    const box = root.querySelector('#load-error'); box.hidden = false;
+    box.textContent = '暂时无法读取服务配置，请刷新重试。';
+    if (!state.serviceConfig) root.querySelector('#content').replaceChildren(empty('无法读取服务配置', '连接恢复后可重新加载。'));
+  } finally { if (generation === state.generation && refreshButton.isConnected) refreshButton.disabled = false; }
+}
+
+// serviceSettingsPage 沿用看板现有卡片，每个服务独立保存，只输入待替换的新 Key。
+function serviceSettingsPage(content) {
+  if (!state.serviceConfig) { content.append(el('div', 'loading-card', '正在读取服务配置…')); return; }
+  const intro = el('section', 'model-intro');
+  intro.append(el('div', 'eyebrow teal', 'SERVICE SETTINGS'), el('h2', '', '统一管理服务凭证'), el('p', '', '这些配置供所有用户共用。保存后从下一次请求生效；已保存的 Key 不回显完整内容，留空表示保留当前 Key。'));
+  content.append(intro);
+  const descriptions = { openrouter: '模型目录与 OpenRouter 模型请求。', ikun_gemini: '通过 ikun 使用 Gemini 原生模型接口。', resend: '发送正式环境的登录验证码邮件。', serper: 'Google 搜索。', parallel: '普通网页与 Reddit 正文读取。', everyinfra: '微信公众号与小红书搜索、正文读取，以及 X（Twitter）推文搜索。' };
+  const grid = el('div', 'model-role-grid service-settings-grid');
+  for (const service of state.serviceConfig.items) {
+    const form = el('form', 'panel model-role-card service-card'); form.dataset.service = service.id;
+    const heading = el('div', 'service-heading');
+    const labels = { saved: '已保存 · 未验证', not_configured: '未配置', unreadable: '无法解密' };
+    heading.append(el('h3', '', service.name), el('span', `service-status ${service.status}`, labels[service.status]));
+    form.append(heading, el('p', 'muted', descriptions[service.id]));
+    const existing = service.status === 'not_configured' ? '当前没有 API Key' : service.key_suffix ? `当前 Key · •••• ${service.key_suffix}` : '当前 Key 已隐藏';
+    form.append(el('p', 'service-current', existing), el('p', 'service-updated', service.updated_at ? `最近修改 ${time(service.updated_at)}` : '尚未保存'));
+    if (service.status === 'unreadable') form.append(el('p', 'form-error', '无法读取当前凭证。请核对部署加密主密钥，或重新输入 Key 替换。'));
+    const label = el('label', 'model-picker', '新的 API Key');
+    const key = el('input'); key.type = 'password'; key.autocomplete = 'new-password'; key.maxLength = 8192; key.spellcheck = false; key.placeholder = '输入新 Key；留空保留当前值'; key.setAttribute('aria-label', `${service.name} 新的 API Key`);
+    label.append(key); form.append(label);
+    let emailFrom;
+    if (service.id === 'resend') {
+      const field = el('label', 'model-picker', '发件人'); emailFrom = el('input'); emailFrom.value = service.email_from; emailFrom.maxLength = 320; emailFrom.placeholder = 'Aether <noreply@已验证域名>';
+      field.append(emailFrom); form.append(field);
+    }
+    const errorBox = el('div', 'form-error'); errorBox.setAttribute('role', 'alert');
+    const actions = el('div', 'service-actions');
+    const save = button('保存配置', () => {}, 'button primary'); save.type = 'submit';
+    const clear = button('清除 Key', () => submit(true), 'button'); clear.disabled = service.status === 'not_configured'; clear.dataset.clearKey = service.id;
+    actions.append(save, clear); form.append(errorBox, actions);
+    form.onsubmit = (event) => { event.preventDefault(); submit(false); };
+    // 新 Key 只存在输入框和本次请求中，成功或失败后都清空，不写入全局状态或浏览器存储。
+    async function submit(clearKey) {
+      if (state.serviceSaving) return;
+      errorBox.textContent = '';
+      if (!clearKey && service.status !== 'saved' && !key.value) { errorBox.textContent = '请输入新的 API Key。'; return; }
+      const body = clearKey ? { api_key: '' } : { api_key: key.value || null, ...(emailFrom ? { email_from: emailFrom.value } : {}) };
+      const generation = state.generation;
+      state.serviceSaving = true;
+      const controls = [...grid.querySelectorAll('input, button')].map((control) => ({ control, disabled: control.disabled }));
+      for (const { control } of controls) control.disabled = true;
+      refreshControl(true);
+      try {
+        await api(`/admin/services/${service.id}`, { method: 'PUT', body: JSON.stringify(body), signal: state.controller.signal });
+        const config = await api('/admin/services', { signal: state.controller.signal });
+        if (generation !== state.generation || !state.me) return;
+        state.serviceConfig = config; render();
+        notify(clearKey ? `${service.name} Key 已清除，后续请求将停止使用此服务。` : `${service.name} 配置已保存，下次请求生效；尚未验证供应商可用性。`);
+      } catch (error) {
+        if (error.name === 'AbortError' || generation !== state.generation) return;
+        if (error.status === 401 || error.status === 403) { accessLost(error); return; }
+        errorBox.textContent = error.status === 400 ? '配置未保存。请检查 Key 是否包含空白、发件人格式是否正确。' : '未能确认保存结果，请刷新查看当前配置后重试。';
+      } finally {
+        key.value = ''; state.serviceSaving = false;
+        if (generation === state.generation && state.me && state.tab === 'services') {
+          for (const { control, disabled } of controls) control.disabled = disabled;
+          refreshControl(false);
+        }
+      }
+    }
+    // 保存期间禁用手动刷新，避免同一页的提交与刷新互相覆盖。
+    function refreshControl(disabled) { root.querySelector('#refresh').disabled = disabled; }
+    grid.append(form);
+  }
+  content.append(grid, el('p', 'model-catalog-note', '“已保存”仅表示凭证已保存，不代表权限、额度或服务可用性已经验证。'));
 }

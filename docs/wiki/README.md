@@ -15,7 +15,7 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 | [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理、Subagent 设计 |
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
 | [07 Linux 沙盒工作环境](07-sandbox.md) | 2026-10-29 起不在当前范围；已有实现已删除 |
-| [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、用户与 Agent 下钻、请求日志、费用覆盖和管理员权限 |
+| [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、调用观测、模型选择、服务凭证管理和管理员权限 |
 | [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
 | [10 Schedule](10-schedules.md) | 一次性与周期安排、上下文投递、工具参数、持久化与漏跑恢复 |
 
@@ -34,7 +34,7 @@ aether-personal 是企业级的开源 personal agent：企业 fork、部署后�
 
 实现顺序：
 
-1. 最小对话：用户通过 WebSocket 发消息，Main 调用模型并通过 `send_message` 回复。`已实现`
+1. 最小对话：用户通过 WebSocket 发消息，Main 调用模型并以正文回复（整条生成结束后一次性推送）。`已实现`
 2. 边生成边显示。`待确认`
 3. 更多工具：`read_message`、`search_message`。`仅设计`
 4. 自动压缩。`开发中` 混合搜索仍为 `仅设计`。

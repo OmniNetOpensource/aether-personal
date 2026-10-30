@@ -17,14 +17,13 @@ const adminSnapshot = `-- name: AdminSnapshot :one
 WITH calls AS (
  SELECT c.id, c.step_id, c.user_id, c.subagent_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence FROM model_calls c JOIN users u ON u.id = c.user_id WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($4::uuid IS NULL OR c.user_id = $4::uuid)
-  AND ($5::text = 'all' OR ($5::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')
-       OR ($5::text = 'subagent' AND c.subagent_id = $6::uuid)
-       OR ($5::text = 'recap' AND c.purpose = 'recap'))
+  AND ($5::text = 'all' OR ($5::text = 'main' AND c.subagent_id IS NULL)
+       OR ($5::text = 'subagent' AND c.subagent_id = $6::uuid))
   AND ($7::text IS NULL OR c.requested_model = $7::text)
   AND ($8::text IS NULL OR c.outcome = $8::text)
   AND ($9::text = '' OR strpos(lower(u.email), lower($9::text)) > 0)
 ), legacy AS (
- SELECT s.id, s.user_id, s.subagent_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.model_reply, s.purpose, s.activity FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
+ SELECT s.id, s.user_id, s.subagent_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.model_reply, s.purpose FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
   AND ($4::uuid IS NULL OR s.user_id = $4::uuid)
   AND ($5::text = 'all' OR ($5::text = 'main' AND s.subagent_id IS NULL)
        OR ($5::text = 'subagent' AND s.subagent_id = $6::uuid))
@@ -45,7 +44,7 @@ WITH calls AS (
  SELECT c.requested_model AS model, count(*) AS attempts, coalesce(sum(c.cost),0)::text AS cost_known_usd
  FROM calls c GROUP BY c.requested_model ORDER BY count(*) DESC, c.requested_model LIMIT 100
 ), tool_counts AS (
- SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','fetch_url') THEN tool.name ELSE 'other' END AS name, count(*) AS count
+ SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','search','search_twitter','fetch_url') THEN tool.name ELSE 'other' END AS name, count(*) AS count
  FROM calls c CROSS JOIN LATERAL unnest(c.tool_names) AS tool(name) GROUP BY 1
 )
 SELECT jsonb_build_object(
@@ -81,7 +80,7 @@ type AdminSnapshotParams struct {
 	Search    string
 }
 
-// 本文件是管理看板的查询集合：汇总运行指标，并分页列出用户、Agent 与模型调用，供看板接口读取（sqlc 据此生成代码）。
+// 本文件是管理看板的查询集合：汇总运行指标，分页列出用户、Agent 与模型调用，并读取单个 Agent 的运行时间线，供看板接口读取（sqlc 据此生成代码）。
 func (q *Queries) AdminSnapshot(ctx context.Context, arg AdminSnapshotParams) ([]byte, error) {
 	row := q.db.QueryRow(ctx, adminSnapshot,
 		arg.FromAt,
@@ -113,6 +112,49 @@ func (q *Queries) GetAdminCallDetail(ctx context.Context, id uuid.UUID) (GetAdmi
 	row := q.db.QueryRow(ctx, getAdminCallDetail, id)
 	var i GetAdminCallDetailRow
 	err := row.Scan(&i.RequestBody, &i.ResponseBody, &i.ResponseTruncated)
+	return i, err
+}
+
+const getAdminTimelineMessage = `-- name: GetAdminTimelineMessage :one
+SELECT role, content FROM messages WHERE id = $1
+`
+
+type GetAdminTimelineMessageRow struct {
+	Role    string
+	Content []byte
+}
+
+func (q *Queries) GetAdminTimelineMessage(ctx context.Context, id uuid.UUID) (GetAdminTimelineMessageRow, error) {
+	row := q.db.QueryRow(ctx, getAdminTimelineMessage, id)
+	var i GetAdminTimelineMessageRow
+	err := row.Scan(&i.Role, &i.Content)
+	return i, err
+}
+
+const getAdminTimelineSystemPrompt = `-- name: GetAdminTimelineSystemPrompt :one
+SELECT started_at, coalesce(CASE WHEN request_body->'messages'->0->>'role' = 'system' THEN request_body->'messages'->0->>'content' END,
+ request_body->'systemInstruction'->'parts'->0->>'text', '')::text AS prompt
+FROM model_calls
+WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND purpose = 'agent' AND request_body IS NOT NULL
+ORDER BY started_at DESC LIMIT 1
+`
+
+type GetAdminTimelineSystemPromptParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+type GetAdminTimelineSystemPromptRow struct {
+	StartedAt time.Time
+	Prompt    string
+}
+
+// 系统提示词不进消息表，只能从该 Agent 最近一次推理请求体中取出（OpenRouter 与 Gemini 位置不同）。
+func (q *Queries) GetAdminTimelineSystemPrompt(ctx context.Context, arg GetAdminTimelineSystemPromptParams) (GetAdminTimelineSystemPromptRow, error) {
+	row := q.db.QueryRow(ctx, getAdminTimelineSystemPrompt, arg.UserID, arg.SubagentID)
+	var i GetAdminTimelineSystemPromptRow
+	err := row.Scan(&i.StartedAt, &i.Prompt)
 	return i, err
 }
 
@@ -154,11 +196,10 @@ SELECT a.cursor_id AS id,a.created_at,jsonb_build_object('id',a.id,'kind',CASE W
  SELECT count(*) AS attempts,count(*) FILTER(WHERE c.outcome IN ('http_error','transport_error','invalid_response')) AS failed,
  coalesce(sum(c.input_tokens),0) AS input_tokens,coalesce(sum(c.output_tokens),0) AS output_tokens,
  coalesce(sum(c.cost),0)::text AS cost_known_usd,count(*) FILTER(WHERE c.cost IS NULL) AS cost_unknown
- FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.user_id=a.user_id AND c.purpose <> 'recap' AND c.subagent_id IS NOT DISTINCT FROM a.id AND c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
+ FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.user_id=a.user_id AND c.subagent_id IS NOT DISTINCT FROM a.id AND c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($3::uuid IS NULL OR c.user_id = $3::uuid)
-  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')
-       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid)
-       OR ($4::text = 'recap' AND c.purpose = 'recap'))
+  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL)
+       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid))
   AND ($6::text IS NULL OR c.requested_model = $6::text)
   AND ($7::text IS NULL OR c.outcome = $7::text)
   AND ($8::text = '' OR strpos(lower(u.email), lower($8::text)) > 0)
@@ -227,12 +268,11 @@ SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_
  'context_tokens_after',c.context_tokens_after,'summary_through_sequence',c.summary_through_sequence,
  'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
- 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','fetch_url') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
+ 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','search','search_twitter','fetch_url') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
 )::jsonb AS payload FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($3::uuid IS NULL OR c.user_id = $3::uuid)
-  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')
-       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid)
-       OR ($4::text = 'recap' AND c.purpose = 'recap'))
+  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL)
+       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid))
   AND ($6::text IS NULL OR c.requested_model = $6::text)
   AND ($7::text IS NULL OR c.outcome = $7::text)
   AND ($8::text = '' OR strpos(lower(u.email), lower($8::text)) > 0)
@@ -295,6 +335,128 @@ func (q *Queries) ListAdminCalls(ctx context.Context, arg ListAdminCallsParams) 
 	return items, nil
 }
 
+const listAdminTimelineFailedCalls = `-- name: ListAdminTimelineFailedCalls :many
+SELECT c.started_at, jsonb_build_object('id',c.id,'step_id',c.step_id,'agent_id',c.subagent_id,
+ 'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
+ 'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
+ 'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
+ 'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text)::jsonb AS call
+FROM model_calls c
+WHERE c.user_id = $1 AND c.subagent_id IS NOT DISTINCT FROM $2::uuid AND c.outcome <> 'succeeded'
+ AND ($3::timestamptz IS NULL OR c.started_at >= $3::timestamptz)
+ AND ($4::timestamptz IS NULL OR c.started_at < $4::timestamptz)
+ORDER BY c.started_at DESC LIMIT 200
+`
+
+type ListAdminTimelineFailedCallsParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	FromAt     *time.Time
+	ToAt       *time.Time
+}
+
+type ListAdminTimelineFailedCallsRow struct {
+	StartedAt time.Time
+	Call      []byte
+}
+
+// 没有产出消息的请求（失败、中断、进行中）只存在于调用日志，按开始时间插入时间线。
+func (q *Queries) ListAdminTimelineFailedCalls(ctx context.Context, arg ListAdminTimelineFailedCallsParams) ([]ListAdminTimelineFailedCallsRow, error) {
+	rows, err := q.db.Query(ctx, listAdminTimelineFailedCalls,
+		arg.UserID,
+		arg.SubagentID,
+		arg.FromAt,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAdminTimelineFailedCallsRow
+	for rows.Next() {
+		var i ListAdminTimelineFailedCallsRow
+		if err := rows.Scan(&i.StartedAt, &i.Call); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminTimelineMessages = `-- name: ListAdminTimelineMessages :many
+SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.role, m.content, m.sender, m.sender_subagent_id, m.is_summary, m.created_at,
+ CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,'agent_id',c.subagent_id,
+  'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
+  'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
+  'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
+  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text) END::jsonb AS call
+FROM messages m LEFT JOIN LATERAL (
+ SELECT id, step_id, user_id, subagent_id, requested_model, response_model, provider_generation_id, outcome, http_status, started_at, finished_at, duration_ms, input_tokens, output_tokens, cost, tool_names, failure_kind, request_body, response_body, response_truncated, purpose, compact_reason, context_tokens_before, context_tokens_after, summary_through_sequence FROM model_calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
+ ORDER BY mc.started_at DESC LIMIT 1
+) c ON true
+WHERE m.user_id = $1 AND m.subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND m.sequence IS NOT NULL AND ($3::bigint IS NULL OR m.sequence < $3::bigint)
+ORDER BY m.sequence DESC LIMIT $4::integer
+`
+
+type ListAdminTimelineMessagesParams struct {
+	UserID         uuid.UUID
+	SubagentID     *uuid.UUID
+	BeforeSequence *int64
+	PageLimit      int32
+}
+
+type ListAdminTimelineMessagesRow struct {
+	ID               uuid.UUID
+	Sequence         int64
+	Role             string
+	Content          []byte
+	Sender           *string
+	SenderSubagentID *uuid.UUID
+	IsSummary        bool
+	CreatedAt        time.Time
+	Call             []byte
+}
+
+// 按 sequence 从新到旧取一页已读消息；模型输出附上产生它的那次成功请求。
+func (q *Queries) ListAdminTimelineMessages(ctx context.Context, arg ListAdminTimelineMessagesParams) ([]ListAdminTimelineMessagesRow, error) {
+	rows, err := q.db.Query(ctx, listAdminTimelineMessages,
+		arg.UserID,
+		arg.SubagentID,
+		arg.BeforeSequence,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAdminTimelineMessagesRow
+	for rows.Next() {
+		var i ListAdminTimelineMessagesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sequence,
+			&i.Role,
+			&i.Content,
+			&i.Sender,
+			&i.SenderSubagentID,
+			&i.IsSummary,
+			&i.CreatedAt,
+			&i.Call,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAdminUsers = `-- name: ListAdminUsers :many
 WITH page AS (
  SELECT u.id, u.email, u.created_at FROM users u WHERE ($3::uuid IS NULL OR u.id=$3::uuid)
@@ -326,9 +488,8 @@ FROM page u CROSS JOIN LATERAL (
  coalesce(sum(c.cost),0)::text AS cost_known_usd,count(*) FILTER(WHERE c.cost IS NULL) AS cost_unknown
  FROM model_calls c WHERE c.user_id=u.id AND c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
   AND ($3::uuid IS NULL OR c.user_id = $3::uuid)
-  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL AND c.purpose <> 'recap')
-       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid)
-       OR ($4::text = 'recap' AND c.purpose = 'recap'))
+  AND ($4::text = 'all' OR ($4::text = 'main' AND c.subagent_id IS NULL)
+       OR ($4::text = 'subagent' AND c.subagent_id = $5::uuid))
   AND ($6::text IS NULL OR c.requested_model = $6::text)
   AND ($7::text IS NULL OR c.outcome = $7::text)
   AND ($8::text = '' OR strpos(lower(u.email), lower($8::text)) > 0)

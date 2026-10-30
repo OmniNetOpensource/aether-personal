@@ -30,7 +30,7 @@ WHERE id = sqlc.arg(id) AND outcome = 'in_flight';
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = sqlc.arg(user_id)
     AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
-    AND purpose <> 'recap' AND outcome = 'in_flight';
+    AND outcome = 'in_flight';
 
 -- name: HasAgentExecutionWork :one
 SELECT EXISTS (

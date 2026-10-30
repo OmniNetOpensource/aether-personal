@@ -97,7 +97,7 @@ const interruptModelCalls = `-- name: InterruptModelCalls :exec
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = $1
     AND subagent_id IS NOT DISTINCT FROM $2::uuid
-    AND purpose <> 'recap' AND outcome = 'in_flight'
+    AND outcome = 'in_flight'
 `
 
 type InterruptModelCallsParams struct {

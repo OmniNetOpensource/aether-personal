@@ -1,3 +1,4 @@
+# 本文件构建后端运行镜像，包含服务进程、数据库迁移和旧服务凭证的一次性导入命令。
 FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
@@ -5,13 +6,14 @@ RUN go mod download
 COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 go build -trimpath -o /out/import-services ./cmd/import-services
 RUN CGO_ENABLED=0 go build -trimpath -o /out/goose github.com/pressly/goose/v3/cmd/goose
 
 FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /out/server /out/goose /usr/local/bin/
+COPY --from=build /out/server /out/goose /out/import-services /usr/local/bin/
 COPY backend/db/migrations ./db/migrations
 USER 10001:10001
 EXPOSE 8080

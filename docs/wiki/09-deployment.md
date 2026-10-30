@@ -44,7 +44,9 @@ chmod 600 infra/prod/.env
 
 在服务器上生成两份不同的随机十六进制值，分别写入 `POSTGRES_PASSWORD` 和 `ORIGIN_AUTH_SECRET`。例如使用 `openssl rand -hex 32`，不要把结果发进聊天或提交到仓库。数据库密码使用十六进制，避免连接串中的保留字符。
 
-填写 OpenRouter、Resend 与联网服务密钥。`EMAIL_FROM` 必须属于 Resend 已验证的发信域名，示例中的地址不是验证结果。`APP_ENV=prod` 和内部数据库地址由 Compose 设置。开发数据库和生产数据库不共用数据卷。
+另用 `openssl rand -base64 32` 生成 `SERVICE_ENCRYPTION_KEY`，保存到生产 `.env` 并单独备份。模型、邮件和联网服务的 Key 在管理看板“服务配置”页填写，Resend 发件人必须属于该账户已验证的域名。`APP_ENV=prod` 和内部数据库地址由 Compose 设置。开发数据库和生产数据库不共用数据卷与主加密密钥。恢复数据库时必须同时恢复原主密钥。
+
+旧部署升级时，先保留原服务变量、补充主密钥，构建新镜像并执行迁移，再运行一次 `make prod-import-services`。该命令只导入不存在的服务记录，不覆盖已保存或已清除的 Key。导入完成后从生产 `.env` 删除旧服务变量，日常 API 容器不再接收它们。新部署无需导入，先登录看板即可填写服务配置。
 
 为看板设置独立密码：
 

@@ -15,19 +15,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
 const maxWebResponseBytes = 8 << 20
 
 type webTools struct {
-	httpClient       *http.Client
-	serpAPIKey       string
-	parallelAPIKey   string
-	everyInfraAPIKey string
-	searchMutex      sync.Mutex
-	nextSearch       time.Time
-	fetchMutex       sync.Mutex
-	nextFetch        time.Time
+	httpClient  *http.Client
+	services    *services.Store
+	searchMutex sync.Mutex
+	nextSearch  time.Time
+	fetchMutex  sync.Mutex
+	nextFetch   time.Time
 }
 
 type webSearchResult struct {
@@ -53,8 +53,9 @@ func (t *webTools) search(ctx context.Context, args json.RawMessage) (string, er
 	}
 	results := []webSearchResult{}
 	if input.Platform == "google" {
-		if t.serpAPIKey == "" {
-			return "", errors.New("SERP_API_KEY is not set")
+		credentials, err := t.services.Load(ctx, services.Serper)
+		if err != nil {
+			return "", err
 		}
 		if err := waitForWebCall(ctx, &t.searchMutex, &t.nextSearch); err != nil {
 			return "", err
@@ -68,7 +69,7 @@ func (t *webTools) search(ctx context.Context, args json.RawMessage) (string, er
 				Snippet string `json:"snippet"`
 			} `json:"organic"`
 		}
-		if err := t.postJSON(requestContext, "https://google.serper.dev/search", "X-API-KEY", t.serpAPIKey, map[string]string{"q": input.Query}, &response); err != nil {
+		if err := t.postJSON(requestContext, "https://google.serper.dev/search", "X-API-KEY", credentials.APIKey, map[string]string{"q": input.Query}, &response); err != nil {
 			return "", err
 		}
 		for _, result := range response.Organic {
@@ -89,8 +90,9 @@ func (t *webTools) search(ctx context.Context, args json.RawMessage) (string, er
 		} else if input.Platform != "weixin" {
 			return "", errors.New("search platform must be google, weixin, or rednote")
 		}
-		if t.everyInfraAPIKey == "" {
-			return "", errors.New("EVERYINFRA_API_KEY is not set")
+		credentials, err := t.services.Load(ctx, services.EveryInfra)
+		if err != nil {
+			return "", err
 		}
 		requestContext, cancel := context.WithTimeout(ctx, 120*time.Second)
 		defer cancel()
@@ -102,7 +104,7 @@ func (t *webTools) search(ctx context.Context, args json.RawMessage) (string, er
 				Text    string `json:"text"`
 			} `json:"results"`
 		}
-		if err := t.postJSON(requestContext, "https://api.everyinfra.com/api/v1/social", "Authorization", "Bearer "+t.everyInfraAPIKey,
+		if err := t.postJSON(requestContext, "https://api.everyinfra.com/api/v1/social", "Authorization", "Bearer "+credentials.APIKey,
 			map[string]any{"platform": platform, "action": action, "params": map[string]string{"keyword": input.Query}}, &response); err != nil {
 			return "", err
 		}
@@ -180,8 +182,9 @@ func (t *webTools) fetchURL(ctx context.Context, args json.RawMessage) (string, 
 }
 
 func (t *webTools) fetchEveryInfra(ctx context.Context, page *url.URL, platform string) (string, error) {
-	if t.everyInfraAPIKey == "" {
-		return "", errors.New("EVERYINFRA_API_KEY is not set")
+	credentials, err := t.services.Load(ctx, services.EveryInfra)
+	if err != nil {
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -214,7 +217,7 @@ func (t *webTools) fetchEveryInfra(ctx context.Context, page *url.URL, platform 
 	var response struct {
 		Results map[string]json.RawMessage `json:"results"`
 	}
-	if err := t.postJSON(ctx, "https://api.everyinfra.com/api/v1/social", "Authorization", "Bearer "+t.everyInfraAPIKey,
+	if err := t.postJSON(ctx, "https://api.everyinfra.com/api/v1/social", "Authorization", "Bearer "+credentials.APIKey,
 		map[string]any{"platform": platform, "action": action, "params": map[string]string{"url": page.String()}}, &response); err != nil {
 		return "", err
 	}
@@ -235,8 +238,9 @@ func (t *webTools) fetchEveryInfra(ctx context.Context, page *url.URL, platform 
 }
 
 func (t *webTools) fetchParallel(ctx context.Context, pageURL string) (string, error) {
-	if t.parallelAPIKey == "" {
-		return "", errors.New("PARALLEL_API_KEY is not set")
+	credentials, err := t.services.Load(ctx, services.Parallel)
+	if err != nil {
+		return "", err
 	}
 	if err := waitForWebCall(ctx, &t.fetchMutex, &t.nextFetch); err != nil {
 		return "", err
@@ -254,7 +258,7 @@ func (t *webTools) fetchParallel(ctx context.Context, pageURL string) (string, e
 			Content        string `json:"content"`
 		} `json:"errors"`
 	}
-	if err := t.postJSON(ctx, "https://api.parallel.ai/v1/extract", "x-api-key", t.parallelAPIKey,
+	if err := t.postJSON(ctx, "https://api.parallel.ai/v1/extract", "x-api-key", credentials.APIKey,
 		map[string]any{"urls": []string{pageURL}, "advanced_settings": map[string]any{"full_content": true,
 			"fetch_policy": map[string]any{"max_age_seconds": 600, "timeout_seconds": 60, "disable_cache_fallback": true}}}, &response); err != nil {
 		return "", err

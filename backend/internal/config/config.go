@@ -1,4 +1,4 @@
-// 本文件负责启动配置：只从环境变量读取并校验配置，prod 缺少必需项时让程序在启动阶段直接失败。
+// 本文件读取基础设施与模型默认值等启动配置；供应商凭证由看板保存到数据库，加密主密钥仍由部署环境提供。
 
 package config
 
@@ -13,24 +13,18 @@ import (
 const DefaultMaxOutputTokens = 8192
 
 type Config struct {
-	MaxOutputTokens     int32
-	AdminPasswordSalt   []byte
-	AdminPasswordKey    []byte
-	AppEnv              string
-	Port                string
-	DatabaseURL         string
-	DatabaseMaxConns    int32
-	ResendAPIKey        string
-	EmailFrom           string
-	OpenRouterAPIKey    string
-	MainModel           string
-	RecapModel          string
-	SubagentModel       string
-	SubagentFollowsMain bool
-	SERPAPIKey          string
-	ParallelAPIKey      string
-	EveryInfraAPIKey    string
-	FrontendDir         string
+	MaxOutputTokens      int32
+	AdminPasswordSalt    []byte
+	AdminPasswordKey     []byte
+	ServiceEncryptionKey []byte
+	AppEnv               string
+	Port                 string
+	DatabaseURL          string
+	DatabaseMaxConns     int32
+	MainModel            string
+	SubagentModel        string
+	SubagentFollowsMain  bool
+	FrontendDir          string
 }
 
 func Load() (Config, error) {
@@ -59,15 +53,10 @@ func Load() (Config, error) {
 		port = "8080"
 	}
 
-	resendAPIKey := os.Getenv("RESEND_API_KEY")
-	emailFrom := os.Getenv("EMAIL_FROM")
-	if appEnv == "prod" && (resendAPIKey == "" || emailFrom == "") {
-		return Config{}, fmt.Errorf("RESEND_API_KEY and EMAIL_FROM are required in prod")
-	}
-
-	openRouterAPIKey := os.Getenv("OPENROUTER_API_KEY")
-	if openRouterAPIKey == "" {
-		return Config{}, fmt.Errorf("OPENROUTER_API_KEY is required")
+	// 缺少服务 Key 不阻止管理员进入看板；只有解密所需的部署主密钥必须先存在。
+	serviceEncryptionKey, err := base64.StdEncoding.DecodeString(os.Getenv("SERVICE_ENCRYPTION_KEY"))
+	if err != nil || len(serviceEncryptionKey) != 32 {
+		return Config{}, fmt.Errorf("SERVICE_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
 	}
 
 	mainModel := os.Getenv("MAIN_MODEL")
@@ -105,23 +94,17 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		AppEnv:              appEnv,
-		MaxOutputTokens:     maxOutputTokens,
-		AdminPasswordSalt:   adminPasswordSalt,
-		AdminPasswordKey:    adminPasswordKey,
-		Port:                port,
-		DatabaseURL:         databaseURL,
-		DatabaseMaxConns:    databaseMaxConns,
-		ResendAPIKey:        resendAPIKey,
-		EmailFrom:           emailFrom,
-		OpenRouterAPIKey:    openRouterAPIKey,
-		MainModel:           mainModel,
-		RecapModel:          os.Getenv("RECAP_MODEL"),
-		SubagentModel:       subagentModel,
-		SubagentFollowsMain: os.Getenv("SUBAGENT_MODEL") == "",
-		SERPAPIKey:          os.Getenv("SERP_API_KEY"),
-		ParallelAPIKey:      os.Getenv("PARALLEL_API_KEY"),
-		EveryInfraAPIKey:    os.Getenv("EVERYINFRA_API_KEY"),
-		FrontendDir:         os.Getenv("FRONTEND_DIR"),
+		AppEnv:               appEnv,
+		MaxOutputTokens:      maxOutputTokens,
+		AdminPasswordSalt:    adminPasswordSalt,
+		AdminPasswordKey:     adminPasswordKey,
+		ServiceEncryptionKey: serviceEncryptionKey,
+		Port:                 port,
+		DatabaseURL:          databaseURL,
+		DatabaseMaxConns:     databaseMaxConns,
+		MainModel:            mainModel,
+		SubagentModel:        subagentModel,
+		SubagentFollowsMain:  os.Getenv("SUBAGENT_MODEL") == "",
+		FrontendDir:          os.Getenv("FRONTEND_DIR"),
 	}, nil
 }

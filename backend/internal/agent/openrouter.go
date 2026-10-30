@@ -1,4 +1,4 @@
-// 本文件负责调用 OpenRouter 模型：组装含工具与交付约束的请求、记录每次调用的请求响应与用量，并按可重试规则处理失败。
+// 本文件负责共用模型请求流程：选择 OpenRouter 或 ikun Gemini，记录实际请求响应与用量，并按可重试规则处理失败。
 
 package agent
 
@@ -6,16 +6,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -61,13 +64,14 @@ func (r *Runner) callModel(ctx context.Context, address agentAddress, contextMes
 }
 
 type modelRequest struct {
-	Reasoning   map[string]any    `json:"reasoning,omitempty"`
-	RecapUserID uuid.UUID         `json:"-"`
-	Model       string            `json:"model"`
-	Messages    []json.RawMessage `json:"messages"`
-	Tools       []json.RawMessage `json:"tools,omitempty"`
-	ToolChoice  json.RawMessage   `json:"tool_choice,omitempty"`
-	MaxTokens   int32             `json:"max_tokens"`
+	Reasoning     map[string]any    `json:"reasoning,omitempty"`
+	Model         string            `json:"model"`
+	Messages      []json.RawMessage `json:"messages"`
+	Tools         []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage   `json:"tool_choice,omitempty"`
+	MaxTokens     int32             `json:"max_tokens"`
+	Stream        bool              `json:"stream,omitempty"`
+	StreamOptions map[string]bool   `json:"stream_options,omitempty"`
 }
 
 func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMessage, model string, outputLimit int32) modelRequest {
@@ -98,32 +102,62 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 }
 
 func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams) (response chatResponse, retryable bool, err error) {
-	body, err := json.Marshal(prepared)
+	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
+	gemini := strings.HasPrefix(prepared.Model, "ikun:gemini-")
+	service := services.OpenRouter
+	if gemini {
+		service = services.IkunGemini
+	}
+	credentials, err := r.services.Load(ctx, service)
+	if err != nil {
+		return response, false, err
+	}
+	endpoint, apiKey := "https://openrouter.ai/api/v1/chat/completions", credentials.APIKey
+	var body []byte
+	if gemini {
+		// 流式端点逐块返回 SSE 事件，后端拼完才落库与推送，前端仍一次性收到整条回复。
+		endpoint = credentials.BaseURL + "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(prepared.Model, "ikun:")) + ":streamGenerateContent?alt=sse"
+		body, err = geminiRequestBody(prepared)
+	} else {
+		// 要求流式返回，并在末尾分片带上用量；用量拿不到时记空，不阻断回复。
+		prepared.Stream = true
+		prepared.StreamOptions = map[string]bool{"include_usage": true}
+		// 从 Gemini 切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
+		messages := make([]json.RawMessage, len(prepared.Messages))
+		copy(messages, prepared.Messages)
+		for index, raw := range messages {
+			if !bytes.Contains(raw, []byte(`"gemini_content"`)) {
+				continue
+			}
+			var message map[string]json.RawMessage
+			_ = json.Unmarshal(raw, &message)
+			delete(message, "gemini_content")
+			delete(message, "gemini_model")
+			messages[index], _ = json.Marshal(message)
+		}
+		prepared.Messages = messages
+		body, err = json.Marshal(prepared)
+	}
 	if err != nil {
 		return response, false, err
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return chatResponse{}, false, err
 	}
-	request.Header.Set("Authorization", "Bearer "+r.settings.OpenRouterAPIKey)
+	if gemini {
+		request.Header.Set("x-goog-api-key", apiKey)
+		request.Header.Set("User-Agent", "aether")
+	} else {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	request.Header.Set("Content-Type", "application/json")
 
-	var callID uuid.UUID
-	if prepared.RecapUserID != uuid.Nil {
-		callID, err = database.New(r.databasePool).StartRecapModelCall(ctx, database.StartRecapModelCallParams{
-			UserID: prepared.RecapUserID, RequestedModel: prepared.Model, RequestBody: body,
-		})
-		if err != nil {
-			return response, false, fmt.Errorf("start recap call journal: %w", err)
-		}
-	} else if journal.StepID != uuid.Nil {
-		journal.RequestedModel, journal.RequestBody = prepared.Model, body
-		callID, err = database.New(r.databasePool).StartModelCall(ctx, journal)
-		if err != nil {
-			return response, false, fmt.Errorf("start model call journal: %w", err)
-		}
+	journal.RequestedModel, journal.RequestBody = prepared.Model, body
+	callID, err := database.New(r.databasePool).StartModelCall(ctx, journal)
+	if err != nil {
+		return response, false, fmt.Errorf("start model call journal: %w", err)
 	}
 	startedAt := time.Now()
 	outcome := "transport_error"
@@ -145,7 +179,8 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 		}
 		duration := time.Since(startedAt).Milliseconds()
 		var durationMS *int64 = &duration
-		if ctx.Err() != nil {
+		// 模型预算耗尽按传输超时保留耗时；进程退出或执行权丢失仍按外部中断记录。
+		if ctx.Err() != nil && !errors.Is(context.Cause(ctx), errModelRetryTimeout) {
 			outcome, durationMS = "interrupted", nil
 		}
 		var failure *string
@@ -159,7 +194,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 				for _, call := range message.ToolCalls {
 					name := call.Function.Name
 					switch name {
-					case "send_message", "assign_subagents", "schedule", "search", "fetch_url":
+					case "send_message", "assign_subagents", "schedule", "search", "search_twitter", "fetch_url":
 					default:
 						name = "other"
 					}
@@ -188,55 +223,68 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 		} else if rows != 1 {
 			err, retryable = fmt.Errorf("model call execution ownership was recovered"), false
 		}
-		if journal.StepID != uuid.Nil {
-			r.recordActivity(persistCtx, journal.StepID, "model", outcome, journal.Purpose)
-		}
 	}()
-	if journal.StepID != uuid.Nil {
-		if _, countErr := database.New(r.databasePool).CountRecapRequest(ctx, journal.StepID); countErr != nil {
-			slog.Warn("count recap model request failed", "error", countErr)
-		}
-		r.recordActivity(ctx, journal.StepID, "model", "started", journal.Purpose)
-		r.wakeRecap()
+	client := *r.modelClient
+	if gemini {
+		// 自定义密钥头不跟随重定向，避免被 HTTP 客户端转发给其他主机。
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
-	httpResponse, err := r.httpClient.Do(request)
+	httpResponse, err := client.Do(request)
 	if err != nil {
 		return response, true, err
 	}
 	defer httpResponse.Body.Close()
 	statusCode := int32(httpResponse.StatusCode)
 	status = &statusCode
-	responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, (8<<20)+1))
-	capturedResponseBody = responseBody
-	responseTruncated = len(responseBody) > 8<<20
-	if responseTruncated {
-		capturedResponseBody = responseBody[:8<<20]
-	}
-	if err != nil {
-		return response, true, err
-	}
-
-	// Preserve provider usage independently of assistant validity and later tool execution.
-	outcome = "invalid_response"
-	if len(responseBody) <= 8<<20 {
-		_ = json.Unmarshal(responseBody, &response)
-	}
+	// 出错时供应商返回的通常是普通 JSON 而非事件流，整段读回即可拿到错误信息。
 	if httpResponse.StatusCode != http.StatusOK {
+		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxModelResponseBytes+1))
+		capturedResponseBody = responseBody
+		responseTruncated = len(responseBody) > maxModelResponseBytes
+		if responseTruncated {
+			capturedResponseBody = responseBody[:maxModelResponseBytes]
+		}
+		if err != nil {
+			return response, true, err
+		}
 		outcome = "http_error"
 		retryable := httpResponse.StatusCode == http.StatusTooManyRequests || httpResponse.StatusCode >= 500
-		return response, retryable, fmt.Errorf("openrouter returned %d: %.500s", httpResponse.StatusCode, responseBody)
+		return response, retryable, fmt.Errorf("model provider returned %d: %.500s", httpResponse.StatusCode, responseBody)
 	}
-	if err := json.Unmarshal(responseBody, &response); err != nil {
-		return response, false, fmt.Errorf("decode openrouter response: %w", err)
+	// 逐块读取事件流并在内存里拼成完整回复；日志存档保留实际收到的原始分片。
+	payloads, captured, truncated, readErr := readSSEPayloads(httpResponse.Body)
+	capturedResponseBody, responseTruncated = captured, truncated
+	if truncated {
+		outcome = "invalid_response"
+		return response, false, fmt.Errorf("model response exceeds 8 MiB")
+	}
+	if readErr != nil {
+		outcome = "transport_error"
+		return response, true, readErr
+	}
+	// Preserve provider usage independently of assistant validity and later tool execution.
+	outcome = "invalid_response"
+	var incomplete bool
+	var decodeErr error
+	if gemini {
+		response, incomplete, decodeErr = assembleGeminiStream(payloads, prepared)
+	} else {
+		response, incomplete, decodeErr = assembleOpenRouterStream(payloads)
+	}
+	if decodeErr != nil {
+		if incomplete {
+			outcome = "transport_error"
+		}
+		return response, incomplete, decodeErr
 	}
 	if len(response.Choices) == 0 {
-		return response, false, fmt.Errorf("openrouter returned no choices: %.500s", responseBody)
+		return response, false, fmt.Errorf("model provider returned no choices")
 	}
 	var message struct {
 		Role string `json:"role"`
 	}
-	if len(responseBody) > 8<<20 || json.Unmarshal(response.Choices[0].Message, &message) != nil || message.Role != "assistant" {
-		return response, false, fmt.Errorf("openrouter returned invalid assistant message")
+	if json.Unmarshal(response.Choices[0].Message, &message) != nil || message.Role != "assistant" {
+		return response, false, fmt.Errorf("model provider returned invalid assistant message")
 	}
 	outcome = "succeeded"
 	return response, false, nil

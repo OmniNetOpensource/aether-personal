@@ -1,4 +1,4 @@
-// 本文件实现数据库类工具的分发：执行 send_message、assign_subagents 与 schedule，把文本投递给用户或 Agent 并落库。
+// 本文件实现数据库类工具的分发：执行 Agent 间的 send_message、assign_subagents 与 schedule，把文本投递给目标 Agent 并落库；Main 回复用户走正文，不经这里。
 
 package agent
 
@@ -33,11 +33,11 @@ func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Quer
 			return "delivered", err
 		}
 		if arguments.To == "user" {
-			return "delivered", nil
+			return "Error: main replies to the user directly in assistant text; send_message only sends instructions to an existing subagent", nil
 		}
 		subagentID, err := uuid.Parse(arguments.To)
 		if err != nil {
-			return "Error: to must be user or an existing subagent UUID", nil
+			return "Error: to must be an existing subagent UUID", nil
 		}
 		_, err = queries.GetSubagent(ctx, database.GetSubagentParams{UserID: address.userID, ID: subagentID})
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -50,7 +50,7 @@ sequenceDiagram
     DB-->>WS: NOTIFY user_messages
     WS-->>App: messages {..., read_up_to}
     Runner->>Model: 系统提示词 + messageList + 工具
-    Model-->>Runner: assistant 消息（含 send_message 调用）
+    Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
     DB-->>WS: NOTIFY user_messages
     WS-->>App: messages {Main 的回复}
@@ -106,7 +106,7 @@ sequenceDiagram
 
 | 字段 | 说明 |
 | --- | --- |
-| `id` | 显示 ID：用户消息为行 ID；Main 的消息为 `send_message` 的工具调用 ID |
+| `id` | 显示 ID：用户与 Main 的消息都用所在行 ID（Main 一行至多一条正文消息） |
 | `position` | 所在行的 ID，App 记下最后一条的值，重连时带上 |
 | `client_message_id` | 仅用户消息有；App 据此把本地 `failed` 的消息改为 `delivered` |
 | `sender` | `user` 或 `main` |
@@ -148,12 +148,12 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 ## 用户能看到的消息
 
-当前实现中，用户只能看到两类消息内容：自己发的消息，以及 Main 用 `send_message` 发给用户的文字。2026-10-26 已确认增加额外 Agent 汇总 Main 与 Subagent 的行动，作为运行动态显示在聊天底部，更新同一处文字，刷新和重连会恢复当前状态，见 [05 行动摘要 Agent](05-main-runtime.md#行动摘要-agent开发中)。
+当前实现中，用户只能看到两类消息内容：自己发的消息，以及 Main 模型生成的正文（2026-10-30 起取代旧的 `send_message(to=user)` 方式，详见 [05](05-main-runtime.md#main-如何回复用户)）。
 
-不加列，在 Go 代码中解析：查出 Main 列表中位置之后的用户消息与 `assistant` 行，用户消息直接取文字；`assistant` 行遍历 `tool_calls`，取出发给用户的 `send_message` 的 `text`。每条消息以工具调用 ID 作为显示 ID，同一行中的多条消息一起推送，推送位置仍用行 ID。一行中也可能一条都没有（Main 只思考、不说话）。
+不加列，在 Go 代码中解析：查出 Main 列表中位置之后的用户消息与 `assistant` 行，用户消息直接取文字；`assistant` 行取其正文（`agent.AssistantTextToUser`），正文非空即一条 Main 消息，与所在行共用行 ID 作为显示 ID，推送位置仍用行 ID。一行中也可能一条都没有（Main 只调工具没写正文，或无正文结束）。
 
 - 不加 `user_visible_text` 列：表结构不变，文字只存一份。
-- 显示与执行共用同一个解析函数（`agent.MessagesToUser` 与执行时共用的 `parseSendMessage`）：执行时因参数不合法而失败的调用，显示时同样跳过。
+- 后端等模型整条回复生成结束、助手消息落库后才经 NOTIFY 推送整条正文，不向前端逐段推送生成中的文字。
 
 ## 历史消息
 
@@ -190,23 +190,3 @@ UUIDv7 的时间来自数据库服务器时钟；时钟被人为往回调时，�
 - 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
 
 `待确认`：边生成边显示的推送方式；各平台的 WebSocket 连接恢复行为；其他平台的连接与部署验收。
-
-## 行动摘要快照（2026-10-26，开发中）
-
-每个 WebSocket `messages` 帧增加 `activity`。`state` 为 `working` 或 `idle`，同时携带递增的 `revision` 和 `work_version`；工作中时 `summary` 为最新 recap，尚未生成时为空。该快照覆盖 Main 与 Subagent 的工作，Main 等待 Subagent 时继续显示动态。客户端只有在线时显示活动，断线时收起，重连后以最新快照恢复。
-
-当前实现的动态不追加到 `messages`，不占聊天历史位置，也不进入 Main 的上下文。2026-10-26，用户要求 recap 与普通消息有明显区别，样式更小、更淡。recap 采用无气泡背景的 12px 淡色文字，不同时展示跳动圆点。尚无摘要时仍显示原有思考提示。工作结束时后端推送 `idle`，客户端收起动态文字。运行规则与本地验证见 [05 行动摘要 Agent](05-main-runtime.md#行动摘要-agent开发中)。
-
-### recap 随聊天历史保留（已确认需求，尚未实现）
-
-用户进一步要求：
-
-> 我希望recap也持久化保留在消息上，怎么做？
-
-recap 需要作为聊天时间线中的独立条目保留，继续使用小号淡色文字。任务结束后保留已经展示的 recap，刷新和历史翻页能够读到。该需求扩展此前只显示最新动态的范围。
-
-拟采用独立的 `recaps` 表保存每条摘要，再由聊天查询把普通消息与 recap 合并为时间线。现有 `messages` 同时承担 Agent 上下文，独立保存 recap 可以避免把界面进度送回模型、进入上下文压缩或触发执行。该技术方案尚未写入代码。
-
-记录包含数据库生成的 UUIDv7、用户 ID、对应的 recap 模型调用 ID、工作版本、摘要文字和创建时间。模型调用 ID 唯一，防止同一次生成被重复保存；外键均级联删除。保存时复用用户消息写入锁，在同一短事务检查工作版本、插入 recap、更新当前快照并通知连接，保持提交顺序与时间线游标一致。
-
-实时推送与历史接口使用相同的条目 ID 和类型，统一按位置分页。前端把 recap 放在生成时的时间线位置，当前状态区域不重复显示同一条摘要。结束执行只关闭活动状态，历史记录继续保留。20 秒或四次模型请求的触发规则不变。

@@ -16,18 +16,15 @@ flowchart TD
             READ["read_message"]
 
             MAIN <-->|"任务说明 / subagent_id"| ASSIGN
-            MAIN <-->|"发送消息 / 投递回执"| SEND
+            MAIN <-->|"给 Subagent 发消息 / 投递回执"| SEND
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
+            MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
         end
 
         subgraph SUBBOX["Subagent：按任务创建"]
             SUB["Sub Runtime：独立上下文 · 后台执行 · 限额并行"]
         end
-
-        RECAP["Recap：每 20 秒或 4 次模型请求汇总行动<br/>独立调用 · 更新动态 · 开发中"]
-        RECAP <-->|"读取行动 / 保存动态快照"| DB
-        RECAP -->|"通知连接读取最新动态"| API
 
         TOOLS["Main / Subagent 共用执行工具<br/>已实现：search · fetch_url<br/>待实现：其他 HTTP/MCP"]
         SUB <-->|"工具调用 / 结果"| TOOLS
@@ -38,7 +35,7 @@ flowchart TD
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
         ASSIGN <-->|"记录 Subagent 后异步启动 / 立即返回 subagent_id"| SUB
-        SEND <-->|"投递给用户或指定 subagent / 回执"| MESSAGES
+        SEND <-->|"投递给指定 subagent / 回执"| MESSAGES
         SEARCH <-->|"按用户权限搜索历史"| DB
         READ <-->|"按 ID 和消息归属读取"| DB
 
@@ -57,5 +54,4 @@ flowchart TD
     CLIENT <-->|"WebSocket 登录 / 历史 / 收发消息与推送"| API
     MAIN <-->|"模型推理 / 消息、派发与执行工具请求"| MODEL
     SUB <-->|"模型推理 / 执行工具的调用请求"| MODEL
-    RECAP <-->|"独立模型请求 / 动态摘要"| MODEL
     TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL

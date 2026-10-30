@@ -94,12 +94,10 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 			return filter, fmt.Errorf("agent requires user_id")
 		}
 		filter.AgentKind = "main"
-		if value == "recap" {
-			filter.AgentKind = "recap"
-		} else if value != "main" {
+		if value != "main" {
 			id, err := uuid.Parse(value)
 			if err != nil {
-				return filter, fmt.Errorf("agent must be main, recap or a Subagent UUID")
+				return filter, fmt.Errorf("agent must be main or a Subagent UUID")
 			}
 			filter.AgentKind, filter.AgentID = "subagent", &id
 		}

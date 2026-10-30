@@ -56,7 +56,7 @@ flowchart LR
 | 浏览器存储 | localStorage 保存登录，兼容早期 Flutter 与 Lynx 的键；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
 | PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
 
-保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。Subagent 和工具过程留在后台，Main 的实际消息进入聊天，行动摘要显示在聊天底部，见 [05](05-main-runtime.md#行动摘要-agent开发中)。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
+保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。Subagent 和工具过程留在后台，Main 的实际消息进入聊天。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
 2026-10-28，用户要求输入框外围透明，单行时文字与图标垂直居中，多行时加号和发送按钮固定在输入框底部，文字向上扩展，并在左侧增加加号。输入框以透明外围的浮层覆盖消息区，滚动内容为输入框实际高度预留底部空间；多行输入与已选文件改变高度时同步更新。用户确认本次加号仅提供本地文件选择入口，支持显示文件名和移除选择；不上传文件、不随聊天发送文件。
 
@@ -80,11 +80,10 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | 认证 | 邮箱验证码登录、退出，全部走聊天 WebSocket 命令，见 [03 认证](03-auth.md) | `已实现` |
 | 消息 API | WebSocket 登录、历史翻页、收发与推送；服务器事件定义与中转在 `events.go`，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
 | Main 运行时 | 按用户串行运行 Main，调用模型与工具，见 [05 Main 运行时](05-main-runtime.md) | `已实现` |
-| `send_message` | Main 发消息给用户或 Subagent，Subagent 发给 Main | `已实现` |
+| `send_message` | 仅 Agent 间：Main 发给 Subagent，Subagent 发给 Main；Main 回复用户走正文 | `已实现` |
 | `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `仅设计` |
 | `assign_subagents` | 派出 Subagent，异步启动并立即返回 `subagent_id` | `已实现` |
 | `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将保存的上下文交给 Main，见 [10](10-schedules.md) | `开发中` |
-| 行动摘要 recap | 每 20 秒或四次模型请求汇总 Main 与 Subagent 行动，实时更新聊天动态 | `开发中` |
 | Subagent 运行时 | 独立上下文、后台执行、每用户 3 个并行、持久排队、15 分钟超时 | `已实现` |
 | 压缩 | 超过回答间隔或上下文阈值后，在下一次模型请求前生成摘要；阈值由看板配置 | `开发中` |
 | 向量计算 | 后台为消息补算 embedding | `仅设计` |
@@ -141,7 +140,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 **后端无状态，状态都在 PostgreSQL。** 任何一台后端都能处理任何用户的请求；机器之间用 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，用咨询锁（advisory lock）保证同一用户的 Main 同一时间只在一台机器上运行。不引入 Redis。内存中只有 WebSocket 连接与进行中的模型调用，丢失后都能恢复。详见 [04 消息与实时通信](04-messaging.md#整体结构)。
 
-**一切通信都是消息。** 用户、Main、Subagent 之间只通过消息联系，每个 Agent 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。Main 只有调用 `send_message` 才会对用户说话，直接输出的文字是它自己的思考。
+**一切通信都是消息。** 用户、Main、Subagent 之间只通过消息联系，每个 Agent 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）；`send_message` 只用于 Main 与 Subagent 之间。
 
 ## 工程组织
 
@@ -196,21 +195,18 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 ## 配置
 
-启动配置只来自环境变量；dev 使用未提交的 `.env`，由启动命令加载。管理员在看板保存的运行时模型选择持久化于数据库并覆盖模型默认值，见 [08](08-admin-observability.md)。`APP_ENV` 必填且只允许 `dev` / `prod`，`prod` 缺少必需配置时启动即报错退出。
+基础设施启动配置来自环境变量，dev 使用未提交的 `.env`。运行时模型选择和六组服务配置由管理员在看板保存到数据库，见 [08](08-admin-observability.md)。`APP_ENV` 必填且只允许 `dev` / `prod`。`SERVICE_ENCRYPTION_KEY` 必填；缺少供应商 Key 不阻止启动，管理员可先登录看板补齐，调用未配置的服务时报错。服务凭证不回退环境变量，旧值仅由显式导入命令迁移一次。
 
 | 环境变量 | 说明 |
 | --- | --- |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式、是否真实发信 |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
 | `PORT` | 可选，默认 `8080` |
-| `OPENROUTER_API_KEY` | 必填（dev 也需要真实调用模型） |
+| `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
-| `RECAP_MODEL` | 可选，留空跟随管理端当前 Main 模型；独立生成运行动态 |
 | `DATABASE_MAX_CONNS` | 默认 20，最小 5；预留 4 条连接处理普通请求 |
-| `SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY` | 联网工具密钥；缺少时相应工具返回错误 |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
-| `RESEND_API_KEY`、`EMAIL_FROM` | `prod` 必填；dev 不发邮件，验证码打印在日志中 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 
 ## 代码托管
@@ -251,8 +247,6 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 ## 写代码前的预期核对
 
-2026-10-28，用户要求在写代码之前先核对预期：把所有可能失败的点列出来，由用户确定该失败状态是否走得到。
+2026-10-28，用户曾要求在写代码之前先核对预期：把所有可能失败的点列出来，由用户确定该失败状态是否走得到。确认不可达的不写防御处理，确认可达的才设计失败处理。当时的理由是，不可达分支会让主流程长期背着用不到的状态和复核。
 
-选择理由：过度防御大多不是写代码时手多，而是动手前没有区分「这个状态到底能不能到达」。不可达的状态一旦写了处理，代码就要长期背着对应的分支、状态和复核，主流程也随之变难读。先由用户——最清楚业务约束的人——判定可达性，确认不可达的就不写处理，确认可达的才设计失败处理；这样防御只出现在真实存在的地方。与「仅产品决策询问用户」并行：可达性属于对预期和业务约束的确认，不是把技术实现逐项拿去问。
-
-第一个按此方式处理的例子是上下文压缩：其干净输入输出的约定见 [05 Main 运行时](05-main-runtime.md) 中 `prepareContext` 的说明。
+2026-10-30，用户要求删除这套协作方式。完成一项需求时，不再把可能的报错和失败状态列出来找用户确认。失败处理由开发者判断：防御仍只发生在系统边界，即后端 API 的请求、用户输入和外部服务响应；内部模块继续按互信契约编写。已经按当时核对确定的产品行为保持不变，例如上下文压缩只把模型调用失败当作需要处理的失败，见 [05 Main 运行时](05-main-runtime.md)。

@@ -16,6 +16,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/httpapi"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,14 +48,19 @@ func main() {
 	}
 
 	defer databasePool.Close()
-	runner := agent.NewRunner(databasePool, appConfig)
+	// HTTP 与 Agent 共用无缓存的服务配置入口，数据库保留凭证的唯一运行时副本。
+	serviceSettings, err := services.New(databasePool, appConfig.ServiceEncryptionKey, appConfig.AppEnv)
+	if err != nil {
+		slog.Error("initialize service encryption failed")
+		os.Exit(1)
+	}
+	runner := agent.NewRunner(databasePool, appConfig, serviceSettings)
 	go runner.Start(ctx)
-	go runner.StartRecaps(ctx)
 	go scheduler.Run(ctx, databasePool, runner.Wake)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, runner), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, runner, serviceSettings), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

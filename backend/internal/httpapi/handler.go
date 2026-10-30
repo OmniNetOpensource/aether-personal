@@ -10,6 +10,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,9 +21,10 @@ type server struct {
 	httpClient   *http.Client
 	runner       *agent.Runner
 	connections  *chatConnections
+	services     *services.Store
 }
 
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner) http.Handler {
+func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner, serviceSettings *services.Store) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
@@ -30,6 +32,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
 		runner:       runner,
 		connections:  newChatConnections(),
+		services:     serviceSettings,
 	}
 	go s.listenForUserMessages()
 
@@ -41,9 +44,13 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 	mux.Handle("GET /admin/snapshot", s.requireAdmin(http.HandlerFunc(s.adminSnapshot)))
 	mux.Handle("GET /admin/calls", s.requireAdmin(http.HandlerFunc(s.adminCalls)))
 	mux.Handle("GET /admin/calls/{id}", s.requireAdmin(http.HandlerFunc(s.adminCallDetail)))
+	mux.Handle("GET /admin/timeline", s.requireAdmin(http.HandlerFunc(s.adminTimeline)))
+	mux.Handle("GET /admin/timeline/messages/{id}", s.requireAdmin(http.HandlerFunc(s.adminTimelineMessage)))
 	mux.Handle("GET /admin/models", s.requireAdmin(http.HandlerFunc(s.adminModels)))
 	mux.Handle("GET /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.adminModelSettings)))
 	mux.Handle("PUT /admin/model-settings", s.requireAdmin(http.HandlerFunc(s.updateAdminModelSettings)))
+	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
+	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
 	if appConfig.FrontendDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))

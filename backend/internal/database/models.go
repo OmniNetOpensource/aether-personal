@@ -12,10 +12,6 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type ActiveAgentUser struct {
-	UserID uuid.UUID
-}
-
 type AdminLoginAttempt struct {
 	Singleton       bool
 	Attempts        int32
@@ -57,7 +53,7 @@ type Message struct {
 
 type ModelCall struct {
 	ID                     uuid.UUID
-	StepID                 *uuid.UUID
+	StepID                 uuid.UUID
 	UserID                 uuid.UUID
 	SubagentID             *uuid.UUID
 	RequestedModel         string
@@ -99,18 +95,6 @@ type ModelSetting struct {
 	SubagentContextLength  *int64
 }
 
-type RecapState struct {
-	UserID            uuid.UUID
-	Active            bool
-	WorkVersion       int64
-	WindowStartedAt   time.Time
-	RequestTotal      int64
-	RecapRequestTotal int64
-	Summary           string
-	Revision          int64
-	UpdatedAt         time.Time
-}
-
 type Schedule struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
@@ -136,6 +120,16 @@ type ScheduleOccurrence struct {
 	TriggerMessageID uuid.UUID
 }
 
+type ServiceSetting struct {
+	ID               uuid.UUID
+	Service          string
+	ApiKeyCiphertext []byte
+	KeySuffix        string
+	BaseUrl          string
+	EmailFrom        string
+	UpdatedAt        time.Time
+}
+
 type Session struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
@@ -157,7 +151,6 @@ type Step struct {
 	FinishedAt   *time.Time
 	ModelReply   []byte
 	Purpose      string
-	Activity     []byte
 }
 
 type Subagent struct {

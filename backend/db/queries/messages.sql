@@ -55,7 +55,7 @@ SELECT candidates.user_id, candidates.subagent_id FROM (
     UNION
     SELECT user_id, id AS subagent_id FROM subagents WHERE status = 'running'
     UNION
-    SELECT user_id, subagent_id FROM model_calls WHERE outcome = 'in_flight' AND purpose <> 'recap'
+    SELECT user_id, subagent_id FROM model_calls WHERE outcome = 'in_flight'
 ) AS candidates
 ORDER BY candidates.user_id, candidates.subagent_id NULLS FIRST;
 
@@ -169,18 +169,11 @@ INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, 
 VALUES ($1, $2, 'user', $3, $4, true, $5, $6);
 
 -- name: GetLastMainReply :one
+-- Main 的正文即用户消息，最后一次回复就是最近一条正文非空的助手消息；只调工具没写正文不算回复。
 SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.created_at FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id) AND m.subagent_id IS NULL AND m.role = 'assistant'
- AND EXISTS (
-  SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.content->'tool_calls') = 'array'
-   THEN m.content->'tool_calls' ELSE '[]'::jsonb END) AS call
-  JOIN messages AS receipt ON receipt.user_id = m.user_id AND receipt.subagent_id IS NULL
-   AND receipt.role = 'tool' AND receipt.content->>'tool_call_id' = call->>'id'
-   AND receipt.content->>'content' = 'delivered' AND receipt.sequence > m.sequence
-  WHERE call->'function'->>'name' = 'send_message'
-   AND CASE WHEN pg_input_is_valid(call->'function'->>'arguments', 'jsonb')
-    THEN (call->'function'->>'arguments')::jsonb->>'to' = 'user' ELSE false END
- )
+ AND CASE WHEN jsonb_typeof(m.content->'content') = 'string'
+  THEN btrim(m.content->>'content') <> '' ELSE jsonb_typeof(m.content->'content') = 'array' END
 ORDER BY m.sequence DESC LIMIT 1;
 
 -- name: GetLastContextUsage :one

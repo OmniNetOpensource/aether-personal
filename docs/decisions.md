@@ -13,7 +13,7 @@
 - 变量名称必须直观，禁止使用抽象的变量名。
 - 写代码时，每个小模块（文件、类型、函数／方法、组件，以及函数内可独立理解的一段逻辑）前须写一两句注释，说明它负责什么、为什么存在，方便人类顺着注释逐个模块阅读；注释不逐行复述代码。用户在 2026-10-28 明确要求记下此规则，详见 [01](wiki/01-overview.md#代码注释)。
 - 每个手写源文件第一行写文件头注释，一两句说清文件职责；改文件时职责变了就同步更新文件头。范围不含 sqlc 生成代码、历史迁移与 JSON 等文件。用户在 2026-10-28 确认此范围，详见 [01](wiki/01-overview.md#代码注释)。
-- 写代码之前先核对预期：列出所有可能失败的点，由用户确定该失败状态是否走得到；确认不可达的就不写防御处理，确认可达的才设计失败处理。用户在 2026-10-28 明确要求按此方式协作，详见 [01](wiki/01-overview.md#写代码前的预期核对)。
+- 完成需求时不再列出可能的报错和失败状态、交由用户确认哪些走得到。用户在 2026-10-30 取消 2026-10-28 建立的「写代码前预期核对」。失败处理由开发者按编码原则判断，防御仍只发生在系统边界。详见 [01](wiki/01-overview.md#写代码前的预期核对)。
 - 上下文压缩（compact）预期：干净的输入输出——消息列表与模型配置作为已确定的输入，全部上下文原样加一条压缩指令发给同一模型，输出的一条摘要即压缩后的全部上下文，不保留任何原文；除模型调用本身失败外，不考虑其他失败状态，不为不可达状态（待总结历史超过压缩模型容量、摘要不合格、压缩后没变小或仍超限等）写处理；触发只看上一次同模型成功请求的官方 `prompt_tokens`，本地不估算 token，接受触发慢一拍。用户在 2026-10-28 确认并改为全部压缩，详见 [05](wiki/05-main-runtime.md)。
 - 禁止写任何测试文件。用户在 2026-10-23 明确要求记下此规则。
 - 提交时采用小规模、自包含的 commit。用户在 2026-10-23 明确要求记下此规则。
@@ -28,6 +28,7 @@
 | 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
 | 用户删除 | 仅企业管理员可删除，终端用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
 | 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；保留运行概览、模型调用、模型配置，调用详情查看实际请求与响应 JSON，开发中 | [08](wiki/08-admin-observability.md) |
+| Agent 运行过程 | 2026-10-30 新增“运行过程”页并保留模型调用列表；按 Agent 时间降序（最新在上）显示输入、推理、工具调用与结果、压缩摘要、失败请求和系统提示词，长内容截断后按需加载；不显示待读消息与工具时长 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务 | 虚拟概念，实体是 Subagent，统一称 `subagent_id` | [01](wiki/01-overview.md#任务是虚拟概念实体是-subagent) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
@@ -44,7 +45,8 @@
 | 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
-| 配置来源 | 启动配置读取环境变量，运行时模型选择可由管理员保存到数据库；`APP_ENV` 必填，只允许 `dev` / `prod` | [01](wiki/01-overview.md#配置) |
+| 配置来源 | 基础设施与模型默认值读取环境变量；运行时模型选择与服务凭证保存在数据库。主加密密钥由部署端提供；缺少业务 Key 允许先进入看板配置 | [01](wiki/01-overview.md#配置) |
+| 服务凭证 | 2026-10-30 确认在看板统一管理六组 Key，AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量。用户明确只有一个管理员，不新增多管理员并发保存处理 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
 | 健康检查 | `GET /healthz`，同时检查数据库连接；启动时不检查数据库 | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
 | 本地 dev 数据库 | Docker Compose，端口 `${POSTGRES_PORT:-5432}` | [01](wiki/01-overview.md#后端骨架-已实现) |
@@ -62,7 +64,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18 + pgvector（`pgvector/pgvector:pg18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`，开发中新增 `model_calls`、`recap_state` | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`，开发中新增 `model_calls` | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序与待读 | 全局序列 `sequence`，为空即待读，下次调用模型前补号 | [02](wiki/02-data-model.md#排序与待读规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
@@ -84,7 +86,7 @@
 | 登录凭证 | 随机令牌 + `sessions` 表，不用 JWT；聊天重连在 WebSocket `hello` 中携带 | [03](wiki/03-auth.md#登录凭证) |
 | 过期 | 滑动过期，30 天不活跃失效；允许多设备 | [03](wiki/03-auth.md#登录凭证) |
 | 验证码 | 6 位、10 分钟、60 秒重发间隔、最多 5 次 | [03](wiki/03-auth.md#验证码) |
-| 凭证存储 | 只存哈希 | [03](wiki/03-auth.md#验证码) |
+| 验证码与登录令牌存储 | 只存哈希；第三方 API Key 使用独立主密钥加密，见服务凭证条目 | [03](wiki/03-auth.md#验证码) |
 | 邮件服务 | Resend，`net/http` 直接调用；dev 打印日志，prod 必须配置 | [03](wiki/03-auth.md#发信) |
 
 ### 消息与实时通信
@@ -95,10 +97,9 @@
 | 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
 | 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
 | Main 思考提示 | 聊天底部三点小气泡，按真实处理状态显示，结束、失败或断线后收起；开发中 | [04](wiki/04-messaging.md#main-思考气泡-开发中) |
-| 运行动态摘要 | 2026-10-26 确认增加额外 Agent 汇总 Main 与 Subagent 的行动；有工作期间每 20 秒或累计 4 次模型请求触发 recap，先到先触发；聊天底部以更小、更淡的无气泡文字更新摘要，开发中 | [05](wiki/05-main-runtime.md#行动摘要-agent开发中) |
-| recap 历史保留 | 2026-10-26 要求 recap 随消息持久保留，继续使用小号淡色样式；需求已确认，时间线持久化尚未实现 | [04](wiki/04-messaging.md#recap-随聊天历史保留已确认需求尚未实现) |
+| 运行动态摘要 | 2026-10-30 删除。不再单独调用模型汇总行动，也不保留 recap 历史；聊天底部只按 Main 是否在处理显示思考气泡 | [05](wiki/05-main-runtime.md#行动摘要2026-10-30-已删除) |
 | 消息状态 | `sending` / `failed`（仅 App）、`delivered` / `read`（由 `sequence` 算出） | [04](wiki/04-messaging.md#消息状态) |
-| 用户可见消息 | 不加列，在 Go 代码中解析 `send_message` | [04](wiki/04-messaging.md#用户能看到的消息) |
+| 用户可见消息 | 不加列，在 Go 代码中解析 Main 正文；2026-10-30 起正文即用户消息，取代旧的解析 `send_message` | [04](wiki/04-messaging.md#用户能看到的消息) |
 | 消息 ID | 数据库生成；`client_message_id` 只用于识别重发 | [04](wiki/04-messaging.md#消息-id-与重发) |
 | 写入顺序 | 同一用户的插入先取 `pg_advisory_xact_lock` | [04](wiki/04-messaging.md#写入顺序) |
 | 不合规则的消息 | 直接断开 WebSocket，不回错误消息 | [04](wiki/04-messaging.md#websocket) |
@@ -111,20 +112,23 @@
 | 实现顺序 | 最小对话 → 边生成边显示 → 更多工具 → 压缩与混合搜索 → Subagent | [05](wiki/05-main-runtime.md#实现顺序) |
 | 主对话 | 每用户一条长期主对话，同一份 `messageList` | [05](wiki/05-main-runtime.md) |
 | Schedule 职责 | 2026-10-27 确认 Agent 通过工具布置一次性和周期安排，到期后将任务上下文发给该用户的 Main，复用现有执行流程；开发中 | [10](wiki/10-schedules.md) |
-| 回复用户 | 只通过 `send_message`；2026-10-28 要求 Main 结束前最后一个工具必须成功发给 user，否则再次调用模型指定补发；内部正文不对外展示 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
+| 回复用户 | 2026-10-30 改为 Main 正文直达：模型正文（与工具同批的正文）即用户消息，后端等整条回复生成结束后再一次性推给前端；`send_message` 只用于 Agent 间通信，Main 对 user 的交付检查取消 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | 处理中收到新消息 | 当前请求或工具调用结束后、下一次模型调用前加入 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 按用户串行 | `pg_try_advisory_lock`，释放后唤醒调度；周期扫描补偿漏通知 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
-| Main 沟通方式 | 只通过工具行动和沟通，耗时任务以 `send_message` 汇报关键进展，完成后发送结果；禁止直接输出正文 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
+| Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务以正文汇报关键进展、完成后以正文发送结果，不写正文即沉默；`send_message` 只用于给 Subagent 发指令，Subagent 仍只通过它向 Main 汇报 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值 | [05](wiki/05-main-runtime.md#模型) |
+| ikun Gemini | 2026-10-30 确认接入 Aether 的 Gemini 原生渠道，供 Main、Subagent 与压缩使用；保留 OpenRouter。凭证由看板管理；用户指定默认地址 `https://api.ikuncode.cc`，页面只需填写 Key | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
+| 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | Subagent 模型 | `SUBAGENT_MODEL` 提供初始默认；管理端可独立切换或跟随 Main，保存后重启仍保留 | [05](wiki/05-main-runtime.md#模型) |
-| 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，保留只用工具沟通和最终结果走 `send_message` 的契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
-| 模型调用失败 | 不向用户显示，记日志与 `steps.error`；临时错误重试 3 次 | [05](wiki/05-main-runtime.md#模型调用失败) |
+| 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理）、`send_message` 仅 Agent 间，Subagent 保持工具汇报契约 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
+| 模型调用失败 | 不向用户显示，记日志与 `steps.error`；2026-10-30 模型单次请求与含上下文准备、重试和退避的一轮调用均限 10 分钟，临时错误最多重试 3 次；联网工具独立保留 120 秒 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 工具执行与恢复 | 2026-10-28 确认先保存助手消息、逐个工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Subagent | 与 Main 只通过消息联系；状态由运行时维护；收到消息即唤醒；暂无强制中断 | [05](wiki/05-main-runtime.md#subagent-已实现) |
 | 近期实现顺序 | 已完成 Subagent 联网与主对话；当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | Subagent 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
+| X（Twitter）搜索 | 2026-10-30 接入独立 `search_twitter(query, limit?, sort?)`，Main 与 Subagent 共用看板 EveryInfra Key；默认 Top，不保证严格时间排序或全量结果；失败不自动重试，零结果正常返回，缺失计数不补零 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | 派发接口 | `assign_subagents({tasks:["任务说明", ...]})`，每项创建独立 Subagent，立即返回对应 ID | [05](wiki/05-main-runtime.md#assign_subagents-已实现) |
 | Subagent 并发 | 每用户最多 3 个同时执行，超出任务保留在数据库中排队 | [05](wiki/05-main-runtime.md#subagent-已实现) |
 | Subagent 超时 | 每次唤醒最多连续执行 15 分钟，超时标为 `failed` 并通知 Main，收到新消息可再唤醒 | [05](wiki/05-main-runtime.md#subagent-已实现) |
@@ -135,7 +139,6 @@
 以下仅是待讨论事项，不构成已采用的方案；清单也不是完整的决策枚举。
 
 - 文档语言（中文、英文或双语）。
-- 企业管理员的多角色与个人身份管理；当前看板使用共享管理员密码，技术与接口见 [08](wiki/08-admin-observability.md)。
 - 按用户的用量与费用控制（额度、频率限制、统计）。
 - Schedule 的固定间隔安排与静默监控完成协议，见 [10](wiki/10-schedules.md#漏跑暂停和删除)。
 - 多实例部署下的后台向量计算。

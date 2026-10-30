@@ -11,12 +11,18 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
 func (s *server) sendLoginCode(ctx context.Context, email string, code string) error {
 	if s.appConfig.AppEnv == "dev" {
 		slog.Info("login code", "email", email, "code", code)
 		return nil
+	}
+	credentials, err := s.services.Load(ctx, services.Resend)
+	if err != nil {
+		return err
 	}
 
 	body, err := json.Marshal(struct {
@@ -26,7 +32,7 @@ func (s *server) sendLoginCode(ctx context.Context, email string, code string) e
 		HTML    string   `json:"html"`
 		Text    string   `json:"text"`
 	}{
-		From:    s.appConfig.EmailFrom,
+		From:    credentials.EmailFrom,
 		To:      []string{email},
 		Subject: "阿芒登录验证码 / Aether login code",
 		HTML:    strings.ReplaceAll(loginEmailHTML, "{{code}}", code),
@@ -40,7 +46,7 @@ func (s *server) sendLoginCode(ctx context.Context, email string, code string) e
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+s.appConfig.ResendAPIKey)
+	request.Header.Set("Authorization", "Bearer "+credentials.APIKey)
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := s.httpClient.Do(request)

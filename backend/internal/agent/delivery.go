@@ -1,4 +1,4 @@
-// 本文件负责交付检查：确认 Agent 结束前最后一次工具调用是成功送达的 send_message，没送达时只给一次纠正机会，避免私有正文被误当成已回复。
+// 本文件负责 Subagent 的交付检查：确认它结束前最后一次工具调用是成功送达给 Main 的 send_message，没送达时只给一次纠正机会；Main 直接以正文回复用户，不走这项检查。
 
 package agent
 
@@ -7,17 +7,20 @@ import (
 	"errors"
 )
 
-var errMissingDelivery = errors.New("assistant ended without a final delivered send_message to its recipient")
+var errMissingDelivery = errors.New("subagent ended without a final delivered send_message to main")
 
-const deliveryCorrection = `Runtime delivery check: you tried to end your turn, but your last tool call was not a successfully delivered send_message to your recipient. Call send_message now: to=user for Main, to=main for a Subagent. Send the current result, concrete blocker, or a concise update if waiting for background work. Private assistant text is never forwarded. Do not disclose private reasoning or repeat already delivered results. This is the only delivery correction for this attempt to end the turn.`
+const deliveryCorrection = `Runtime delivery check: you tried to end your turn, but your last tool call was not a successfully delivered send_message to Main. Call send_message now with to=main: send the current result, a concrete blocker, or a concise update if waiting for background work. Do not disclose private reasoning or repeat already delivered results. This is the only delivery correction for this attempt to end the turn.`
 
 type deliveryState struct {
 	satisfied bool
 	corrected bool
 }
 
-// 已提交的工具回执决定是否交付；新输入和后续工作不能复用旧的交付记录。
+// 已提交的工具回执决定 Subagent 是否交付；新输入和后续工作不能复用旧的交付记录。Main 以正文回复用户，恒视为无需检查。
 func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryState {
+	if address.subagentID == nil {
+		return deliveryState{satisfied: true}
+	}
 	var state deliveryState
 	calls := map[string]toolCall{}
 	lastToolID := ""
@@ -71,11 +74,7 @@ func inspectDelivery(messages []json.RawMessage, address agentAddress) deliveryS
 			if err != nil {
 				continue
 			}
-			recipient := "user"
-			if address.subagentID != nil {
-				recipient = "main"
-			}
-			state.satisfied = arguments.To == recipient
+			state.satisfied = arguments.To == "main"
 			if state.satisfied {
 				state.corrected = false
 			}

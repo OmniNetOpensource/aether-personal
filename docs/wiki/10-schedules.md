@@ -46,7 +46,7 @@ Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update`
 
 触发消息包含计划 ID、本次触发 ID、原定时间、实际投递时间和上下文快照。沿用 `role=user`、`sender=system`、`sequence=NULL` 的内部消息形态，并在内容中注明来源。`sender` 表示消息来源，模型消息的 `role` 表示输入形态，两者不能混为一谈。
 
-现有聊天查询隐藏这类内部输入，Main 仍通过 `send_message(to=user)` 联系用户。Main 正在工作时，新输入在后续模型请求前读取，不中断正在进行的请求。
+现有聊天查询隐藏这类内部输入，Main 仍以正文联系用户（2026-10-30 起取代 `send_message(to=user)`）；不写正文即静默处理完本次触发。Main 正在工作时，新输入在后续模型请求前读取，不中断正在进行的请求。
 
 ## 持久化与恢复
 
@@ -60,7 +60,7 @@ Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update`
 
 ## 实现位置与验证
 
-调度循环与工具实现位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义和执行接入 `backend/internal/agent/prompt.go` 与 `tools.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。行动摘要的 `GetRecapInput` 同时识别用户消息和计划事件，避免将旧话题当作本次任务。
+调度循环与工具实现位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义和执行接入 `backend/internal/agent/prompt.go` 与 `tools.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。
 
 2026-10-27 在隔离的 PostgreSQL 18 中完成迁移执行、回滚、再执行。构建、`go vet` 和差异空白检查通过。未新增测试文件。
 
@@ -78,6 +78,6 @@ Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update`
 
 暂停和删除只影响未来触发。删除计划会级联删除触发记录，已经投递的消息和上下文仍保留在 Main。暂停后恢复周期安排会计算下次未来时间；恢复已经过期的一次性安排需要同时设置新的 `at`。修改标题或上下文不改变下一次时间，历史触发保留原快照。
 
-固定间隔安排和无变化时静默结束不属于此次实现。当前交付检查对非空私有终止正文会触发纠正，需要明确完成协议后再支持静默监控。
+固定间隔安排不属于此次实现。无变化时静默结束自 2026-10-30 起已可达：Main 回复用户改走正文后不再有针对 Main 的交付检查，不写正文即合法沉默，静默监控无需再等单独的完成协议。
 
 后台执行与设备通知分开。Android 当前没有系统推送，因此保存结果和重连补消息不能等同于关闭 App 后弹出系统提醒。

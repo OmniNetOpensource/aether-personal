@@ -405,17 +405,11 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		if _, err := queries.SyncRecapState(ctx, userID); err != nil {
-			return err
-		}
 		if _, err := queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
 			UserID:          userID,
 			Text:            frame.Text,
 			ClientMessageID: &frame.ClientMessageID,
 		}); err != nil {
-			return err
-		}
-		if _, err := queries.SyncRecapState(ctx, userID); err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, userID)
@@ -459,19 +453,8 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		slog.Error("get Main activity failed", "user_id", userID, "error", err)
 		return err
 	}
-	activity := chatActivity{State: "idle"}
-	recap, err := s.queries.GetRecapState(ctx, userID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	if err == nil {
-		activity.Revision, activity.WorkVersion = recap.Revision, recap.WorkVersion
-		if recap.Active != nil && *recap.Active {
-			activity.State, activity.Summary = "working", recap.Summary
-		}
-	}
 	return relay.send(ctx, messagesEvent{
-		Type: "messages", MainThinking: mainThinking, Activity: activity,
+		Type: "messages", MainThinking: mainThinking,
 		chatMessages: chatMessages{Messages: chatMessagesFromRows(rows), ReadUpTo: readUpTo},
 	})
 }

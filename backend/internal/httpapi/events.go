@@ -25,13 +25,6 @@ const (
 	requestFailedInternal             = "internal"
 )
 
-type chatActivity struct {
-	State       string `json:"state"`
-	Summary     string `json:"summary"`
-	Revision    int64  `json:"revision"`
-	WorkVersion int64  `json:"work_version"`
-}
-
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
 // 已登录时同时带上最新一页历史，前端收到后才结束 loading 态。
 type readyEvent struct {
@@ -63,9 +56,8 @@ type historyEvent struct {
 }
 
 type messagesEvent struct {
-	Type         string       `json:"type"`
-	MainThinking bool         `json:"main_thinking"`
-	Activity     chatActivity `json:"activity"`
+	Type         string `json:"type"`
+	MainThinking bool   `json:"main_thinking"`
 	chatMessages
 }
 

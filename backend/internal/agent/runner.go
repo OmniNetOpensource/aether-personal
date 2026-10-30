@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,6 +23,12 @@ import (
 
 // Subagent 单次被唤醒后最多连续运行的时间，超时就标为失败并通知 Main。
 const subagentTimeout = 15 * time.Minute
+
+// 模型单次 HTTP 请求与包含全部重试的调用共用十分钟上限，联网工具另用自己的客户端。
+const modelRequestTimeout = 10 * time.Minute
+
+// errModelRetryTimeout 区分模型调用预算耗尽与进程退出、执行权丢失等外部中断。
+var errModelRetryTimeout = errors.New("model request and retries exceeded 10 minute budget")
 
 // agentAddress 是运行时定位一个 Agent 的地址：只有 userID 是 Main，二者都有是 Subagent。
 type agentAddress struct {
@@ -43,30 +49,28 @@ func (a agentAddress) lockKey() string {
 type Runner struct {
 	databasePool *pgxpool.Pool
 	settings     config.Config
-	httpClient   *http.Client
+	modelClient  *http.Client
 	webTools     webTools
+	services     *services.Store
 	wakeSignal   chan struct{}
-	recapWake    chan struct{}
 	activeSlots  chan struct{}
 	mutex        sync.Mutex
 	active       map[string]bool
 }
 
-// NewRunner 组装调度器：共用一个带超时的 HTTP 客户端给模型和联网工具，
+// NewRunner 组装调度器：模型与联网工具分别使用十分钟和两分钟超时的 HTTP 客户端，
 // 并按连接池大小预留并发名额，避免 Agent 把普通请求的连接占满。
-func NewRunner(pool *pgxpool.Pool, settings config.Config) *Runner {
-	client := &http.Client{Timeout: 120 * time.Second}
+func NewRunner(pool *pgxpool.Pool, settings config.Config, serviceSettings *services.Store) *Runner {
 	return &Runner{
-		recapWake:    make(chan struct{}, 1),
-		databasePool: pool, settings: settings, httpClient: client,
-		webTools:   webTools{httpClient: client, serpAPIKey: settings.SERPAPIKey, parallelAPIKey: settings.ParallelAPIKey, everyInfraAPIKey: settings.EveryInfraAPIKey},
+		databasePool: pool, settings: settings, modelClient: &http.Client{Timeout: modelRequestTimeout},
+		webTools:   webTools{httpClient: &http.Client{Timeout: 120 * time.Second}, services: serviceSettings},
+		services:   serviceSettings,
 		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{},
 	}
 }
 
 // Wake 在有新消息写入后敲一下调度循环，让它立刻重新扫队列；通道已满说明循环已被叫醒，不必排队。
 func (r *Runner) Wake(_ uuid.UUID) {
-	r.wakeRecap()
 	select {
 	case r.wakeSignal <- struct{}{}:
 	default:
@@ -146,7 +150,7 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 		return false
 	}
 	keys := []string{address.lockKey()}
-	// 收尾时按取得顺序的逆序释放全部咨询锁，并同步摘要状态、通知前端有新动态；释放失败就直接关连接，靠数据库会话结束兜底。
+	// 收尾时按取得顺序的逆序释放全部咨询锁，并通知前端有新消息；释放失败就直接关连接，靠数据库会话结束兜底。
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -156,9 +160,6 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 				connection.Conn().Close(cleanup)
 				return
 			}
-		}
-		if _, err := queries.SyncRecapState(cleanup, address.userID); err != nil {
-			slog.Warn("sync finished agent recap failed", "user_id", address.userID, "error", err)
 		}
 		if err := queries.NotifyUserMessages(cleanup, address.userID); err != nil {
 			slog.Error("notify agent activity failed", "user_id", address.userID, "error", err)
@@ -339,14 +340,17 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			if saved {
 				continue
 			}
-			// 联网工具（search / fetch_url）：在 whileRequest 里执行，期间持续检查执行锁连接还活着。
-			if call.Function.Name == "search" || call.Function.Name == "fetch_url" {
-				r.recordActivity(ctx, reply.stepID, call.Function.Name, "started", toolActivityDetail(call))
+			// 联网工具在 whileRequest 里执行，期间持续检查执行锁连接还活着。
+			if call.Function.Name == "search" || call.Function.Name == "search_twitter" || call.Function.Name == "fetch_url" {
 				result, err := whileRequest(ctx, connection, func(requestContext context.Context) (string, error) {
-					if call.Function.Name == "search" {
+					switch call.Function.Name {
+					case "search":
 						return r.webTools.search(requestContext, json.RawMessage(call.Function.Arguments))
+					case "search_twitter":
+						return r.webTools.searchTwitter(requestContext, json.RawMessage(call.Function.Arguments))
+					default:
+						return r.webTools.fetchURL(requestContext, json.RawMessage(call.Function.Arguments))
 					}
-					return r.webTools.fetchURL(requestContext, json.RawMessage(call.Function.Arguments))
 				})
 				if ctx.Err() != nil || connection.Conn().IsClosed() {
 					return errors.Join(ctx.Err(), err)
@@ -354,11 +358,6 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 				if err != nil {
 					result = "Error: " + err.Error()
 				}
-				state := "returned"
-				if err != nil {
-					state = "failed"
-				}
-				r.recordActivity(ctx, reply.stepID, call.Function.Name, state, toolActivityDetail(call))
 				if err := r.saveToolResult(ctx, connection, address, reply.stepID, call, result); err != nil {
 					return err
 				}
@@ -383,7 +382,7 @@ type modelResult struct {
 	retryable bool
 }
 
-// modelReply 是归一化后的模型回复：带上它属于哪个步骤，以及这次回复是否已把结果发给该发的人。
+// modelReply 是归一化后的模型回复：带上它属于哪个步骤，以及（仅 Subagent）这次回复是否已把结果发给 Main。
 type modelReply struct {
 	response chatResponse
 	stepID   uuid.UUID
@@ -397,16 +396,22 @@ type storedModelReply struct {
 	DeliveryCorrected bool         `json:"delivery_corrected"`
 }
 
-// callWithRetries 调用模型并处理重试：可重试的失败最多再试 3 次、间隔逐次翻倍，
+// callWithRetries 调用模型并处理重试：上下文准备、请求和退避共用十分钟预算，可重试的失败最多再试 3 次，
 // 每次重试都新开一个步骤记录，旧步骤以失败收尾，方便事后按步骤排查。
 func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID) (modelReply, error) {
+	retryDeadline := time.Now().Add(modelRequestTimeout)
+	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
+	defer cancel()
 	for attempt := 0; ; attempt++ {
-		prepared, messages, err := r.prepareContext(ctx, connection, address)
+		prepared, messages, err := r.prepareContext(retryContext, connection, address)
 		if err != nil {
 			return modelReply{}, err
 		}
+		// 执行锁仍由外层上下文守护；预算到期后等请求完成日志收尾，再结束步骤，避免两边抢着落库。
 		result, callErr := whileRequest(ctx, connection, func(requestContext context.Context) (modelResult, error) {
-			response, retryable, err := r.requestModel(requestContext, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"})
+			modelContext, cancel := context.WithDeadlineCause(requestContext, retryDeadline, errModelRetryTimeout)
+			defer cancel()
+			response, retryable, err := r.requestModel(modelContext, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"})
 			return modelResult{response: response, retryable: retryable}, err
 		})
 		if callErr == nil {
@@ -415,13 +420,17 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 		if ctx.Err() != nil || connection.Conn().IsClosed() {
 			return modelReply{}, callErr
 		}
+		if retryContext.Err() != nil {
+			callErr = fmt.Errorf("%w: %w", context.Cause(retryContext), callErr)
+		}
+		canRetry := result.retryable && attempt < 3 && retryContext.Err() == nil
 		errorText := callErr.Error()
 		err = pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 			queries := database.New(tx)
 			if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &errorText}); err != nil {
 				return err
 			}
-			if result.retryable && attempt < 3 {
+			if canRetry {
 				var err error
 				stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: address.userID, SubagentID: address.subagentID, Model: r.model(address)})
 				return err
@@ -432,15 +441,15 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			return modelReply{}, err
 		}
 		slog.Error("model request failed", "agent", address.lockKey(), "attempt", attempt+1, "error", callErr)
-		if !result.retryable || attempt == 3 {
+		if !canRetry {
 			return modelReply{}, callErr
 		}
 		select {
-		case <-ctx.Done():
-			return modelReply{}, ctx.Err()
+		case <-retryContext.Done():
+			return modelReply{}, context.Cause(retryContext)
 		case <-time.After(time.Second << attempt):
 		}
-		stepID, err = r.prepareStep(ctx, connection, address)
+		stepID, err = r.prepareStep(retryContext, connection, address)
 		if err != nil {
 			return modelReply{}, err
 		}
@@ -534,14 +543,6 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, connectio
 		if err != nil {
 			return err
 		}
-		state := "returned"
-		if strings.HasPrefix(result, "Error:") {
-			state = "failed"
-		}
-		activity, _ := json.Marshal(map[string]string{"kind": call.Function.Name, "state": state})
-		if err := queries.RecordStepActivity(ctx, database.RecordStepActivityParams{StepID: stepID, Activity: activity}); err != nil {
-			return err
-		}
 		content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
 		if err != nil {
 			return err
@@ -553,10 +554,10 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, connectio
 	})
 }
 
-// finishReply 在全部工具都有回执后结束本步：记下用量，并检查 Main 是否真的把结果发给了收件人——
-// 没发就追加一条纠正提示再跑一轮，已经纠正过仍没发则按失败收尾；有工具调用或需要纠正时顺手创建下一步。
+// finishReply 在全部工具都有回执后结束本步：记下用量；Main 的正文已在落库时成为用户消息，不做交付检查，
+// 只检查 Subagent 是否把结果发给了 Main——没发就追加一条纠正提示再跑一轮，已经纠正过仍没发则按失败收尾；有工具调用或需要纠正时顺手创建下一步。
 func (r *Runner) finishReply(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, response chatResponse, message assistantMessage, delivery deliveryState) error {
-	missingDelivery := len(message.ToolCalls) == 0 && !delivery.satisfied
+	missingDelivery := address.subagentID != nil && len(message.ToolCalls) == 0 && !delivery.satisfied
 	terminalFailure := missingDelivery && delivery.corrected
 	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)

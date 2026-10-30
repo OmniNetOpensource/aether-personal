@@ -237,23 +237,10 @@ body {
   border-radius: 21px 21px 21px 6px;
   background: var(--surface);
 }
-.recap {
-  align-self: flex-start;
-  max-width: min(84%, 720px);
-  margin-top: 10px;
-  margin-bottom: 2px;
-  padding: 0 4px;
-}
 .thinking-dots {
   display: flex;
   flex-direction: row;
   gap: 5px;
-}
-.recap-body {
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--on-forest-muted);
-  opacity: 0.75;
 }
 .dot {
   width: 6px;
