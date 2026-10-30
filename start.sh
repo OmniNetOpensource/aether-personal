@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 本文件是本地一键启动脚本：同时拉起后端、前端与管理看板等开发服务，并统一转发退出信号。
+# 本文件是本地一键启动脚本：拉起后端、前端与管理看板；端口已被占用时先关闭旧进程，退出时再关掉本次启动的服务。
 set -euo pipefail
 
-project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 admin_dir="${ADMIN_DIR:-$project_dir/admin}"
 admin_port="${ADMIN_PORT:-5174}"
 service_pids=()
@@ -28,7 +28,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command in go node npm docker make curl; do
+for command in go node npm docker make curl lsof; do
   command -v "$command" >/dev/null || fail "未安装 $command。"
 done
 [[ -f "$project_dir/backend/.env" ]] || fail "请先从 backend/.env.example 创建 backend/.env 并填写密钥。"
@@ -44,32 +44,56 @@ backend_port="$(
   [[ "${APP_ENV:-}" == dev ]] || fail "此脚本仅用于 APP_ENV=dev。"
   printf '%s' "${PORT:-8080}"
 )"
-node --input-type=module - "$backend_port" "$admin_port" <<'JS'
-import net from 'node:net';
-const ports = process.argv.slice(2).map(Number);
-if (ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535) || ports[0] === ports[1]) {
-  console.error('错误：后端与看板端口必须是不同的有效端口。');
-  process.exit(1);
+[[ "$backend_port" =~ ^[0-9]+$ && "$admin_port" =~ ^[0-9]+$ ]] \
+  && ((10#$backend_port >= 1 && 10#$backend_port <= 65535 && 10#$admin_port >= 1 && 10#$admin_port <= 65535)) \
+  && [[ "$backend_port" != "$admin_port" ]] \
+  || fail "后端与看板端口必须是不同的有效端口。"
+
+# listeners 列出正在监听该 TCP 端口的进程号；没有监听时为空。
+listeners() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null || true
 }
-for (const port of ports) {
-  await new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host: '127.0.0.1', port });
-    socket.setTimeout(1000, () => socket.destroy(new Error('Port check timed out')));
-    socket.once('connect', () => {
-      socket.destroy();
-      reject(Object.assign(new Error('Port in use'), { code: 'EADDRINUSE' }));
-    });
-    socket.once('error', error => {
-      socket.destroy();
-      if (error.code === 'ECONNREFUSED') resolve();
-      else reject(error);
-    });
-  }).catch(error => {
-    console.error(`错误：无法使用端口 ${port}（${error.code}），请先关闭占用它的服务。`);
-    process.exit(1);
-  });
+
+# stop_port 在启动前腾出开发端口。上次 start.sh 占着端口时结束那次脚本，由它关掉自己的子进程；
+# 其他程序只结束监听进程，避免误关它的父进程。
+stop_port() {
+  local port=$1 pid ppid args target seen existing attempt
+  local -a targets=()
+  while IFS= read -r pid; do
+    [[ -z "$pid" || "$pid" == "$$" ]] && continue
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    args=""
+    if [[ -n "$ppid" && "$ppid" != "$$" ]]; then
+      args="$(ps -o args= -p "$ppid" 2>/dev/null || true)"
+    fi
+    target="$pid"
+    if [[ "$args" == *start.sh* ]]; then
+      target="$ppid"
+    fi
+    seen=
+    if ((${#targets[@]})); then
+      for existing in "${targets[@]}"; do
+        [[ "$existing" == "$target" ]] && seen=1
+      done
+    fi
+    [[ -n "$seen" ]] || targets+=("$target")
+  done < <(listeners "$port")
+  ((${#targets[@]})) || return 0
+  printf '端口 %s 已有服务，正在关闭后重新启动……\n' "$port"
+  kill -TERM "${targets[@]}" 2>/dev/null || true
+  for ((attempt = 0; attempt < 60; attempt++)); do
+    [[ -z "$(listeners "$port")" ]] && return 0
+    sleep 0.1
+  done
+  while IFS= read -r pid; do
+    [[ -n "$pid" && "$pid" != "$$" ]] && kill -KILL "$pid" 2>/dev/null || true
+  done < <(listeners "$port")
+  sleep 0.2
+  [[ -z "$(listeners "$port")" ]] || fail "无法关闭占用端口 ${port} 的服务。"
 }
-JS
+
+stop_port "$backend_port"
+stop_port "$admin_port"
 
 mkdir -p "$project_dir/backend/bin"
 log_dir="$(mktemp -d "$project_dir/backend/bin/start-logs.XXXXXX")"
