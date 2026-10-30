@@ -48,6 +48,7 @@ type Message struct {
 	CreatedAt              time.Time
 	ClientMessageID        *uuid.UUID
 	SummaryThroughSequence *int64
+	SearchText             string
 }
 
 type ModelCall struct {

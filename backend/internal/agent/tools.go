@@ -71,6 +71,23 @@ var agentTools = []agentTool{
 		},
 	},
 	{
+		name:               "search_message",
+		definition:         json.RawMessage(`{"type":"function","function":{"name":"search_message","description":"Search this user's message history in the messages table (all message types). Main searches its own conversation plus all of this user's subagent records; a subagent searches only its own record. keyword matches exact words or phrases such as names, IDs or quoted text; query searches by meaning; provide at least one of them. who limits the speaker: user, main, subagent or any. Returns message IDs, speakers and excerpts; read a result with read_message before relying on its details.","parameters":{"type":"object","additionalProperties":false,"properties":{"keyword":{"type":"string","description":"Exact word or phrase to match literally."},"query":{"type":"string","description":"Natural-language description of what to find, matched by meaning."},"who":{"type":"string","enum":["any","user","main","subagent"],"default":"any"},"limit":{"type":"integer","minimum":1,"maximum":20,"default":10}},"required":[]}}}`),
+		main:               true,
+		subagent:           true,
+		outsideTransaction: true,
+		execute: func(ctx context.Context, runner *Runner, _ *database.Queries, address agentAddress, arguments string) (string, error) {
+			return runner.executeSearchMessage(ctx, address, arguments)
+		},
+	},
+	{
+		name:       "read_message",
+		definition: json.RawMessage(`{"type":"function","function":{"name":"read_message","description":"Read the full text of one message returned by search_message, with its agent, speaker and time. Main may read any message of this user; a subagent may only read messages in its own record.","parameters":{"type":"object","additionalProperties":false,"properties":{"message_id":{"type":"string","description":"A message UUID returned by search_message"}},"required":["message_id"]}}}`),
+		main:       true,
+		subagent:   true,
+		execute:    executeReadMessage,
+	},
+	{
 		name:               "search",
 		definition:         json.RawMessage(`{"type":"function","function":{"name":"search","description":"Search Google, Weixin Official Account articles or RedNote notes. Returns titles, URLs and descriptions. Read relevant pages with fetch_url before using them as evidence.","parameters":{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string"},"platform":{"type":"string","enum":["google","weixin","rednote"],"default":"google"}},"required":["query"]}}}`),
 		main:               true,
