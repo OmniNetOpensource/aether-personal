@@ -60,7 +60,7 @@ Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update`
 
 ## 实现位置与验证
 
-调度循环与工具实现位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义和执行接入 `backend/internal/agent/prompt.go` 与 `tools.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。
+调度循环与 schedule 的创建、修改位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义、谁能调用和分发在 `backend/internal/agent/tools.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。
 
 2026-10-27 在隔离的 PostgreSQL 18 中完成迁移执行、回滚、再执行。构建、`go vet` 和差异空白检查通过。未新增测试文件。
 

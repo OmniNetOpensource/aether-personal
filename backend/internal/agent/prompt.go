@@ -2,8 +2,6 @@
 
 package agent
 
-import "encoding/json"
-
 const mainPrompt = `You are Aether (阿芒 in Chinese), a personal agent. Each person you work with has exactly one
 conversation with you, and it never resets: the same relationship continues
 across days, months, and years. Older parts of the conversation may appear as
@@ -123,36 +121,3 @@ calls. This marker is the sole exception to the ban on direct assistant text;
 it is consumed by the runtime and never shown to the user. Do not send [DONE]
 through send_message. A progress update alone does not complete unfinished work.
 `
-
-var sendMessageTool = json.RawMessage(`{
-  "type": "function",
-  "function": {
-    "name": "send_message",
-    "description": "Provide follow-up instructions to an existing subagent (to=its UUID). Replies to the user are written directly as assistant text, never through this tool.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "to": {"type": "string", "description": "An existing subagent UUID returned by assign_subagents"},
-        "text": {"type": "string", "description": "The instruction the subagent will read."}
-      },
-      "required": ["to", "text"]
-    }
-  }
-}`)
-
-var assignSubagentsTool = json.RawMessage(`{"type":"function","function":{"name":"assign_subagents","description":"Create independent background subagents for the supplied task descriptions. Returns subagent_ids in the same order immediately. They will send results back as messages; do not poll. At most three run concurrently per user and the rest wait in the database queue.","parameters":{"type":"object","additionalProperties":false,"properties":{"tasks":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["tasks"]}}}`)
-
-var subagentSendTool = json.RawMessage(`{"type":"function","function":{"name":"send_message","description":"Send findings, source URLs, progress or blockers to Main. After reporting the completed task, stop using tools.","parameters":{"type":"object","additionalProperties":false,"properties":{"to":{"type":"string","enum":["main"]},"text":{"type":"string"}},"required":["to","text"]}}}`)
-
-var searchTool = json.RawMessage(`{"type":"function","function":{"name":"search","description":"Search Google, Weixin Official Account articles or RedNote notes. Returns titles, URLs and descriptions. Read relevant pages with fetch_url before using them as evidence.","parameters":{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string"},"platform":{"type":"string","enum":["google","weixin","rednote"],"default":"google"}},"required":["query"]}}}`)
-
-// searchTwitterTool 让 Main 与 Subagent 直接检索公开推文，并在调用前明确时间排序与数据完整性的限制。
-var searchTwitterTool = json.RawMessage(`{"type":"function","function":{"name":"search_twitter","description":"Search public X (Twitter) posts via EveryInfra. Returns post text, source URLs, authors, publication times and available engagement counts. Query supports X search operators such as from:, since: and until:. Defaults to Top results; latest is only a preference and does not guarantee chronological order. Results may be fewer than requested and are not a complete archive. Cite original post URLs; missing counts are unknown, not zero.","parameters":{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":200,"default":25},"sort":{"type":"string","enum":["top","latest"],"default":"top"}},"required":["query"]}}}`)
-
-var fetchURLTool = json.RawMessage(`{"type":"function","function":{"name":"fetch_url","description":"Read text content from an HTTP(S) webpage, including WeChat articles, Xiaohongshu/RedNote notes and Reddit posts. Keep the source URL when reporting findings.","parameters":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"]}}}`)
-
-var scheduleTool = json.RawMessage(`{"type":"function","function":{"name":"schedule","description":"Arrange future context delivery to this user's Main. Supports one-time timestamps or recurring five-field cron rules in an explicit IANA timezone. Create requires title, context, timezone and exactly one of at or cron. List returns up to 50 items and next_before for pagination. Update requires id and changed fields; enabled=false pauses, enabled=true resumes. Delete requires id. Pausing/deleting does not cancel context already delivered. A triggered status means delivered to Main, not task completed. Missed recurring triggers are combined into one delivery after downtime.","parameters":{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["create","list","update","delete"]},"id":{"type":"string","description":"Schedule UUID for update or delete, from create or list."},"before":{"type":"string","description":"For list only: previous page's next_before UUID."},"title":{"type":"string","minLength":1,"maxLength":160},"context":{"type":"string","minLength":1,"maxLength":24000,"description":"Self-contained task instructions, necessary background, source links, constraints and expected delivery."},"at":{"type":"string","description":"One-time RFC3339 timestamp with explicit offset, in the future. Mutually exclusive with cron."},"cron":{"type":"string","description":"Recurring rule: minute hour day-of-month month day-of-week, e.g. 0 9 * * 1-5. No seconds or @every. Mutually exclusive with at."},"timezone":{"type":"string","description":"Explicit IANA timezone such as Asia/Shanghai or UTC. Required for create."},"enabled":{"type":"boolean","description":"false to pause future triggers; true to resume."}},"required":["action"]}}}`)
-
-var webExecutionTools = []json.RawMessage{searchTool, searchTwitterTool, fetchURLTool}
-var mainTools = append([]json.RawMessage{sendMessageTool, assignSubagentsTool, scheduleTool}, webExecutionTools...)
-var subagentTools = append([]json.RawMessage{subagentSendTool, scheduleTool}, webExecutionTools...)

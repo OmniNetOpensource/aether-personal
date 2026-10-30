@@ -331,7 +331,7 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			return err
 		}
 		// 按模型点名的顺序逐个执行工具：已有回执说明中断前已经执行完，跳过；没有的执行后立刻存回执。
-		// 联网工具在存回执前崩溃会被重跑，按至少执行一次处理；数据库工具的执行与回执在同一事务里提交，不会重复生效。
+		// 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
 		for _, call := range message.ToolCalls {
 			saved, err := queries.HasStepToolResult(ctx, database.HasStepToolResultParams{StepID: &reply.stepID, ToolCallID: call.ID})
 			if err != nil {
@@ -340,17 +340,10 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			if saved {
 				continue
 			}
-			// 联网工具在 whileRequest 里执行，期间持续检查执行锁连接还活着。
-			if call.Function.Name == "search" || call.Function.Name == "search_twitter" || call.Function.Name == "fetch_url" {
+			// 登记为事务外的工具在 whileRequest 里执行，期间持续检查执行锁连接还活着。
+			if tool, ok := toolByName(call.Function.Name); ok && tool.outsideTransaction {
 				result, err := whileRequest(ctx, connection, func(requestContext context.Context) (string, error) {
-					switch call.Function.Name {
-					case "search":
-						return r.webTools.search(requestContext, json.RawMessage(call.Function.Arguments))
-					case "search_twitter":
-						return r.webTools.searchTwitter(requestContext, json.RawMessage(call.Function.Arguments))
-					default:
-						return r.webTools.fetchURL(requestContext, json.RawMessage(call.Function.Arguments))
-					}
+					return tool.execute(requestContext, r, nil, address, call.Function.Arguments)
 				})
 				if ctx.Err() != nil || connection.Conn().IsClosed() {
 					return errors.Join(ctx.Err(), err)
@@ -363,7 +356,7 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 				}
 				continue
 			}
-			// 其余是数据库工具（schedule / send_message / assign_subagents 等）：执行与保存回执在同一事务里完成。
+			// 其余工具与回执在同一事务里提交。未登记的名字也走这里，回执说明该工具不可用。
 			if err := r.executeDatabaseToolAndSaveResult(ctx, connection, address, reply.stepID, call); err != nil {
 				return err
 			}

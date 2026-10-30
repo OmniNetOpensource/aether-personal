@@ -75,10 +75,11 @@ type modelRequest struct {
 }
 
 func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMessage, model string, outputLimit int32) modelRequest {
-	prompt, tools := mainPrompt, mainTools
+	prompt := mainPrompt
 	if address.subagentID != nil {
-		prompt, tools = subagentPrompt, subagentTools
+		prompt = subagentPrompt
 	}
+	tools := toolDefinitions(address)
 	prompt += "\nCurrent time (UTC): " + time.Now().UTC().Format(time.RFC3339) + "\n"
 	system, _ := json.Marshal(map[string]string{"role": "system", "content": prompt})
 	messages := []json.RawMessage{system}
@@ -192,13 +193,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 			var message assistantMessage
 			if json.Unmarshal(response.Choices[0].Message, &message) == nil {
 				for _, call := range message.ToolCalls {
-					name := call.Function.Name
-					switch name {
-					case "send_message", "assign_subagents", "schedule", "search", "search_twitter", "fetch_url":
-					default:
-						name = "other"
-					}
-					toolNames = append(toolNames, name)
+					toolNames = append(toolNames, recordedToolName(call.Function.Name))
 				}
 			}
 		}
