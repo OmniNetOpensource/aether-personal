@@ -92,7 +92,12 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, a
 			inputLimit = capacity - max(1024, capacity/20)
 		}
 	}
-	threshold := min(int64(settings.CompactAtTokens), inputLimit)
+	// ikun Gemini 的输入上限远大于看板通用阈值，固定到 400,000 才压缩（2026-10-30 用户确认），晚一点丢历史细节；其他渠道仍用看板阈值。
+	compactAt := int64(settings.CompactAtTokens)
+	if strings.HasPrefix(model, "ikun:gemini-") {
+		compactAt = 400000
+	}
+	threshold := min(compactAt, inputLimit)
 	reason := ""
 	if before >= threshold {
 		reason = "tokens"
@@ -121,11 +126,12 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, a
 	}
 	// 组装压缩请求：待压缩范围按原来的角色、顺序和内容原样发出，不做任何处理，只在末尾追加一条压缩指令；
 	// 模型返回的摘要替代这段历史，保留下来的新消息原文接在摘要之后。
+	// 压缩只许产出摘要正文：请求明确禁止调用任何工具，避免模型顺着历史里的工具轨迹继续干活而不是写摘要。
 	instruction, _ := json.Marshal(map[string]string{"role": "user", "content": compactPrompt + fmt.Sprintf(" Keep the summary text below %d tokens; shorter is better for repetitive history.", max(128, min(2048, threshold/8)))})
 	summaryMessages := make([]json.RawMessage, 0, len(messagesToCompact)+1)
 	summaryMessages = append(summaryMessages, messagesToCompact...)
 	summaryMessages = append(summaryMessages, instruction)
-	summaryRequest := modelRequest{Model: model, Messages: summaryMessages, MaxTokens: outputLimit, Reasoning: map[string]any{"effort": "low", "exclude": true}}
+	summaryRequest := modelRequest{Model: model, Messages: summaryMessages, MaxTokens: outputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
 	// 摘要覆盖位置停在待压缩历史里最后一条原文上：旧摘要自身的位置不算原文，它的覆盖范围由它自己的覆盖位置记录。
 	through := rows[len(rows)-1].Sequence
 	if keepNewUserMessage {

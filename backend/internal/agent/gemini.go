@@ -178,13 +178,20 @@ func geminiRequestBody(prepared modelRequest) ([]byte, error) {
 		body["tools"] = []any{map[string]any{"functionDeclarations": declarations}}
 	}
 	if len(prepared.ToolChoice) > 0 {
-		var choice struct {
-			Function struct {
-				Name string `json:"name"`
-			} `json:"function"`
+		// 禁止工具的选择（如上下文压缩）翻成 NONE：即使请求里没有工具声明，也明确告诉模型不要输出工具调用；
+		// 指定某个工具的选择仍按原来的 ANY 加白名单处理。
+		var choiceMode string
+		if json.Unmarshal(prepared.ToolChoice, &choiceMode) == nil && choiceMode == "none" {
+			body["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "NONE"}}
+		} else {
+			var choice struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			_ = json.Unmarshal(prepared.ToolChoice, &choice)
+			body["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "ANY", "allowedFunctionNames": []string{choice.Function.Name}}}
 		}
-		_ = json.Unmarshal(prepared.ToolChoice, &choice)
-		body["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "ANY", "allowedFunctionNames": []string{choice.Function.Name}}}
 	}
 	return json.Marshal(body)
 }
