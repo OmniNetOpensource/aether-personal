@@ -112,27 +112,6 @@ func (q *Queries) GetLastContextUsage(ctx context.Context, arg GetLastContextUsa
 	return i, err
 }
 
-const getLastMainReply = `-- name: GetLastMainReply :one
-SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.created_at FROM messages AS m
-WHERE m.user_id = $1 AND m.subagent_id IS NULL AND m.role = 'assistant'
- AND CASE WHEN jsonb_typeof(m.content->'content') = 'string'
-  THEN btrim(m.content->>'content') <> '' ELSE jsonb_typeof(m.content->'content') = 'array' END
-ORDER BY m.sequence DESC LIMIT 1
-`
-
-type GetLastMainReplyRow struct {
-	Sequence  int64
-	CreatedAt time.Time
-}
-
-// Main 的正文即用户消息，最后一次回复就是最近一条正文非空的助手消息；只调工具没写正文不算回复。
-func (q *Queries) GetLastMainReply(ctx context.Context, userID uuid.UUID) (GetLastMainReplyRow, error) {
-	row := q.db.QueryRow(ctx, getLastMainReply, userID)
-	var i GetLastMainReplyRow
-	err := row.Scan(&i.Sequence, &i.CreatedAt)
-	return i, err
-}
-
 const getLatestMainMessageID = `-- name: GetLatestMainMessageID :one
 SELECT id FROM messages
 WHERE user_id = $1 AND subagent_id IS NULL
@@ -265,8 +244,8 @@ func (q *Queries) InsertAgentMessage(ctx context.Context, arg InsertAgentMessage
 }
 
 const insertContextSummary = `-- name: InsertContextSummary :exec
-INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence, compact_reply_sequence)
-VALUES ($1, $2, 'user', $3, $4, true, $5, $6)
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)
+VALUES ($1, $2, 'user', $3, $4, true, $5)
 `
 
 type InsertContextSummaryParams struct {
@@ -275,7 +254,6 @@ type InsertContextSummaryParams struct {
 	Content                []byte
 	StepID                 *uuid.UUID
 	SummaryThroughSequence *int64
-	CompactReplySequence   *int64
 }
 
 func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSummaryParams) error {
@@ -285,7 +263,6 @@ func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSum
 		arg.Content,
 		arg.StepID,
 		arg.SummaryThroughSequence,
-		arg.CompactReplySequence,
 	)
 	return err
 }
@@ -382,7 +359,7 @@ WITH summary AS (
  WHERE user_id = $1 AND subagent_id IS NOT DISTINCT FROM $2::uuid AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.compact_reply_sequence FROM messages AS m
+SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.sender FROM messages AS m
 WHERE m.user_id = $1 AND m.subagent_id IS NOT DISTINCT FROM $2::uuid
  AND m.sequence IS NOT NULL AND (
   m.id = (SELECT id FROM summary)
@@ -397,10 +374,11 @@ type ListAgentContextRowsParams struct {
 }
 
 type ListAgentContextRowsRow struct {
-	Sequence             int64
-	Content              []byte
-	IsSummary            bool
-	CompactReplySequence *int64
+	ID        uuid.UUID
+	Sequence  int64
+	Content   []byte
+	IsSummary bool
+	Sender    *string
 }
 
 func (q *Queries) ListAgentContextRows(ctx context.Context, arg ListAgentContextRowsParams) ([]ListAgentContextRowsRow, error) {
@@ -413,10 +391,11 @@ func (q *Queries) ListAgentContextRows(ctx context.Context, arg ListAgentContext
 	for rows.Next() {
 		var i ListAgentContextRowsRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.Sequence,
 			&i.Content,
 			&i.IsSummary,
-			&i.CompactReplySequence,
+			&i.Sender,
 		); err != nil {
 			return nil, err
 		}

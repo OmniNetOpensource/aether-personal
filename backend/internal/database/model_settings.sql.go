@@ -12,7 +12,7 @@ import (
 
 const getModelSettings = `-- name: GetModelSettings :one
 
-SELECT main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_after_hours, compact_at_tokens, main_context_length, subagent_context_length, version, updated_at, updated_by FROM model_settings WHERE singleton = true
+SELECT main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_at_tokens, main_context_length, subagent_context_length, version, updated_at, updated_by FROM model_settings WHERE singleton = true
 `
 
 type GetModelSettingsRow struct {
@@ -20,7 +20,6 @@ type GetModelSettingsRow struct {
 	SubagentModel          *string
 	MainModelMaxTokens     *int32
 	SubagentModelMaxTokens *int32
-	CompactAfterHours      int32
 	CompactAtTokens        int32
 	MainContextLength      *int64
 	SubagentContextLength  *int64
@@ -38,7 +37,6 @@ func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, er
 		&i.SubagentModel,
 		&i.MainModelMaxTokens,
 		&i.SubagentModelMaxTokens,
-		&i.CompactAfterHours,
 		&i.CompactAtTokens,
 		&i.MainContextLength,
 		&i.SubagentContextLength,
@@ -59,12 +57,12 @@ func (q *Queries) LockModelSettings(ctx context.Context) error {
 }
 
 const saveModelSettings = `-- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_after_hours, compact_at_tokens, main_context_length, subagent_context_length, version, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)
+INSERT INTO model_settings (main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_at_tokens, main_context_length, subagent_context_length, version, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     subagent_model = EXCLUDED.subagent_model, main_model_max_tokens = EXCLUDED.main_model_max_tokens,
     subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
-    compact_after_hours = EXCLUDED.compact_after_hours, compact_at_tokens = EXCLUDED.compact_at_tokens,
+    compact_at_tokens = EXCLUDED.compact_at_tokens,
     main_context_length = EXCLUDED.main_context_length, subagent_context_length = EXCLUDED.subagent_context_length, version = model_settings.version + 1,
     updated_at = now(), updated_by = EXCLUDED.updated_by
 `
@@ -74,7 +72,6 @@ type SaveModelSettingsParams struct {
 	SubagentModel          *string
 	MainModelMaxTokens     *int32
 	SubagentModelMaxTokens *int32
-	CompactAfterHours      int32
 	CompactAtTokens        int32
 	MainContextLength      *int64
 	SubagentContextLength  *int64
@@ -87,7 +84,6 @@ func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsPa
 		arg.SubagentModel,
 		arg.MainModelMaxTokens,
 		arg.SubagentModelMaxTokens,
-		arg.CompactAfterHours,
 		arg.CompactAtTokens,
 		arg.MainContextLength,
 		arg.SubagentContextLength,

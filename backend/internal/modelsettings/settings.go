@@ -13,7 +13,6 @@ import (
 )
 
 type Settings struct {
-	CompactAfterHours      int32      `json:"compact_after_hours"`
 	CompactAtTokens        int32      `json:"compact_at_tokens"`
 	MainContextLength      int64      `json:"main_context_length"`
 	SubagentContextLength  int64      `json:"subagent_context_length"`
@@ -33,7 +32,7 @@ func Load(ctx context.Context, queries *database.Queries, defaults config.Config
 	if limit == 0 {
 		limit = config.DefaultMaxOutputTokens
 	}
-	result := Settings{CompactAfterHours: 6, CompactAtTokens: 200000, MainModel: defaults.MainModel, Source: "environment", MainOutputLimit: limit, SubagentOutputLimit: limit}
+	result := Settings{CompactAtTokens: 200000, MainModel: defaults.MainModel, Source: "environment", MainOutputLimit: limit, SubagentOutputLimit: limit}
 	if !defaults.SubagentFollowsMain {
 		result.SubagentModel = &defaults.SubagentModel
 	}
@@ -42,7 +41,7 @@ func Load(ctx context.Context, queries *database.Queries, defaults config.Config
 		return Settings{}, err
 	}
 	if err == nil {
-		result.CompactAfterHours, result.CompactAtTokens = row.CompactAfterHours, row.CompactAtTokens
+		result.CompactAtTokens = row.CompactAtTokens
 		if row.MainContextLength != nil {
 			result.MainContextLength = *row.MainContextLength
 		}

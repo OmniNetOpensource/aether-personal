@@ -163,15 +163,14 @@ func (s *server) adminModelSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		CompactAfterHours int32   `json:"compact_after_hours"`
-		CompactAtTokens   int32   `json:"compact_at_tokens"`
-		MainModel         string  `json:"main_model"`
-		SubagentModel     *string `json:"subagent_model"`
-		Version           int64   `json:"version"`
+		CompactAtTokens int32   `json:"compact_at_tokens"`
+		MainModel       string  `json:"main_model"`
+		SubagentModel   *string `json:"subagent_model"`
+		Version         int64   `json:"version"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || request.Version < 0 || request.CompactAfterHours < 1 || request.CompactAfterHours > 8760 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 || (request.SubagentModel != nil && (*request.SubagentModel == "" || len(*request.SubagentModel) > 160)) {
+	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 || (request.SubagentModel != nil && (*request.SubagentModel == "" || len(*request.SubagentModel) > 160)) {
 		http.Error(w, "invalid model settings", http.StatusBadRequest)
 		return
 	}
@@ -223,7 +222,7 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		if current.Version != request.Version {
 			return conflict
 		}
-		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, SubagentModel: request.SubagentModel, MainModelMaxTokens: mainCap, SubagentModelMaxTokens: subagentCap, CompactAfterHours: request.CompactAfterHours, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, SubagentContextLength: subagentContext, UpdatedBy: "管理员"}); err != nil {
+		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, SubagentModel: request.SubagentModel, MainModelMaxTokens: mainCap, SubagentModelMaxTokens: subagentCap, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, SubagentContextLength: subagentContext, UpdatedBy: "管理员"}); err != nil {
 			return err
 		}
 		saved, err = modelsettings.Load(ctx, queries, s.appConfig)

@@ -416,7 +416,7 @@ function detailsGrid(items) { const grid = el('dl', 'details-grid'); for (const 
 async function callDetails(call) {
   const content = detailFrame('模型调用详情', '调用元数据与实际请求、响应 JSON');
   content.append(requestIds(call));
-  content.append(detailsGrid([['用途', call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : number(call.context_tokens_before)], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['用户', call.email], ['Agent', call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
+  content.append(detailsGrid([['用途', call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'], ['压缩原因', ({user_message:'用户新消息', idle:'回答后超时', tokens:'上下文阈值', capacity:'模型容量'})[call.compact_reason] || '—'], ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : number(call.context_tokens_before)], ['摘要覆盖序号', call.summary_through_sequence ?? '—'], ['用户', call.email], ['Agent', call.agent_id || 'Main'], ['请求模型', call.requested_model], ['响应模型', call.response_model], ['结果', pill(call.outcome)], ['HTTP 状态', call.http_status], ['失败分类', call.failure_kind || '—'], ['开始时间', time(call.started_at)], ['结束时间', time(call.finished_at)], ['请求耗时', duration(call.duration_ms)], ['输入 / 输出 Token', `${call.input_tokens == null ? '未知' : number(call.input_tokens)} / ${call.output_tokens == null ? '未知' : number(call.output_tokens)}`], ['提供方费用 USD', money(call.cost)], ['模型提出的工具', call.tool_names?.join('、') || '无'], ['逻辑步骤 ID', call.step_id]]));
   const note = el('div', 'data-note', '请求中断或连接失败时，提供方可能已执行并计费。未知费用不等于 0。'); content.append(note);
   const payloadPanel = el('section', 'request-json');
   payloadPanel.append(el('h3', '', '请求与响应 JSON'), el('p', 'muted', '按本次实际调用保存，包含消息上下文与工具定义；不含 HTTP 认证头。'));
@@ -469,7 +469,7 @@ async function refreshModelSettings() {
     ]);
     if (generation !== state.generation || !state.me) return;
     state.modelConfig = settings; state.catalog = catalog;
-    state.modelDraft = { main_model: settings.main_model, subagent_model: settings.subagent_model, compact_after_hours: settings.compact_after_hours, compact_at_tokens: settings.compact_at_tokens };
+    state.modelDraft = { main_model: settings.main_model, subagent_model: settings.subagent_model, compact_at_tokens: settings.compact_at_tokens };
     root.querySelector('#updated').textContent = `${time(catalog.fetched_at)} 已更新目录`;
     root.querySelector('#load-error').hidden = true;
     render();
@@ -535,15 +535,15 @@ function modelSettingsPage(content) {
   }
   form.append(cards);
   const compaction = el('section', 'panel model-role-card compact-settings');
-  compaction.append(el('h3', '', '自动压缩上下文'), el('p', 'muted', '满足任意条件后，在下一次有任务、调用模型前压缩。空闲时不产生请求，完整聊天历史保留。'));
+  compaction.append(el('h3', '', '自动压缩上下文'), el('p', 'muted', '上下文达到阈值后，在下一次调用模型前压缩；恰好是用户新消息触发时，只压它之前的历史并保留这条消息原文。空闲时不产生请求，完整聊天历史保留。'));
   const fields = el('div', 'model-role-grid');
-  for (const [key, title, minimum, maximum] of [['compact_after_hours', '距上次回答（小时）', 1, 8760], ['compact_at_tokens', '上下文阈值（Token）', 1000, 2000000]]) {
+  for (const [key, title, minimum, maximum] of [['compact_at_tokens', '上下文阈值（Token）', 1000, 2000000]]) {
     const label = el('label', 'model-picker', title);
     const input = el('input'); input.type = 'number'; input.id = key; input.min = minimum; input.max = maximum; input.step = 1; input.required = true; input.value = state.modelDraft[key];
     input.oninput = () => { state.modelDraft[key] = Number(input.value); updateModelSaveButton(); };
     label.append(input); fields.append(label);
   }
-  compaction.append(fields, el('p', 'muted', '时间从 Main 成功回答用户开始计算；Token 取上一次同模型成功请求的官方输入用量，按各 Agent 的阈值和已知输入容量触发压缩。'));
+  compaction.append(fields, el('p', 'muted', 'Token 取上一次同模型成功请求的官方输入用量，按各 Agent 的阈值和已知输入容量触发压缩，不再看距上次回答的时间。'));
   form.append(compaction);
   const actions = el('div', 'model-save-bar');
   const note = el('div'); note.append(el('strong', '', '下一次模型请求使用新配置'), el('p', 'muted', '目录价格供估算，实际费用以请求日志为准。'));
@@ -557,7 +557,7 @@ function modelSettingsPage(content) {
 }
 function updateModelSaveButton() {
   const target = root.querySelector('#save-model-settings'); if (!target) return;
-  const changed = state.modelDraft.main_model !== state.modelConfig.main_model || state.modelDraft.subagent_model !== state.modelConfig.subagent_model || state.modelDraft.compact_after_hours !== state.modelConfig.compact_after_hours || state.modelDraft.compact_at_tokens !== state.modelConfig.compact_at_tokens;
+  const changed = state.modelDraft.main_model !== state.modelConfig.main_model || state.modelDraft.subagent_model !== state.modelConfig.subagent_model || state.modelDraft.compact_at_tokens !== state.modelConfig.compact_at_tokens;
   target.disabled = !!state.modelSaving || !changed;
   target.textContent = state.modelSaving ? '正在应用…' : changed ? '应用模型配置 →' : '配置已生效';
 }
@@ -568,8 +568,8 @@ async function saveModelSettings() {
   if ([draft.main_model, draft.subagent_model].some((id) => id != null && !state.catalog.items.some((model) => model.id === id))) {
     errorBox.textContent = '请选择目录中的完整模型 ID，或刷新目录后重试。'; return;
   }
-  if (!Number.isInteger(draft.compact_after_hours) || draft.compact_after_hours < 1 || draft.compact_after_hours > 8760 || !Number.isInteger(draft.compact_at_tokens) || draft.compact_at_tokens < 1000 || draft.compact_at_tokens > 2000000) {
-    errorBox.textContent = '压缩间隔需为 1–8760 小时，阈值需为 1000–2000000 Token，均为整数。'; return;
+  if (!Number.isInteger(draft.compact_at_tokens) || draft.compact_at_tokens < 1000 || draft.compact_at_tokens > 2000000) {
+    errorBox.textContent = '压缩阈值需为 1000–2000000 Token 的整数。'; return;
   }
   const generation = state.generation;
   state.modelSaving = true; updateModelSaveButton();
@@ -577,7 +577,7 @@ async function saveModelSettings() {
   try {
     const saved = await api('/admin/model-settings', { method: 'PUT', body: JSON.stringify(draft), signal: state.controller.signal });
     if (generation !== state.generation || !state.me) return;
-    state.modelConfig = saved; state.modelDraft = { main_model: saved.main_model, subagent_model: saved.subagent_model, compact_after_hours: saved.compact_after_hours, compact_at_tokens: saved.compact_at_tokens };
+    state.modelConfig = saved; state.modelDraft = { main_model: saved.main_model, subagent_model: saved.subagent_model, compact_at_tokens: saved.compact_at_tokens };
     render(); notify('模型配置已应用，下一次请求开始生效。');
   } catch (error) {
     if (error.name === 'AbortError' || generation !== state.generation) return;

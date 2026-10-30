@@ -237,8 +237,10 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 
 // prepareStep 为下一步模型调用做准备，一个事务里完成：优先续用未完成的步骤，
 // 把新到的待读消息标为已读，没有步骤且确有新消息时才新建步骤；返回零值表示暂时没活干。
-func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, address agentAddress) (uuid.UUID, error) {
+// 同时返回这一步刚领到的待读消息 ID，上下文准备靠它认出刚到的用户消息（见 compact.go 的新消息触发）。
+func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, address agentAddress) (uuid.UUID, []uuid.UUID, error) {
 	var stepID uuid.UUID
+	var newMessageIDs []uuid.UUID
 	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		var err error
@@ -259,6 +261,7 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 		if err != nil {
 			return err
 		}
+		newMessageIDs = pending
 		for _, id := range pending {
 			if err := queries.MarkMessageRead(ctx, id); err != nil {
 				return err
@@ -279,7 +282,7 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 		}
 		return nil
 	})
-	return stepID, err
+	return stepID, newMessageIDs, err
 }
 
 // runLoop 是“准备步骤 → 调用模型 → 执行工具 → 保存回复”的循环，一轮处理一步，直到没有待处理消息为止。
@@ -287,7 +290,7 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 	queries := database.New(connection)
 	// 每一轮先领一个步骤：领不到说明消息已处理完，Subagent 回到 idle、Main 直接退出等待下次唤醒。
 	for {
-		stepID, err := r.prepareStep(ctx, connection, address)
+		stepID, newMessageIDs, err := r.prepareStep(ctx, connection, address)
 		if err != nil {
 			return err
 		}
@@ -310,7 +313,7 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			}
 			reply = modelReply{response: saved.Response, stepID: stepID, delivery: deliveryState{satisfied: saved.DeliverySatisfied, corrected: saved.DeliveryCorrected}}
 		} else {
-			reply, err = r.callWithRetries(ctx, connection, address, stepID)
+			reply, err = r.callWithRetries(ctx, connection, address, stepID, newMessageIDs)
 			if err != nil {
 				return err
 			}
@@ -389,14 +392,15 @@ type storedModelReply struct {
 	DeliveryCorrected bool         `json:"delivery_corrected"`
 }
 
-// callWithRetries 调用模型并处理重试：上下文准备、请求和退避共用十分钟预算，可重试的失败最多再试 3 次，
+// callWithRetries 调用模型并处理重试：把这一步刚领到的消息透传给上下文准备（用于新消息压缩触发），
+// 上下文准备、请求和退避共用十分钟预算，可重试的失败最多再试 3 次，
 // 每次重试都新开一个步骤记录，旧步骤以失败收尾，方便事后按步骤排查。
-func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID) (modelReply, error) {
+func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, newMessageIDs []uuid.UUID) (modelReply, error) {
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
 	defer cancel()
 	for attempt := 0; ; attempt++ {
-		prepared, messages, err := r.prepareContext(retryContext, connection, address)
+		prepared, messages, err := r.prepareContext(retryContext, connection, address, newMessageIDs)
 		if err != nil {
 			return modelReply{}, err
 		}
@@ -442,7 +446,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			return modelReply{}, context.Cause(retryContext)
 		case <-time.After(time.Second << attempt):
 		}
-		stepID, err = r.prepareStep(retryContext, connection, address)
+		stepID, newMessageIDs, err = r.prepareStep(retryContext, connection, address)
 		if err != nil {
 			return modelReply{}, err
 		}

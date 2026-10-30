@@ -79,7 +79,7 @@ WITH summary AS (
  WHERE user_id = sqlc.arg(user_id) AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.compact_reply_sequence FROM messages AS m
+SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.sender FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id) AND m.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
  AND m.sequence IS NOT NULL AND (
   m.id = (SELECT id FROM summary)
@@ -165,16 +165,8 @@ WHERE user_id = sqlc.arg(user_id) AND subagent_id IS NOT DISTINCT FROM sqlc.narg
  AND purpose = 'compact' AND finished_at IS NULL;
 
 -- name: InsertContextSummary :exec
-INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence, compact_reply_sequence)
-VALUES ($1, $2, 'user', $3, $4, true, $5, $6);
-
--- name: GetLastMainReply :one
--- Main 的正文即用户消息，最后一次回复就是最近一条正文非空的助手消息；只调工具没写正文不算回复。
-SELECT coalesce(m.sequence, 0)::bigint AS sequence, m.created_at FROM messages AS m
-WHERE m.user_id = sqlc.arg(user_id) AND m.subagent_id IS NULL AND m.role = 'assistant'
- AND CASE WHEN jsonb_typeof(m.content->'content') = 'string'
-  THEN btrim(m.content->>'content') <> '' ELSE jsonb_typeof(m.content->'content') = 'array' END
-ORDER BY m.sequence DESC LIMIT 1;
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)
+VALUES ($1, $2, 'user', $3, $4, true, $5);
 
 -- name: GetLastContextUsage :one
 SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens

@@ -48,7 +48,6 @@ type Message struct {
 	CreatedAt              time.Time
 	ClientMessageID        *uuid.UUID
 	SummaryThroughSequence *int64
-	CompactReplySequence   *int64
 }
 
 type ModelCall struct {
@@ -89,7 +88,6 @@ type ModelSetting struct {
 	UpdatedBy              string
 	MainModelMaxTokens     *int32
 	SubagentModelMaxTokens *int32
-	CompactAfterHours      int32
 	CompactAtTokens        int32
 	MainContextLength      *int64
 	SubagentContextLength  *int64
