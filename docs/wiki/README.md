@@ -1,6 +1,6 @@
 # aether-personal 架构 Wiki
 
-aether-personal 是企业级的开源 personal agent：企业 fork、部署后，为自己的众多终端用户提供服务。每个终端用户拥有一个 Main Agent，Main 可以按任务派出 Subagent 在后台工作。
+aether-personal 是以维护者自用为主的开源 personal agent：首先供维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。每位用户拥有一个 Main Agent，Main 可以按任务派出 Subagent 在后台工作。
 
 本 wiki 是架构与设计的完整说明：每一页既讲系统**怎么运转**，也讲每项选择**为什么这样做**，并保留用户确认时的原话。所有已确认选择的一览表与待确认问题见 [决策总览](../decisions.md)。
 

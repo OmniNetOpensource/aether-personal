@@ -1,6 +1,6 @@
 # aether-personal
 
-企业级开源 personal agent：任何企业都可以 fork、部署，去服务他们的用户。架构图见 `docs/architecture.mmd`；架构与设计的完整说明（含每项决定的理由）见 `docs/wiki/`，已确认选择的一览表与待确认问题见 `docs/decisions.md`。动手前先读相关页面。
+以维护者自用为主的开源 personal agent：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。架构图见 `docs/architecture.mmd`；架构与设计的完整说明（含每项决定的理由）见 `docs/wiki/`，已确认选择的一览表与待确认问题见 `docs/decisions.md`。动手前先读相关页面。
 
 ## 协作约束
 

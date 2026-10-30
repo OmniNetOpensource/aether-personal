@@ -25,7 +25,7 @@ make edge-dry-run
 
 `frontend/build/web` 是静态资源目录。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
-`infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他企业部署时修改这些公开配置，不能使用维护者的域名。
+`infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
 
 PWA 的 `sw.js`、清单与图标包含在同一产物中，无需额外服务。站点需要 HTTPS。Service Worker 使用当前构建的静态资源清单，不缓存 API 或认证数据；缓存入口为 `/`。新版在页面中提示用户更新，点击后切换并恢复当前标签页草稿。iOS 在 Safari 分享菜单中安装，Android 使用浏览器安装入口。反向代理不能把缺失的 `sw.js` 或清单回退为 HTML，也不能对 `sw.js` 配置长期不可变缓存。
 

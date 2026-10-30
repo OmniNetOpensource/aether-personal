@@ -168,7 +168,7 @@ stateDiagram-v2
 
 ## 外键
 
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`、`sessions → users`。误删由“仅企业管理员可删除”与数据库备份防范。
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `subagents`、`messages`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`subagents → users`、`messages → users`、`messages.subagent_id / sender_subagent_id → subagents`、`messages.step_id → steps`、`steps → users`、`steps → subagents`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
 
 ## 索引
 

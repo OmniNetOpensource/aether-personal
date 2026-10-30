@@ -1,6 +1,6 @@
 # 阿芒 · aether-personal
 
-企业级的开源 personal agent 项目：任何企业都可以 fork、部署，去服务他们的用户。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作与外部工具，以及 dev/prod 环境。
+以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作与外部工具，以及 dev/prod 环境。
 
 当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。执行工具目前只有搜索和网页读取。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
 
@@ -21,7 +21,7 @@
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
 | 模型服务 | OpenRouter 与可选的 ikun Gemini；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，Subagent 默认跟随 Main，可分别配置 |
-| 密钥与费用 | OpenRouter / Resend Key 由部署的企业配置，费用由该企业承担 |
+| 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
@@ -139,7 +139,7 @@ make db-down   # 停止本地 PostgreSQL
 
 ## 项目资料
 
-生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册；防滥用与用户用量控制仍须完成后才能公开上线。
+生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册。2026-10-30 确认首版无限额度开放；验证码防滥用与真实生产验收仍须完成。
 
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。
