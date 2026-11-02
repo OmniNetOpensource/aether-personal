@@ -18,9 +18,6 @@ const silentToolRoundsBeforeReminder = 5
 // maxProgressRemindersPerSilence 限制同一次沉默里最多提醒几次。一直不写正文时，再插下去容易被当成工具结果里的注入。
 const maxProgressRemindersPerSilence = 3
 
-// progressReminder 是插入上下文的提醒原文。用整段文字识别已经插入过的提醒，避免再数成一轮工具。
-const progressReminder = `Runtime progress check: several tool rounds have passed with no assistant text, so the user has not heard from you. In this reply, write a short user-facing update about what you have learned and what you are doing next, then continue the work. You may call tools in the same reply. Do not end the task. Do not repeat an update you already sent. A progress update does not replace the final result.`
-
 // progressReminderMessage 是写进消息表、也发给模型的那一条系统消息。
 func progressReminderMessage() json.RawMessage {
 	raw, _ := json.Marshal(map[string]string{"role": "system", "content": progressReminder})

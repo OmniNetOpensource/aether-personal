@@ -9,8 +9,6 @@ import (
 
 var errMissingDelivery = errors.New("subagent ended without a final delivered send_message to main")
 
-const deliveryCorrection = `Runtime delivery check: you tried to end your turn, but your last tool call was not a successfully delivered send_message to Main. Call send_message now with to=main: send the current result, a concrete blocker, or a concise update if waiting for background work. Do not disclose private reasoning or repeat already delivered results. This is the only delivery correction for this attempt to end the turn.`
-
 type deliveryState struct {
 	satisfied bool
 	corrected bool

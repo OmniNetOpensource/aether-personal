@@ -80,7 +80,7 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 		prompt = subagentPrompt
 	}
 	tools := toolDefinitions(address)
-	prompt += "\nCurrent time (UTC): " + time.Now().UTC().Format(time.RFC3339) + "\n"
+	prompt += fmt.Sprintf(currentTimePrompt, time.Now().UTC().Format(time.RFC3339))
 	system, _ := json.Marshal(map[string]string{"role": "system", "content": prompt})
 	messages := []json.RawMessage{system}
 	for _, message := range contextMessages {
