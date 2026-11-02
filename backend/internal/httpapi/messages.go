@@ -18,12 +18,13 @@ import (
 const historyPageSize = 50
 
 type chatMessage struct {
-	ID              string     `json:"id"`
-	Position        uuid.UUID  `json:"position"`
-	ClientMessageID *uuid.UUID `json:"client_message_id,omitempty"`
-	Sender          string     `json:"sender"`
-	Text            string     `json:"text"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID              string        `json:"id"`
+	Position        uuid.UUID     `json:"position"`
+	ClientMessageID *uuid.UUID    `json:"client_message_id,omitempty"`
+	Sender          string        `json:"sender"`
+	Text            string        `json:"text"`
+	Parts           []messagePart `json:"parts,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
 }
 
 type chatMessages struct {
@@ -56,7 +57,7 @@ func (s *server) historyPage(ctx context.Context, userID uuid.UUID, before uuid.
 	if err != nil {
 		return chatMessages{}, err
 	}
-	return chatMessages{Messages: chatMessagesFromRows(rowsNewestFirst), ReadUpTo: readUpTo}, nil
+	return chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rowsNewestFirst), ReadUpTo: readUpTo}, nil
 }
 
 func chatMessagesFromRows(rows []database.ListChatRowsAfterRow) []chatMessage {
@@ -70,15 +71,25 @@ func chatMessagesFromRows(rows []database.ListChatRowsAfterRow) []chatMessage {
 func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
 	if row.Role != "assistant" {
 		var content struct {
-			Content string `json:"content"`
+			Content  json.RawMessage `json:"content"`
+			UserText *string         `json:"user_text"`
+			Parts    []messagePart   `json:"parts"`
 		}
 		json.Unmarshal(row.Content, &content)
+		var text string
+		if content.UserText != nil {
+			text = *content.UserText
+		} else {
+			json.Unmarshal(content.Content, &text)
+		}
+
 		return []chatMessage{{
 			ID:              row.ID.String(),
 			Position:        row.ID,
 			ClientMessageID: row.ClientMessageID,
 			Sender:          "user",
-			Text:            content.Content,
+			Text:            text,
+			Parts:           content.Parts,
 			CreatedAt:       row.CreatedAt,
 		}}
 	}

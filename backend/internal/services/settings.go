@@ -26,6 +26,7 @@ const (
 	Serper     = "serper"
 	Parallel   = "parallel"
 	EveryInfra = "everyinfra"
+	AliyunOSS  = "aliyun_oss"
 	// ikun Gemini 的默认线路由部署方确定，管理员日常只需填写 Key。
 	DefaultGeminiBaseURL = "https://api.ikuncode.cc"
 )
@@ -44,6 +45,7 @@ var Definitions = []Definition{
 	{Serper, "Serper", "SERP_API_KEY"},
 	{Parallel, "Parallel", "PARALLEL_API_KEY"},
 	{EveryInfra, "EveryInfra", "EVERYINFRA_API_KEY"},
+	{AliyunOSS, "阿里云 OSS", ""},
 }
 
 // 固定错误让调用者区分未配置、解密失败与输入错误，不把秘密带入日志或 HTTP 响应。
@@ -62,6 +64,7 @@ type Settings struct {
 
 // Info 是管理接口唯一返回的服务状态，不含完整 Key 或密文，也不声称供应商已验证通过。
 type Info struct {
+	OSS       *OSSInfo   `json:"oss,omitempty"`
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	Status    string     `json:"status"`
@@ -127,6 +130,13 @@ func (s *Store) List(ctx context.Context) ([]Info, error) {
 			info.BaseURL, info.EmailFrom, info.UpdatedAt = serviceBaseURL(definition.ID, row.BaseUrl), row.EmailFrom, &row.UpdatedAt
 			if row.ApiKeyCiphertext != nil {
 				info.Status, info.KeySuffix = "saved", row.KeySuffix
+				if row.Service == AliyunOSS {
+					if decoded, err := s.cipher.Open(nil, nil, row.ApiKeyCiphertext, []byte(row.Service)); err == nil {
+						if config, err := parseOSSSettings(string(decoded)); err == nil {
+							info.OSS = &OSSInfo{Bucket: config.Bucket, Region: config.Region}
+						}
+					}
+				}
 				if _, err := s.cipher.Open(nil, nil, row.ApiKeyCiphertext, []byte(row.Service)); err != nil {
 					info.Status = "unreadable"
 				}
@@ -151,9 +161,18 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 			if len(*key) > 8192 || strings.ContainsFunc(*key, func(r rune) bool { return r <= ' ' || r > '~' }) {
 				return fmt.Errorf("%w: API Key must contain visible ASCII characters", ErrInvalid)
 			}
+			if service == AliyunOSS {
+				if _, err := parseOSSSettings(*key); err != nil {
+					return err
+				}
+			}
 			settings.ApiKeyCiphertext = s.cipher.Seal(nil, nil, []byte(*key), []byte(service))
 			if len(*key) > 4 {
 				settings.KeySuffix = (*key)[len(*key)-4:]
+				if service == AliyunOSS {
+					config, _ := parseOSSSettings(*key)
+					settings.KeySuffix = config.AccessKeySecret[len(config.AccessKeySecret)-4:]
+				}
 			}
 		}
 	}
@@ -225,7 +244,7 @@ func validate(service string, configured bool, baseURL, emailFrom, appEnv string
 				return fmt.Errorf("%w: invalid sender address", ErrInvalid)
 			}
 		}
-	case OpenRouter, Serper, Parallel, EveryInfra:
+	case OpenRouter, Serper, Parallel, EveryInfra, AliyunOSS:
 		if baseURL != "" || emailFrom != "" {
 			return fmt.Errorf("%w: unsupported service fields", ErrInvalid)
 		}

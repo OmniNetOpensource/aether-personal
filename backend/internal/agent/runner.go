@@ -1,5 +1,5 @@
-// 本文件是 Agent 的执行调度中心：把数据库里“有消息待处理”的 Main 和 Subagent
-// 一个个唤醒运行，保证同一个 Agent 同一时间只跑一处，模型回复落库后再推进下一步。
+// 本文件是 Agent 的执行调度中心：把数据库里“有消息待处理”的用户 Main
+// 一个个唤醒运行，保证同一个用户的 Main 同一时间只跑一处，模型回复落库后再推进下一步。
 
 package agent
 
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
@@ -21,27 +22,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Subagent 单次被唤醒后最多连续运行的时间，超时就标为失败并通知 Main。
-const subagentTimeout = 15 * time.Minute
-
 // 模型单次 HTTP 请求与包含全部重试的调用共用十分钟上限，联网工具另用自己的客户端。
 const modelRequestTimeout = 10 * time.Minute
 
 // errModelRetryTimeout 区分模型调用预算耗尽与进程退出、执行权丢失等外部中断。
 var errModelRetryTimeout = errors.New("model request and retries exceeded 10 minute budget")
 
-// agentAddress 是运行时定位一个 Agent 的地址：只有 userID 是 Main，二者都有是 Subagent。
-type agentAddress struct {
-	userID     uuid.UUID
-	subagentID *uuid.UUID
-}
-
-// lockKey 把地址拼成咨询锁和内部登记表共用的字符串键，Main 与 Subagent 不会撞键。
-func (a agentAddress) lockKey() string {
-	if a.subagentID != nil {
-		return "subagent:" + a.subagentID.String()
-	}
-	return "main:" + a.userID.String()
+// runtimeLockKey 把用户 ID 拼成咨询锁和内部登记表共用的字符串键。
+func runtimeLockKey(userID uuid.UUID) string {
+	return "main:" + userID.String()
 }
 
 // Runner 是进程内的执行调度器：它只持有连接池、配置和“谁正在跑”的临时登记，
@@ -50,7 +39,7 @@ type Runner struct {
 	databasePool *pgxpool.Pool
 	settings     config.Config
 	modelClient  *http.Client
-	webTools     webTools
+	toolDeps     tools.Dependencies
 	services     *services.Store
 	wakeSignal   chan struct{}
 	activeSlots  chan struct{}
@@ -63,7 +52,7 @@ type Runner struct {
 func NewRunner(pool *pgxpool.Pool, settings config.Config, serviceSettings *services.Store) *Runner {
 	return &Runner{
 		databasePool: pool, settings: settings, modelClient: &http.Client{Timeout: modelRequestTimeout},
-		webTools:   webTools{httpClient: &http.Client{Timeout: 120 * time.Second}, services: serviceSettings},
+		toolDeps:   tools.Dependencies{DatabasePool: pool, Services: serviceSettings, HTTPClient: &http.Client{Timeout: 120 * time.Second}},
 		services:   serviceSettings,
 		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), active: map[string]bool{},
 	}
@@ -90,17 +79,16 @@ func (r *Runner) Start(ctx context.Context) {
 		case <-r.wakeSignal:
 		case <-ticker.C:
 		}
-		addresses, err := database.New(r.databasePool).ListRunnableAgents(ctx)
+		userIDs, err := database.New(r.databasePool).ListRunnableAgents(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				slog.Error("scan agent queue failed", "error", err)
 			}
 			continue
 		}
-		// 派发单个 Agent：本进程已在跑的、或并发名额已满的先跳过，其余登记后开协程执行。
-		for _, row := range addresses {
-			address := agentAddress{userID: row.UserID, subagentID: row.SubagentID}
-			key := address.lockKey()
+		// 派发单个 Main：本进程已在跑的、或并发名额已满的先跳过，其余登记后开协程执行。
+		for _, userID := range userIDs {
+			key := runtimeLockKey(userID)
 			r.mutex.Lock()
 			if r.active[key] {
 				r.mutex.Unlock()
@@ -115,41 +103,33 @@ func (r *Runner) Start(ctx context.Context) {
 			}
 			r.mutex.Unlock()
 			go func() {
-				ran := r.run(ctx, address)
+				ran := r.run(ctx, userID)
 				r.mutex.Lock()
 				delete(r.active, key)
 				r.mutex.Unlock()
 				<-r.activeSlots
 				if ran {
-					r.Wake(address.userID)
+					r.Wake(userID)
 				}
 			}()
 		}
 	}
 }
 
-// model 按角色选模型：Subagent 用 Subagent 模型，其余（即 Main）用 Main 模型。
-func (r *Runner) model(address agentAddress) string {
-	if address.subagentID != nil {
-		return r.settings.SubagentModel
-	}
-	return r.settings.MainModel
-}
-
-// run 是单个 Agent 的一次完整运行：独占一条连接、抢到该 Agent 的咨询锁才继续，
+// run 是单个 Main 的一次完整运行：独占一条连接、抢到该用户的咨询锁才继续，
 // 返回值表示“这次确实处理过工作”，调度循环据此决定要不要马上再唤醒一次。
-func (r *Runner) run(parent context.Context, address agentAddress) bool {
+func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	connection, err := r.databasePool.Acquire(parent)
 	if err != nil {
 		return false
 	}
 	defer connection.Release()
 	queries := database.New(connection)
-	locked, err := queries.TryLockRuntime(parent, address.lockKey())
+	locked, err := queries.TryLockRuntime(parent, runtimeLockKey(userID))
 	if err != nil || !locked {
 		return false
 	}
-	keys := []string{address.lockKey()}
+	keys := []string{runtimeLockKey(userID)}
 	// 收尾时按取得顺序的逆序释放全部咨询锁，并通知前端有新消息；释放失败就直接关连接，靠数据库会话结束兜底。
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -161,21 +141,21 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 				return
 			}
 		}
-		if err := queries.NotifyUserMessages(cleanup, address.userID); err != nil {
-			slog.Error("notify agent activity failed", "user_id", address.userID, "error", err)
+		if err := queries.NotifyUserMessages(cleanup, userID); err != nil {
+			slog.Error("notify agent activity failed", "user_id", userID, "error", err)
 		}
 	}()
 	// 先清理上次进程退出留下的未完成记录，避免它们把本次运行误判成还在进行中。
-	if err := queries.InterruptModelCalls(parent, database.InterruptModelCallsParams{UserID: address.userID, SubagentID: address.subagentID}); err != nil {
+	if err := queries.InterruptModelCalls(parent, userID); err != nil {
 		slog.Error("recover model call journal failed", "error", err)
 		return false
 	}
-	if err := queries.RecoverCompactSteps(parent, database.RecoverCompactStepsParams{UserID: address.userID, SubagentID: address.subagentID}); err != nil {
+	if err := queries.RecoverCompactSteps(parent, userID); err != nil {
 		slog.Error("recover compact steps failed", "error", err)
 		return false
 	}
 	// 没有待读消息就直接结束，让调度循环把名额让给其他 Agent。
-	hasWork, err := queries.HasAgentExecutionWork(parent, database.HasAgentExecutionWorkParams{UserID: address.userID, SubagentID: address.subagentID})
+	hasWork, err := queries.HasAgentExecutionWork(parent, userID)
 	if err != nil {
 		slog.Error("check agent execution work failed", "error", err)
 		return false
@@ -184,51 +164,15 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 		return true
 	}
 	ctx := parent
-	// Subagent 额外限流：同一用户最多同时跑 3 个（依次抢 3 把槽位锁），并给本次运行加上 15 分钟截止时间。
-	if address.subagentID != nil {
-		for slot := 0; slot < 3; slot++ {
-			key := fmt.Sprintf("subagent-slot:%s:%d", address.userID, slot)
-			ok, lockErr := queries.TryLockRuntime(parent, key)
-			if lockErr != nil {
-				return false
-			}
-			if ok {
-				keys = append(keys, key)
-				break
-			}
-		}
-		if len(keys) != 2 {
-			return false
-		}
-		startedAt, err := queries.StartSubagent(parent, database.StartSubagentParams{UserID: address.userID, ID: *address.subagentID})
-		if err != nil {
-			slog.Error("start subagent failed", "error", err)
-			return false
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(parent, startedAt.Add(subagentTimeout))
-		defer cancel()
-		if ctx.Err() != nil {
-			cleanup, cancelCleanup := context.WithTimeout(parent, 5*time.Second)
-			defer cancelCleanup()
-			if err := r.failAgent(cleanup, connection, address, context.DeadlineExceeded); err != nil {
-				slog.Error("save expired subagent failed", "error", err)
-			}
-			return true
-		}
-	}
 	// 真正干活的主循环在 runLoop；这里只分流它的结果：推迟不算失败，连接已断不重复记错，其余才落库为失败。
-	if err := r.runLoop(ctx, connection, address); err != nil {
+	if err := r.runLoop(ctx, connection, userID); err != nil {
 		if parent.Err() != nil || connection.Conn().IsClosed() {
 			return true
 		}
-		slog.Error("agent run failed", "agent", address.lockKey(), "error", err)
-		if errors.Is(err, errMissingDelivery) {
-			return true
-		}
+		slog.Error("agent run failed", "agent", runtimeLockKey(userID), "error", err)
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := r.failAgent(cleanup, connection, address, err); err != nil {
+		if err := r.failAgent(cleanup, connection, userID, err); err != nil {
 			slog.Error("save agent failure failed", "error", err)
 		}
 	}
@@ -238,13 +182,13 @@ func (r *Runner) run(parent context.Context, address agentAddress) bool {
 // prepareStep 为下一步模型调用做准备，一个事务里完成：优先续用未完成的步骤，
 // 把新到的待读消息标为已读，没有步骤且确有新消息时才新建步骤；返回零值表示暂时没活干。
 // 同时返回这一步刚领到的待读消息 ID，上下文准备靠它认出刚到的用户消息（见 compact.go 的新消息触发）。
-func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, address agentAddress) (uuid.UUID, []uuid.UUID, error) {
+func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
 	var stepID uuid.UUID
 	var newMessageIDs []uuid.UUID
 	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		var err error
-		stepID, err = queries.GetUnfinishedStep(ctx, database.GetUnfinishedStepParams{UserID: address.userID, SubagentID: address.subagentID})
+		stepID, err = queries.GetUnfinishedStep(ctx, userID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -257,7 +201,7 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 				return nil
 			}
 		}
-		pending, err := queries.ListPendingAgentMessageIDs(ctx, database.ListPendingAgentMessageIDsParams{UserID: address.userID, SubagentID: address.subagentID})
+		pending, err := queries.ListPendingAgentMessageIDs(ctx, userID)
 		if err != nil {
 			return err
 		}
@@ -272,13 +216,13 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 				stepID = uuid.Nil
 				return nil
 			}
-			stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: address.userID, SubagentID: address.subagentID, Model: r.model(address)})
+			stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel})
 		}
 		if err != nil {
 			return err
 		}
 		if len(pending) > 0 {
-			return queries.NotifyUserMessages(ctx, address.userID)
+			return queries.NotifyUserMessages(ctx, userID)
 		}
 		return nil
 	})
@@ -286,18 +230,15 @@ func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, addr
 }
 
 // runLoop 是“准备步骤 → 调用模型 → 执行工具 → 保存回复”的循环，一轮处理一步，直到没有待处理消息为止。
-func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address agentAddress) error {
+func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) error {
 	queries := database.New(connection)
-	// 每一轮先领一个步骤：领不到说明消息已处理完，Subagent 回到 idle、Main 直接退出等待下次唤醒。
+	// 每一轮先领一个步骤：领不到说明消息已处理完，直接退出等待下次唤醒。
 	for {
-		stepID, newMessageIDs, err := r.prepareStep(ctx, connection, address)
+		stepID, newMessageIDs, err := r.prepareStep(ctx, connection, userID)
 		if err != nil {
 			return err
 		}
 		if stepID == uuid.Nil {
-			if address.subagentID != nil {
-				return queries.SetSubagentStatus(ctx, database.SetSubagentStatusParams{UserID: address.userID, ID: *address.subagentID, Status: "idle"})
-			}
 			return nil
 		}
 		stored, err := queries.GetStepModelReply(ctx, stepID)
@@ -311,13 +252,13 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			if err := json.Unmarshal(stored, &saved); err != nil {
 				return err
 			}
-			reply = modelReply{response: saved.Response, stepID: stepID, delivery: deliveryState{satisfied: saved.DeliverySatisfied, corrected: saved.DeliveryCorrected}}
+			reply = modelReply{response: saved.Response, stepID: stepID}
 		} else {
-			reply, err = r.callWithRetries(ctx, connection, address, stepID, newMessageIDs)
+			reply, err = r.callWithRetries(ctx, connection, userID, stepID, newMessageIDs)
 			if err != nil {
 				return err
 			}
-			payload, err := json.Marshal(storedModelReply{Response: reply.response, DeliverySatisfied: reply.delivery.satisfied, DeliveryCorrected: reply.delivery.corrected})
+			payload, err := json.Marshal(storedModelReply{Response: reply.response})
 			if err != nil {
 				return err
 			}
@@ -330,17 +271,17 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 			return err
 		}
 		// 先把助手消息落库，工具调用从此在历史里可见；随后并行执行全部工具，全部齐了再结束本步。
-		if err := r.saveAssistantMessage(ctx, connection, address, reply.stepID, reply.response.Choices[0].Message); err != nil {
+		if err := r.saveAssistantMessage(ctx, connection, userID, reply.stepID, reply.response.Choices[0].Message); err != nil {
 			return err
 		}
-		if err := r.executeToolCalls(ctx, connection, address, reply.stepID, message.ToolCalls); err != nil {
+		if err := r.executeToolCalls(ctx, connection, userID, reply.stepID, message.ToolCalls); err != nil {
 			return err
 		}
 		// 全部工具都有回执后结束本步，再唤醒调度进入下一轮。
-		if err := r.finishReply(ctx, connection, address, reply.stepID, reply.response, message, reply.delivery); err != nil {
+		if err := r.finishReply(ctx, connection, userID, reply.stepID, reply.response, message); err != nil {
 			return err
 		}
-		r.Wake(address.userID)
+		r.Wake(userID)
 	}
 }
 
@@ -349,7 +290,7 @@ func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, address 
 // 数据库工具在各自从池中取连接的事务里执行并连回执一起提交，联网工具执行完立刻用池中连接单独存回执；
 // 批次执行期间另有看守协程定期 ping 锁连接，连接失效就取消整批，等看守退出后调用方才继续用锁连接。
 // 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
-func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, calls []toolCall) error {
+func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, calls []toolCall) error {
 	queries := database.New(connection)
 	// 先在锁连接上串行核对回执、排出待执行列表：同一步恢复时已完成的工具不再重跑，重复的调用 ID 只执行第一个。
 	pending := make([]toolCall, 0, len(calls))
@@ -408,8 +349,8 @@ func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn,
 		go func() {
 			defer waitGroup.Done()
 			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整步按中断处理。
-			if tool, ok := toolByName(call.Function.Name); ok && tool.outsideTransaction {
-				result, err := tool.execute(batchContext, r, nil, address, call.Function.Arguments)
+			if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
+				result, err := tool.Execute(batchContext, r.toolDeps, nil, userID, call.Function.Arguments)
 				if err != nil {
 					if batchContext.Err() != nil {
 						toolErrors[index] = err
@@ -417,11 +358,11 @@ func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn,
 					}
 					result = "Error: " + err.Error()
 				}
-				toolErrors[index] = r.saveToolResult(batchContext, address, stepID, call, result)
+				toolErrors[index] = r.saveToolResult(batchContext, userID, stepID, call, result)
 				return
 			}
 			// 其余工具与回执在同一事务里提交。未登记的名字也走这里，回执说明该工具不可用。
-			toolErrors[index] = r.executeDatabaseToolAndSaveResult(batchContext, address, stepID, call)
+			toolErrors[index] = r.executeDatabaseToolAndSaveResult(batchContext, userID, stepID, call)
 		}()
 	}
 	waitGroup.Wait()
@@ -448,29 +389,26 @@ type modelResult struct {
 	retryable bool
 }
 
-// modelReply 是归一化后的模型回复：带上它属于哪个步骤，以及（仅 Subagent）这次回复是否已把结果发给 Main。
+// modelReply 是归一化后的模型回复：带上它属于哪个步骤。
 type modelReply struct {
 	response chatResponse
 	stepID   uuid.UUID
-	delivery deliveryState
 }
 
 // storedModelReply 是 modelReply 存进数据库时的形状，进程中断重启后靠它原样恢复，不重复调用模型。
 type storedModelReply struct {
-	Response          chatResponse `json:"response"`
-	DeliverySatisfied bool         `json:"delivery_satisfied"`
-	DeliveryCorrected bool         `json:"delivery_corrected"`
+	Response chatResponse `json:"response"`
 }
 
 // callWithRetries 调用模型并处理重试：把这一步刚领到的消息透传给上下文准备（用于新消息压缩触发），
 // 上下文准备、请求和退避共用十分钟预算，可重试的失败最多再试 3 次，
 // 每次重试都新开一个步骤记录，旧步骤以失败收尾，方便事后按步骤排查。
-func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, newMessageIDs []uuid.UUID) (modelReply, error) {
+func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, newMessageIDs []uuid.UUID) (modelReply, error) {
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
 	defer cancel()
 	for attempt := 0; ; attempt++ {
-		prepared, messages, err := r.prepareContext(retryContext, connection, address, newMessageIDs)
+		prepared, _, err := r.prepareContext(retryContext, connection, userID, stepID, newMessageIDs)
 		if err != nil {
 			return modelReply{}, err
 		}
@@ -482,7 +420,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			return modelResult{response: response, retryable: retryable}, err
 		})
 		if callErr == nil {
-			return modelReply{response: result.response, stepID: stepID, delivery: inspectDelivery(messages, address)}, nil
+			return modelReply{response: result.response, stepID: stepID}, nil
 		}
 		if ctx.Err() != nil || connection.Conn().IsClosed() {
 			return modelReply{}, callErr
@@ -499,7 +437,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			}
 			if canRetry {
 				var err error
-				stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: address.userID, SubagentID: address.subagentID, Model: r.model(address)})
+				stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel})
 				return err
 			}
 			return nil
@@ -507,7 +445,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 		if err != nil {
 			return modelReply{}, err
 		}
-		slog.Error("model request failed", "agent", address.lockKey(), "attempt", attempt+1, "error", callErr)
+		slog.Error("model request failed", "agent", runtimeLockKey(userID), "attempt", attempt+1, "error", callErr)
 		if !canRetry {
 			return modelReply{}, callErr
 		}
@@ -516,7 +454,7 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			return modelReply{}, context.Cause(retryContext)
 		case <-time.After(time.Second << attempt):
 		}
-		stepID, newMessageIDs, err = r.prepareStep(retryContext, connection, address)
+		stepID, newMessageIDs, err = r.prepareStep(retryContext, connection, userID)
 		if err != nil {
 			return modelReply{}, err
 		}
@@ -560,10 +498,10 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, request 
 
 // saveAssistantMessage 在执行任何工具之前先保存这一步的助手消息，工具调用从此成为历史的一部分；
 // 中断恢复时同一步已有助手消息就跳过，避免重复插入。
-func (r *Runner) saveAssistantMessage(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, content json.RawMessage) error {
+func (r *Runner) saveAssistantMessage(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, content json.RawMessage) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
+		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
 		saved, err := queries.HasStepAssistantMessage(ctx, &stepID)
@@ -573,42 +511,51 @@ func (r *Runner) saveAssistantMessage(ctx context.Context, connection *pgxpool.C
 		if saved {
 			return nil
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "assistant", Content: content, StepID: &stepID}); err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "assistant", Content: content, StepID: &stepID, Visible: true}); err != nil {
 			return err
 		}
-		return queries.NotifyUserMessages(ctx, address.userID)
+		return queries.NotifyUserMessages(ctx, userID)
 	})
 }
 
 // saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
 // 工具并行执行时从连接池取连接保存，同一用户的插入由 LockUserMessages 在数据库内串行排队。
-func (r *Runner) saveToolResult(ctx context.Context, address agentAddress, stepID uuid.UUID, call toolCall, result string) error {
+func (r *Runner) saveToolResult(ctx context.Context, userID uuid.UUID, stepID uuid.UUID, call toolCall, result string) error {
 	content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
 	if err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
+		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
 			return err
 		}
-		return queries.NotifyUserMessages(ctx, address.userID)
+		return queries.NotifyUserMessages(ctx, userID)
 	})
+}
+
+// executeDatabaseTool 执行与回执同一事务的工具。未登记的名字返回工具错误，让模型可以改口。
+func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Queries, userID uuid.UUID, call toolCall) (string, error) {
+	tool, ok := tools.ByName(call.Function.Name)
+	if !ok || tool.OutsideTransaction {
+		return "Error: tool not available: " + call.Function.Name, nil
+	}
+	return tool.Execute(ctx, r.toolDeps, queries, userID, call.Function.Arguments)
 }
 
 // executeDatabaseToolAndSaveResult 在一个事务里执行单个数据库工具并保存它的回执：
 // 工具的写入与回执要么一起提交、要么一起回滚，所以恢复时看到有回执就代表工具已经生效，不会重复执行。
 // 每个工具从连接池取自己的连接开事务，同一批工具才能真正并行；同一用户的消息插入由 LockUserMessages 串行排队。
-func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, address agentAddress, stepID uuid.UUID, call toolCall) error {
+func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, userID uuid.UUID, stepID uuid.UUID, call toolCall) error {
 	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
+		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		result, err := r.executeDatabaseTool(ctx, queries, address, call)
+		result, err := r.executeDatabaseTool(ctx, queries, userID, call)
 		if err != nil {
 			return err
 		}
@@ -616,75 +563,42 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, address a
 		if err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
 			return err
 		}
-		return queries.NotifyUserMessages(ctx, address.userID)
+		return queries.NotifyUserMessages(ctx, userID)
 	})
 }
 
-// finishReply 在全部工具都有回执后结束本步：记下用量；Main 的正文已在落库时成为用户消息，不做交付检查，
-// 只检查 Subagent 是否把结果发给了 Main——没发就追加一条纠正提示再跑一轮，已经纠正过仍没发则按失败收尾；有工具调用或需要纠正时顺手创建下一步。
-func (r *Runner) finishReply(ctx context.Context, connection *pgxpool.Conn, address agentAddress, stepID uuid.UUID, response chatResponse, message assistantMessage, delivery deliveryState) error {
-	missingDelivery := address.subagentID != nil && len(message.ToolCalls) == 0 && !delivery.satisfied
-	terminalFailure := missingDelivery && delivery.corrected
-	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
+// finishReply 在全部工具都有回执后结束本步：记下用量；有工具调用时顺手创建下一步。
+func (r *Runner) finishReply(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, response chatResponse, message assistantMessage) error {
+	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
+		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		var deliveryError *string
-		if missingDelivery {
-			text := errMissingDelivery.Error()
-			deliveryError = &text
-		}
-		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost, Error: deliveryError}); err != nil {
+		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost}); err != nil {
 			return err
 		}
-		if missingDelivery && !terminalFailure {
-			correction, err := json.Marshal(map[string]string{"role": "system", "content": deliveryCorrection})
-			if err != nil {
-				return err
-			}
-			if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "system", Content: correction, StepID: &stepID}); err != nil {
+		if len(message.ToolCalls) > 0 {
+			if _, err := queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel}); err != nil {
 				return err
 			}
 		}
-		if len(message.ToolCalls) > 0 || (missingDelivery && !terminalFailure) {
-			if _, err := queries.StartStep(ctx, database.StartStepParams{UserID: address.userID, SubagentID: address.subagentID, Model: r.model(address)}); err != nil {
-				return err
-			}
-		} else if terminalFailure && address.subagentID != nil {
-			if err := failSubagent(ctx, queries, address, errMissingDelivery); err != nil {
-				return err
-			}
-		} else if address.subagentID != nil {
-			if err := queries.SetSubagentStatus(ctx, database.SetSubagentStatusParams{UserID: address.userID, ID: *address.subagentID, Status: "idle"}); err != nil {
-				return err
-			}
-		}
-		return queries.NotifyUserMessages(ctx, address.userID)
+		return queries.NotifyUserMessages(ctx, userID)
 	})
-	if err != nil {
-		return err
-	}
-	// 终止状态和失败通知与真实响应一起提交，调用方不再重复处理。
-	if terminalFailure {
-		return errMissingDelivery
-	}
-	return nil
 }
 
 // failAgent 把一次运行的失败落库：未完成的步骤全部以失败收尾；助手消息已保存时，先给还没有回执的
-// 工具调用补一条中断回执，避免历史里留下没有回执的工具调用；Subagent 还要把排队消息标为已读并通知 Main。
-func (r *Runner) failAgent(ctx context.Context, connection *pgxpool.Conn, address agentAddress, cause error) error {
+// 工具调用补一条中断回执，避免历史里留下没有回执的工具调用。
+func (r *Runner) failAgent(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, cause error) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		errorText := cause.Error()
-		if err := queries.LockUserMessages(ctx, address.userID); err != nil {
+		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		stepID, err := queries.GetUnfinishedStep(ctx, database.GetUnfinishedStepParams{UserID: address.userID, SubagentID: address.subagentID})
+		stepID, err := queries.GetUnfinishedStep(ctx, userID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -719,41 +633,16 @@ func (r *Runner) failAgent(ctx context.Context, connection *pgxpool.Conn, addres
 						if err != nil {
 							return err
 						}
-						if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: address.userID, SubagentID: address.subagentID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
+						if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
 							return err
 						}
 					}
 				}
 			}
 		}
-		if err := queries.FailUnfinishedSteps(ctx, database.FailUnfinishedStepsParams{UserID: address.userID, SubagentID: address.subagentID, Error: &errorText}); err != nil {
+		if err := queries.FailUnfinishedSteps(ctx, database.FailUnfinishedStepsParams{UserID: userID, Error: &errorText}); err != nil {
 			return err
 		}
-		if address.subagentID != nil {
-			if err := queries.LockUserMessages(ctx, address.userID); err != nil {
-				return err
-			}
-			pending, err := queries.ListPendingAgentMessageIDs(ctx, database.ListPendingAgentMessageIDsParams{UserID: address.userID, SubagentID: address.subagentID})
-			if err != nil {
-				return err
-			}
-			for _, id := range pending {
-				if err := queries.MarkMessageRead(ctx, id); err != nil {
-					return err
-				}
-			}
-			if err := failSubagent(ctx, queries, address, cause); err != nil {
-				return err
-			}
-		}
-		return queries.NotifyUserMessages(ctx, address.userID)
+		return queries.NotifyUserMessages(ctx, userID)
 	})
-}
-
-// failSubagent 结束一个 Subagent：状态置为 failed，并以系统身份给 Main 发一条说明停在哪、为什么停的消息。
-func failSubagent(ctx context.Context, queries *database.Queries, address agentAddress, cause error) error {
-	if err := queries.SetSubagentStatus(ctx, database.SetSubagentStatusParams{UserID: address.userID, ID: *address.subagentID, Status: "failed"}); err != nil {
-		return err
-	}
-	return deliverText(ctx, queries, agentAddress{userID: address.userID}, "system", address.subagentID, fmt.Sprintf("Subagent %s stopped: %s", address.subagentID, cause))
 }

@@ -71,23 +71,15 @@ func (q *Queries) FinishModelCall(ctx context.Context, arg FinishModelCallParams
 const hasAgentExecutionWork = `-- name: HasAgentExecutionWork :one
 SELECT EXISTS (
  SELECT 1 FROM messages AS m WHERE m.user_id = $1
-  AND m.subagent_id IS NOT DISTINCT FROM $2::uuid AND m.sequence IS NULL
+  AND m.sequence IS NULL
  UNION ALL
  SELECT 1 FROM steps AS s WHERE s.user_id = $1
-  AND s.subagent_id IS NOT DISTINCT FROM $2::uuid AND s.finished_at IS NULL
- UNION ALL
- SELECT 1 FROM subagents AS a WHERE a.user_id = $1
-  AND a.id = $2::uuid AND a.status = 'running'
+  AND s.finished_at IS NULL
 ) AS has_work
 `
 
-type HasAgentExecutionWorkParams struct {
-	UserID     uuid.UUID
-	SubagentID *uuid.UUID
-}
-
-func (q *Queries) HasAgentExecutionWork(ctx context.Context, arg HasAgentExecutionWorkParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasAgentExecutionWork, arg.UserID, arg.SubagentID)
+func (q *Queries) HasAgentExecutionWork(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasAgentExecutionWork, userID)
 	var has_work bool
 	err := row.Scan(&has_work)
 	return has_work, err
@@ -96,17 +88,11 @@ func (q *Queries) HasAgentExecutionWork(ctx context.Context, arg HasAgentExecuti
 const interruptModelCalls = `-- name: InterruptModelCalls :exec
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = $1
-    AND subagent_id IS NOT DISTINCT FROM $2::uuid
     AND outcome = 'in_flight'
 `
 
-type InterruptModelCallsParams struct {
-	UserID     uuid.UUID
-	SubagentID *uuid.UUID
-}
-
-func (q *Queries) InterruptModelCalls(ctx context.Context, arg InterruptModelCallsParams) error {
-	_, err := q.db.Exec(ctx, interruptModelCalls, arg.UserID, arg.SubagentID)
+func (q *Queries) InterruptModelCalls(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, interruptModelCalls, userID)
 	return err
 }
 
@@ -114,10 +100,10 @@ const startModelCall = `-- name: StartModelCall :one
 
 WITH step AS (
  UPDATE steps AS source SET model = $1 WHERE source.id = $7
- RETURNING source.id, source.user_id, source.subagent_id
+ RETURNING source.id, source.user_id
 )
-INSERT INTO model_calls (step_id, user_id, subagent_id, requested_model, request_body, purpose, compact_reason, context_tokens_before, summary_through_sequence)
-SELECT step.id, step.user_id, step.subagent_id, $1, $2::jsonb, $3, $4, $5, $6 FROM step
+INSERT INTO model_calls (step_id, user_id, requested_model, request_body, purpose, compact_reason, context_tokens_before, summary_through_sequence)
+SELECT step.id, step.user_id, $1, $2::jsonb, $3, $4, $5, $6 FROM step
 RETURNING id
 `
 

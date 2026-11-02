@@ -8,10 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/coder/websocket"
@@ -26,16 +24,19 @@ const maxMessageCharacters = 32000
 // clientFrame 是前端通过聊天 WebSocket 发来的全部命令的统一形状；
 // 后端发出的事件类型见 events.go。
 type clientFrame struct {
-	Type            string     `json:"type"`
-	RequestID       string     `json:"request_id"`
-	Token           string     `json:"token"`
-	LastPosition    *uuid.UUID `json:"last_position"`
-	Email           string     `json:"email"`
-	Code            string     `json:"code"`
-	TurnstileToken  string     `json:"turnstile_token"`
-	Before          *uuid.UUID `json:"before"`
-	ClientMessageID uuid.UUID  `json:"client_message_id"`
-	Text            string     `json:"text"`
+	Type            string         `json:"type"`
+	RequestID       string         `json:"request_id"`
+	Token           string         `json:"token"`
+	LastPosition    *uuid.UUID     `json:"last_position"`
+	Email           string         `json:"email"`
+	Code            string         `json:"code"`
+	TurnstileToken  string         `json:"turnstile_token"`
+	Before          *uuid.UUID     `json:"before"`
+	ClientMessageID uuid.UUID      `json:"client_message_id"`
+	Text            string         `json:"text"`
+	Parts           []messagePart  `json:"parts"`
+	Quotes          []messageQuote `json:"-"`
+	Images          []messageImage `json:"-"`
 }
 
 // chatConnections 记录本机每个用户的 WebSocket 连接；收到该用户的 NOTIFY 时唤醒这些连接去查表推送。
@@ -141,8 +142,8 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer connection.CloseNow()
-	// 32,000 个字符的 UTF-8 编码最多约 128 KB。
-	connection.SetReadLimit(256 << 10)
+	// 图片已通过 HTTP 上传到 OSS，聊天帧只携带引用与文字。
+	connection.SetReadLimit(512 << 10)
 	relay := newEventRelay(connection)
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -269,8 +270,10 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		case frame := <-frames:
 			switch frame.Type {
 			case "send_message":
-				if !authenticated || frame.ClientMessageID == uuid.Nil ||
-					strings.TrimSpace(frame.Text) == "" || utf8.RuneCountInString(frame.Text) > maxMessageCharacters {
+				var valid bool
+				frame, valid = normalizeMessageInput(frame)
+				if !valid || !authenticated || frame.ClientMessageID == uuid.Nil ||
+					!validMessageInput(frame, userID) || !s.checkMessageImages(ctx, &frame) {
 					connection.Close(websocket.StatusPolicyViolation, "invalid send_message")
 					return
 				}
@@ -414,7 +417,7 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 		}
 		if _, err := queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
 			UserID:          userID,
-			Text:            frame.Text,
+			Content:         userMessageContent(frame),
 			ClientMessageID: &frame.ClientMessageID,
 		}); err != nil {
 			return err
@@ -462,6 +465,6 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 	}
 	return relay.send(ctx, messagesEvent{
 		Type: "messages", MainThinking: mainThinking,
-		chatMessages: chatMessages{Messages: chatMessagesFromRows(rows), ReadUpTo: readUpTo},
+		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows), ReadUpTo: readUpTo},
 	})
 }

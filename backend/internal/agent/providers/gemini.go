@@ -72,7 +72,6 @@ type geminiFunctionCall struct {
 // geminiRequestBody 把运行时共用消息转为 generateContent 请求，不改动数据库中的历史。
 func geminiRequestBody(prepared Request) ([]byte, error) {
 	contents := []geminiContent{}
-	systemParts := []map[string]string{}
 	toolCalls := map[string]geminiFunctionCall{}
 	for _, raw := range prepared.Messages {
 		var message struct {
@@ -88,10 +87,6 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 		}
 		var text string
 		_ = json.Unmarshal(message.Content, &text)
-		if message.Role == "system" {
-			systemParts = append(systemParts, map[string]string{"text": text})
-			continue
-		}
 		content := geminiContent{Role: "user", Parts: []json.RawMessage{}}
 		switch message.Role {
 		case "tool":
@@ -184,7 +179,7 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 		}
 	}
 
-	// JSON Schema 直接使用现有工具定义；Subagent 的强制交付沿用 send_message 的指定工具选择。
+	// JSON Schema 直接使用现有工具定义；指定工具选择沿用同一份工具定义转换。
 	declarations := []map[string]any{}
 	for _, raw := range prepared.Tools {
 		var tool struct {
@@ -216,9 +211,6 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 	body := map[string]any{
 		"contents":         contents,
 		"generationConfig": generation,
-	}
-	if len(systemParts) > 0 {
-		body["systemInstruction"] = map[string]any{"parts": systemParts}
 	}
 	if len(declarations) > 0 {
 		body["tools"] = []any{map[string]any{"functionDeclarations": declarations}}

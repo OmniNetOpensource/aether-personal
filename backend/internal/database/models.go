@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pgvector/pgvector-go"
 	"github.com/shopspring/decimal"
 )
 
@@ -43,26 +42,23 @@ type LoginRateLimit struct {
 type Message struct {
 	ID                     uuid.UUID
 	UserID                 uuid.UUID
-	SubagentID             *uuid.UUID
 	Sequence               *int64
 	Role                   string
 	Content                []byte
 	Sender                 *string
-	SenderSubagentID       *uuid.UUID
 	StepID                 *uuid.UUID
 	IsSummary              bool
-	Embedding              *pgvector.Vector
 	CreatedAt              time.Time
 	ClientMessageID        *uuid.UUID
 	SummaryThroughSequence *int64
 	SearchText             string
+	Visible                bool
 }
 
 type ModelCall struct {
 	ID                     uuid.UUID
 	StepID                 uuid.UUID
 	UserID                 uuid.UUID
-	SubagentID             *uuid.UUID
 	RequestedModel         string
 	ResponseModel          *string
 	ProviderGenerationID   *string
@@ -87,18 +83,15 @@ type ModelCall struct {
 }
 
 type ModelSetting struct {
-	ID                     uuid.UUID
-	Singleton              bool
-	MainModel              string
-	SubagentModel          *string
-	Version                int64
-	UpdatedAt              time.Time
-	UpdatedBy              string
-	MainModelMaxTokens     *int32
-	SubagentModelMaxTokens *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	SubagentContextLength  *int64
+	ID                 uuid.UUID
+	Singleton          bool
+	MainModel          string
+	Version            int64
+	UpdatedAt          time.Time
+	UpdatedBy          string
+	MainModelMaxTokens *int32
+	CompactAtTokens    int32
+	MainContextLength  *int64
 }
 
 type Schedule struct {
@@ -147,7 +140,6 @@ type Session struct {
 type Step struct {
 	ID           uuid.UUID
 	UserID       uuid.UUID
-	SubagentID   *uuid.UUID
 	Model        string
 	InputTokens  *int32
 	OutputTokens *int32
@@ -157,14 +149,6 @@ type Step struct {
 	FinishedAt   *time.Time
 	ModelReply   []byte
 	Purpose      string
-}
-
-type Subagent struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	Status    string
-	CreatedAt time.Time
-	StartedAt *time.Time
 }
 
 type User struct {

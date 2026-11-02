@@ -4,16 +4,12 @@
 WITH calls AS (
  SELECT c.* FROM model_calls c JOIN users u ON u.id = c.user_id WHERE c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR c.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND c.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND c.subagent_id = sqlc.narg(agent_id)::uuid))
   AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
   AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
 ), legacy AS (
  SELECT s.* FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR s.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND s.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND s.subagent_id = sqlc.narg(agent_id)::uuid))
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
   AND sqlc.narg(outcome)::text IS NULL
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
@@ -31,8 +27,8 @@ WITH calls AS (
  SELECT c.requested_model AS model, count(*) AS attempts, coalesce(sum(c.cost),0)::text AS cost_known_usd
  FROM calls c GROUP BY c.requested_model ORDER BY count(*) DESC, c.requested_model LIMIT 100
 ), tool_counts AS (
- -- 已知工具名与 backend/internal/agent/tools.go 的登记表一致，未登记的归为 other。
- SELECT CASE WHEN tool.name IN ('send_message','assign_subagents','schedule','search','search_twitter','fetch_url','search_message','read_message') THEN tool.name ELSE 'other' END AS name, count(*) AS count
+ -- 已知工具名与 backend/internal/agent/tools/tools.go 的登记表一致，未登记的归为 other。
+ SELECT CASE WHEN tool.name IN ('schedule','search','search_twitter','fetch_url','search_message','read_message') THEN tool.name ELSE 'other' END AS name, count(*) AS count
  FROM calls c CROSS JOIN LATERAL unnest(c.tool_names) AS tool(name) GROUP BY 1
 )
 SELECT jsonb_build_object(
@@ -64,16 +60,12 @@ WITH page AS (
 )
 SELECT u.id,u.created_at,jsonb_build_object('id',u.id,'email',u.email,'created_at',u.created_at,
  'last_activity_at',(SELECT max(s.started_at) FROM steps s WHERE s.user_id=u.id),
- 'main_active',EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.subagent_id IS NULL AND s.finished_at IS NULL)
-   OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.subagent_id IS NULL AND m.sequence IS NULL),
- 'active_subagents',(SELECT count(*) FROM subagents a WHERE a.user_id=u.id AND a.status='running'),
- 'total_subagents',(SELECT count(*) FROM subagents a WHERE a.user_id=u.id),
+ 'main_active',EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
+   OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL),
  'attempts',stats.attempts,'failed',stats.failed,'input_tokens',stats.input_tokens,'output_tokens',stats.output_tokens,
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
  'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=u.id AND s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR s.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND s.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND s.subagent_id = sqlc.narg(agent_id)::uuid))
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
   AND sqlc.narg(outcome)::text IS NULL
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
@@ -86,73 +78,56 @@ FROM page u CROSS JOIN LATERAL (
  coalesce(sum(c.cost),0)::text AS cost_known_usd,count(*) FILTER(WHERE c.cost IS NULL) AS cost_unknown
  FROM model_calls c WHERE c.user_id=u.id AND c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR c.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND c.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND c.subagent_id = sqlc.narg(agent_id)::uuid))
   AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
   AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
 ) stats ORDER BY u.created_at DESC,u.id DESC;
 
 -- name: ListAdminAgents :many
+-- 每位用户只有一个 Main，选中用户时返回它的单行状态。
 WITH agents AS (
  SELECT NULL::uuid AS id,u.id AS user_id,u.email,u.created_at,
-   CASE WHEN EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.subagent_id IS NULL AND s.finished_at IS NULL)
-     OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.subagent_id IS NULL AND m.sequence IS NULL)
-     THEN 'processing' WHEN (SELECT s.error IS NOT NULL FROM steps s WHERE s.user_id=u.id AND s.subagent_id IS NULL ORDER BY s.started_at DESC,s.id DESC LIMIT 1)
+   CASE WHEN EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
+     OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL)
+     THEN 'processing' WHEN (SELECT s.error IS NOT NULL FROM steps s WHERE s.user_id=u.id ORDER BY s.started_at DESC,s.id DESC LIMIT 1)
      THEN 'failed' ELSE 'idle' END AS status
  FROM users u WHERE u.id=sqlc.arg(selected_user_id)::uuid
- UNION ALL
- SELECT a.id,a.user_id,u.email,a.created_at,CASE a.status WHEN 'running' THEN 'processing' ELSE a.status END
- FROM subagents a JOIN users u ON u.id=a.user_id WHERE a.user_id=sqlc.arg(selected_user_id)::uuid
 ), page AS (
  SELECT a.*,coalesce(a.id,'00000000-0000-0000-0000-000000000000'::uuid) AS cursor_id FROM agents a
- WHERE (sqlc.arg(agent_kind)::text='all' OR (sqlc.arg(agent_kind)::text='main' AND a.id IS NULL)
-    OR (sqlc.arg(agent_kind)::text='subagent' AND a.id=sqlc.narg(agent_id)::uuid))
- AND (sqlc.arg(search)::text='' OR strpos(lower(a.email),lower(sqlc.arg(search)::text))>0)
+ WHERE (sqlc.arg(search)::text='' OR strpos(lower(a.email),lower(sqlc.arg(search)::text))>0)
  AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (a.created_at,coalesce(a.id,'00000000-0000-0000-0000-000000000000'::uuid))
     <(sqlc.narg(cursor_at)::timestamptz,sqlc.narg(cursor_id)::uuid))
  ORDER BY a.created_at DESC,cursor_id DESC LIMIT sqlc.arg(page_limit)::integer
 )
-SELECT a.cursor_id AS id,a.created_at,jsonb_build_object('id',a.id,'kind',CASE WHEN a.id IS NULL THEN 'main' ELSE 'subagent' END,
+SELECT a.cursor_id AS id,a.created_at,jsonb_build_object('id',a.id,'kind','main',
  'user_id',a.user_id,'email',a.email,'status',a.status,'created_at',a.created_at,
- 'last_activity_at',(SELECT max(s.started_at) FROM steps s WHERE s.user_id=a.user_id AND s.subagent_id IS NOT DISTINCT FROM a.id),
+ 'last_activity_at',(SELECT max(s.started_at) FROM steps s WHERE s.user_id=a.user_id),
  'attempts',stats.attempts,'failed',stats.failed,'input_tokens',stats.input_tokens,'output_tokens',stats.output_tokens,
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
- 'legacy_steps',(SELECT count(*) FROM steps s JOIN users u ON u.id=s.user_id WHERE s.user_id=a.user_id AND s.subagent_id IS NOT DISTINCT FROM a.id AND s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
-  AND (sqlc.narg(user_id)::uuid IS NULL OR s.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND s.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND s.subagent_id = sqlc.narg(agent_id)::uuid))
+ 'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=a.user_id AND s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
-  AND sqlc.narg(outcome)::text IS NULL
-  AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
   AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id))
 )::jsonb AS payload FROM page a CROSS JOIN LATERAL (
  SELECT count(*) AS attempts,count(*) FILTER(WHERE c.outcome IN ('http_error','transport_error','invalid_response')) AS failed,
  coalesce(sum(c.input_tokens),0) AS input_tokens,coalesce(sum(c.output_tokens),0) AS output_tokens,
  coalesce(sum(c.cost),0)::text AS cost_known_usd,count(*) FILTER(WHERE c.cost IS NULL) AS cost_unknown
- FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.user_id=a.user_id AND c.subagent_id IS NOT DISTINCT FROM a.id AND c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
-  AND (sqlc.narg(user_id)::uuid IS NULL OR c.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND c.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND c.subagent_id = sqlc.narg(agent_id)::uuid))
+ FROM model_calls c WHERE c.user_id=a.user_id AND c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
   AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
-  AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
 ) stats ORDER BY a.created_at DESC,a.cursor_id DESC;
 
 -- name: ListAdminCalls :many
 SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_id',c.user_id,
- 'agent_id',c.subagent_id,'email',u.email,'requested_model',c.requested_model,'response_model',c.response_model,
+ 'email',u.email,'requested_model',c.requested_model,'response_model',c.response_model,
  'provider_generation_id',c.provider_generation_id,'outcome',c.outcome,'http_status',c.http_status,
  'purpose',c.purpose,'compact_reason',c.compact_reason,'context_tokens_before',c.context_tokens_before,
  'context_tokens_after',c.context_tokens_after,'summary_through_sequence',c.summary_through_sequence,
  'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
- 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('send_message','assign_subagents','schedule','search','search_twitter','fetch_url','search_message','read_message') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
+ 'tool_names',(SELECT coalesce(jsonb_agg(CASE WHEN name IN ('schedule','search','search_twitter','fetch_url','search_message','read_message') THEN name ELSE 'other' END),'[]'::jsonb) FROM unnest(c.tool_names) AS tool(name))
 )::jsonb AS payload FROM model_calls c JOIN users u ON u.id=c.user_id WHERE c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(user_id)::uuid IS NULL OR c.user_id = sqlc.narg(user_id)::uuid)
-  AND (sqlc.arg(agent_kind)::text = 'all' OR (sqlc.arg(agent_kind)::text = 'main' AND c.subagent_id IS NULL)
-       OR (sqlc.arg(agent_kind)::text = 'subagent' AND c.subagent_id = sqlc.narg(agent_id)::uuid))
   AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
   AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
@@ -165,8 +140,8 @@ SELECT request_body, response_body, response_truncated FROM model_calls WHERE id
 
 -- name: ListAdminTimelineMessages :many
 -- 按 sequence 从新到旧取一页已读消息；模型输出附上产生它的那次成功请求。
-SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.role, m.content, m.sender, m.sender_subagent_id, m.is_summary, m.created_at,
- CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,'agent_id',c.subagent_id,
+SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
+ CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,
   'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
   'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
@@ -175,31 +150,31 @@ FROM messages m LEFT JOIN LATERAL (
  SELECT * FROM model_calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
  ORDER BY mc.started_at DESC LIMIT 1
 ) c ON true
-WHERE m.user_id = sqlc.arg(user_id) AND m.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+WHERE m.user_id = sqlc.arg(user_id)
+ AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
  AND m.sequence IS NOT NULL AND (sqlc.narg(before_sequence)::bigint IS NULL OR m.sequence < sqlc.narg(before_sequence)::bigint)
 ORDER BY m.sequence DESC LIMIT sqlc.arg(page_limit)::integer;
 
 -- name: ListAdminTimelineFailedCalls :many
 -- 没有产出消息的请求（失败、中断、进行中）只存在于调用日志，按开始时间插入时间线。
-SELECT c.started_at, jsonb_build_object('id',c.id,'step_id',c.step_id,'agent_id',c.subagent_id,
+SELECT c.started_at, jsonb_build_object('id',c.id,'step_id',c.step_id,
  'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
  'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
  'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text)::jsonb AS call
 FROM model_calls c
-WHERE c.user_id = sqlc.arg(user_id) AND c.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid AND c.outcome <> 'succeeded'
+WHERE c.user_id = sqlc.arg(user_id) AND c.outcome <> 'succeeded'
  AND (sqlc.narg(from_at)::timestamptz IS NULL OR c.started_at >= sqlc.narg(from_at)::timestamptz)
  AND (sqlc.narg(to_at)::timestamptz IS NULL OR c.started_at < sqlc.narg(to_at)::timestamptz)
 ORDER BY c.started_at DESC LIMIT 200;
 
 -- name: GetAdminTimelineSystemPrompt :one
--- 系统提示词不进消息表，只能从该 Agent 最近一次推理请求体中取出（OpenRouter 与 Gemini 位置不同）。
-SELECT started_at, coalesce(CASE WHEN request_body->'messages'->0->>'role' = 'system' THEN request_body->'messages'->0->>'content' END,
- request_body->'systemInstruction'->'parts'->0->>'text', '')::text AS prompt
-FROM model_calls
-WHERE user_id = sqlc.arg(user_id) AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
- AND purpose = 'agent' AND request_body IS NOT NULL
-ORDER BY started_at DESC LIMIT 1;
+-- 不可见指令就是该 Agent 消息列表中的 instructions 行，取最近一份原文展示。
+SELECT created_at AS started_at, (content ->> 'content')::text AS prompt
+FROM messages
+WHERE user_id = sqlc.arg(user_id)
+ AND content ->> 'name' = 'instructions'
+ORDER BY id DESC LIMIT 1;
 
 -- name: GetAdminTimelineMessage :one
 SELECT role, content FROM messages WHERE id = $1;

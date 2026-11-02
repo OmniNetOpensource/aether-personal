@@ -56,7 +56,6 @@ func main() {
 	}
 	runner := agent.NewRunner(databasePool, appConfig, serviceSettings)
 	go runner.Start(ctx)
-	go runner.StartEmbeddingWorker(ctx)
 	go scheduler.Run(ctx, databasePool, runner.Wake)
 
 	address := ":" + appConfig.Port

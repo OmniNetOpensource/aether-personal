@@ -1,4 +1,4 @@
-// 本文件实现管理看板的模型配置接口：拉取可用模型目录，读取并保存 Main 与 Subagent 的运行时模型设置。
+// 本文件实现管理看板的模型配置接口：拉取可用模型目录，读取并保存 Main 的运行时模型设置。
 
 package httpapi
 
@@ -163,14 +163,13 @@ func (s *server) adminModelSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		CompactAtTokens int32   `json:"compact_at_tokens"`
-		MainModel       string  `json:"main_model"`
-		SubagentModel   *string `json:"subagent_model"`
-		Version         int64   `json:"version"`
+		CompactAtTokens int32  `json:"compact_at_tokens"`
+		MainModel       string `json:"main_model"`
+		Version         int64  `json:"version"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 || (request.SubagentModel != nil && (*request.SubagentModel == "" || len(*request.SubagentModel) > 160)) {
+	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 {
 		http.Error(w, "invalid model settings", http.StatusBadRequest)
 		return
 	}
@@ -178,33 +177,25 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	catalog := s.availableModels(ctx)
 	models := catalog.Items
-	for _, id := range []*string{&request.MainModel, request.SubagentModel} {
-		if id != nil && !slices.ContainsFunc(models, func(model adminModel) bool { return model.ID == *id }) {
-			provider := "OpenRouter"
-			if strings.HasPrefix(*id, "ikun:gemini-") {
-				provider = "ikun Gemini"
-			}
-			if catalog.UnavailableProviders[provider] {
-				http.Error(w, "model catalog unavailable or model missing; settings unchanged", http.StatusBadGateway)
-				return
-			}
-			http.Error(w, "model is unavailable or incompatible with agent capabilities", http.StatusBadRequest)
+	if !slices.ContainsFunc(models, func(model adminModel) bool { return model.ID == request.MainModel }) {
+		provider := "OpenRouter"
+		if strings.HasPrefix(request.MainModel, "ikun:gemini-") {
+			provider = "ikun Gemini"
+		}
+		if catalog.UnavailableProviders[provider] {
+			http.Error(w, "model catalog unavailable or model missing; settings unchanged", http.StatusBadGateway)
 			return
 		}
+		http.Error(w, "model is unavailable or incompatible with agent capabilities", http.StatusBadRequest)
+		return
 	}
-	var mainCap, subagentCap *int32
-	var mainContext, subagentContext *int64
+	var mainCap *int32
+	var mainContext *int64
 	for _, model := range models {
 		if model.ID == request.MainModel {
 			mainCap = model.MaxCompletionTokens
 			if model.ContextLength > 0 {
 				mainContext = &model.ContextLength
-			}
-		}
-		if request.SubagentModel != nil && model.ID == *request.SubagentModel {
-			subagentCap = model.MaxCompletionTokens
-			if model.ContextLength > 0 {
-				subagentContext = &model.ContextLength
 			}
 		}
 	}
@@ -222,7 +213,7 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		if current.Version != request.Version {
 			return conflict
 		}
-		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, SubagentModel: request.SubagentModel, MainModelMaxTokens: mainCap, SubagentModelMaxTokens: subagentCap, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, SubagentContextLength: subagentContext, UpdatedBy: "管理员"}); err != nil {
+		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, MainModelMaxTokens: mainCap, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, UpdatedBy: "管理员"}); err != nil {
 			return err
 		}
 		saved, err = modelsettings.Load(ctx, queries, s.appConfig)
@@ -236,6 +227,6 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		internalError(w, "save model settings failed", err)
 		return
 	}
-	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel, "subagent_model", saved.EffectiveSubagentModel)
+	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel)
 	writeAdminJSON(w, saved)
 }

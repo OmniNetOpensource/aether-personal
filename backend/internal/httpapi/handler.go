@@ -53,6 +53,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *age
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
+	mux.HandleFunc("POST /images", s.uploadImage)
 	if appConfig.FrontendDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
 	}

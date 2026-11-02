@@ -1,4 +1,4 @@
-// 本文件实现管理看板的 Agent 运行时间线：把某个 Agent 的消息与未产出消息的模型请求合成按时间排列的节点，并按需读取单条消息全文。
+// 本文件实现管理看板的 Main 运行时间线：把某个用户的消息与未产出消息的模型请求合成按时间排列的节点，并按需读取单条消息全文。
 
 package httpapi
 
@@ -30,23 +30,22 @@ type timelineCursor struct {
 
 // timelineItem 是时间线上的一个节点：type 为 message 时来自消息表，为 call 时是没有产出消息的模型请求。
 type timelineItem struct {
-	Type             string             `json:"type"`
-	At               time.Time          `json:"at"`
-	ID               *uuid.UUID         `json:"id,omitempty"`
-	Sequence         int64              `json:"sequence,omitempty"`
-	Role             string             `json:"role,omitempty"`
-	Sender           *string            `json:"sender,omitempty"`
-	SenderSubagentID *uuid.UUID         `json:"sender_subagent_id,omitempty"`
-	IsSummary        bool               `json:"is_summary,omitempty"`
-	Name             string             `json:"name,omitempty"`
-	Text             string             `json:"text,omitempty"`
-	ImageCount       int                `json:"image_count,omitempty"`
-	Images           []string           `json:"images,omitempty"`
-	Reasoning        *timelineReasoning `json:"reasoning,omitempty"`
-	ToolCalls        []timelineToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string             `json:"tool_call_id,omitempty"`
-	Truncated        bool               `json:"truncated,omitempty"`
-	Call             json.RawMessage    `json:"call,omitempty"`
+	Type       string             `json:"type"`
+	At         time.Time          `json:"at"`
+	ID         *uuid.UUID         `json:"id,omitempty"`
+	Sequence   int64              `json:"sequence,omitempty"`
+	Role       string             `json:"role,omitempty"`
+	Sender     *string            `json:"sender,omitempty"`
+	IsSummary  bool               `json:"is_summary,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	Text       string             `json:"text,omitempty"`
+	ImageCount int                `json:"image_count,omitempty"`
+	Images     []string           `json:"images,omitempty"`
+	Reasoning  *timelineReasoning `json:"reasoning,omitempty"`
+	ToolCalls  []timelineToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	Truncated  bool               `json:"truncated,omitempty"`
+	Call       json.RawMessage    `json:"call,omitempty"`
 }
 
 // timelineReasoning 的 state：text 有可读推理，encrypted 只返回了加密推理，none 没有返回推理。
@@ -166,25 +165,17 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 	return item
 }
 
-// parseTimelineAgent 解析看板传来的用户与 Agent；agent 为 main 时返回空的 Subagent ID。
-func parseTimelineAgent(r *http.Request) (uuid.UUID, *uuid.UUID, bool) {
+// parseTimelineUser 解析看板传来的用户 ID。
+func parseTimelineUser(r *http.Request) (uuid.UUID, bool) {
 	userID, err := uuid.Parse(r.URL.Query().Get("user_id"))
-	if err != nil {
-		return userID, nil, false
-	}
-	agent := r.URL.Query().Get("agent")
-	if agent == "main" {
-		return userID, nil, true
-	}
-	subagentID, err := uuid.Parse(agent)
-	return userID, &subagentID, err == nil
+	return userID, err == nil
 }
 
-// adminTimeline 返回一页时间线：默认最新一页，before 游标向更早翻页；首页附带最近一次请求使用的系统提示词。
+// adminTimeline 返回一页时间线：默认最新一页，before 游标向更早翻页；首页附带该用户 Main 落库的不可见指令。
 func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
-	userID, subagentID, ok := parseTimelineAgent(r)
+	userID, ok := parseTimelineUser(r)
 	if !ok {
-		http.Error(w, "user_id and agent (main or a Subagent UUID) are required", http.StatusBadRequest)
+		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
 	}
 	var cursor *timelineCursor
@@ -208,8 +199,8 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 	queries := s.queries.WithTx(tx)
 
 	// 多取一条用来判断是否还有更早的消息；结果按 sequence 从新到旧返回。
-	messageParams := database.ListAdminTimelineMessagesParams{UserID: userID, SubagentID: subagentID, PageLimit: timelinePageSize + 1}
-	callParams := database.ListAdminTimelineFailedCallsParams{UserID: userID, SubagentID: subagentID}
+	messageParams := database.ListAdminTimelineMessagesParams{UserID: userID, PageLimit: timelinePageSize + 1}
+	callParams := database.ListAdminTimelineFailedCallsParams{UserID: userID}
 	if cursor != nil {
 		messageParams.BeforeSequence, callParams.ToAt = &cursor.Sequence, &cursor.At
 	}
@@ -236,7 +227,7 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 	slices.Reverse(calls)
 	var systemPrompt any
 	if cursor == nil {
-		prompt, err := queries.GetAdminTimelineSystemPrompt(ctx, database.GetAdminTimelineSystemPromptParams{UserID: userID, SubagentID: subagentID})
+		prompt, err := queries.GetAdminTimelineSystemPrompt(ctx, userID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			internalError(w, "read admin timeline system prompt failed", err)
 			return
@@ -264,7 +255,7 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 		}
 		item := timelineMessage(message.Role, message.Content, timelineTextLimit)
 		item.ID, item.Sequence, item.At = &message.ID, message.Sequence, message.CreatedAt
-		item.Sender, item.SenderSubagentID, item.IsSummary = message.Sender, message.SenderSubagentID, message.IsSummary
+		item.Sender, item.IsSummary = message.Sender, message.IsSummary
 		if len(message.Call) > 0 {
 			item.Call = message.Call
 		}

@@ -1,4 +1,4 @@
-// 本文件实现管理看板的只读查询接口：汇总运行概览、用户与 Agent、模型调用列表及详情，供看板分页筛选查看。
+// 本文件实现管理看板的只读查询接口：汇总运行概览、用户与 Main、模型调用列表及详情，供看板分页筛选查看。
 
 package httpapi
 
@@ -25,17 +25,16 @@ type adminCursor struct {
 }
 
 type adminFilters struct {
-	From, To        time.Time
-	Bucket          string
-	UserID, AgentID *uuid.UUID
-	AgentKind       string
-	Model, Outcome  *string
-	Search          string
-	Limit           int32
-	Cursor          *adminCursor
-	UserCursor      *adminCursor
-	AgentCursor     *adminCursor
-	StepID          *uuid.UUID
+	From, To       time.Time
+	Bucket         string
+	UserID         *uuid.UUID
+	Model, Outcome *string
+	Search         string
+	Limit          int32
+	Cursor         *adminCursor
+	UserCursor     *adminCursor
+	AgentCursor    *adminCursor
+	StepID         *uuid.UUID
 }
 
 type adminPage struct {
@@ -50,7 +49,7 @@ func (s *server) adminMe(w http.ResponseWriter, r *http.Request) {
 
 func parseAdminFilters(r *http.Request) (adminFilters, error) {
 	values := r.URL.Query()
-	filter := adminFilters{To: time.Now().UTC(), AgentKind: "all", Limit: 50}
+	filter := adminFilters{To: time.Now().UTC(), Limit: 50}
 	var err error
 	if value := values.Get("to"); value != "" {
 		filter.To, err = time.Parse(time.RFC3339, value)
@@ -88,19 +87,6 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 			return filter, fmt.Errorf("invalid user_id")
 		}
 		filter.UserID = &id
-	}
-	if value := values.Get("agent"); value != "" {
-		if filter.UserID == nil {
-			return filter, fmt.Errorf("agent requires user_id")
-		}
-		filter.AgentKind = "main"
-		if value != "main" {
-			id, err := uuid.Parse(value)
-			if err != nil {
-				return filter, fmt.Errorf("agent must be main or a Subagent UUID")
-			}
-			filter.AgentKind, filter.AgentID = "subagent", &id
-		}
 	}
 	if value := values.Get("model"); value != "" {
 		if !utf8.ValidString(value) || strings.ContainsRune(value, 0) || utf8.RuneCountInString(value) > 160 {
@@ -212,8 +198,8 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	queries := s.queries.WithTx(tx)
 	payload, err := queries.AdminSnapshot(ctx, database.AdminSnapshotParams{
 		FromAt: filter.From, ToAt: filter.To, Bucket: filter.Bucket,
-		UserID: filter.UserID, AgentKind: filter.AgentKind, AgentID: filter.AgentID,
-		Model: filter.Model, Outcome: filter.Outcome, Search: filter.Search,
+		UserID: filter.UserID,
+		Model:  filter.Model, Outcome: filter.Outcome, Search: filter.Search,
 	})
 	if err != nil {
 		internalError(w, "read admin snapshot failed", err)
@@ -222,7 +208,7 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	cursorAt, cursorID := adminCursorValues(filter.UserCursor)
 	userRows, err := queries.ListAdminUsers(ctx, database.ListAdminUsersParams{
 		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-		AgentKind: filter.AgentKind, AgentID: filter.AgentID, Model: filter.Model,
+		Model:   filter.Model,
 		Outcome: filter.Outcome, Search: filter.Search,
 		CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
 	})
@@ -238,9 +224,9 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	if filter.UserID != nil {
 		cursorAt, cursorID = adminCursorValues(filter.AgentCursor)
 		rows, err := queries.ListAdminAgents(ctx, database.ListAdminAgentsParams{
-			FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-			SelectedUserID: *filter.UserID, AgentKind: filter.AgentKind, AgentID: filter.AgentID,
-			Model: filter.Model, Outcome: filter.Outcome, Search: filter.Search,
+			FromAt: filter.From, ToAt: filter.To,
+			SelectedUserID: *filter.UserID,
+			Model:          filter.Model, Outcome: filter.Outcome, Search: filter.Search,
 			CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
 		})
 		if err != nil {
@@ -286,7 +272,7 @@ func (s *server) adminCalls(w http.ResponseWriter, r *http.Request) {
 	cursorAt, cursorID := adminCursorValues(filter.Cursor)
 	rows, err := s.queries.WithTx(tx).ListAdminCalls(ctx, database.ListAdminCallsParams{
 		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-		AgentKind: filter.AgentKind, AgentID: filter.AgentID, Model: filter.Model,
+		Model:   filter.Model,
 		Outcome: filter.Outcome, Search: filter.Search, StepID: filter.StepID,
 		CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
 	})

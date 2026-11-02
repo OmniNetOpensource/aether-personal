@@ -1,10 +1,9 @@
-// 本文件负责解析助手消息：提取 Main 正文作为用户可见消息，并解析 Agent 间 send_message 工具调用的参数，供消息展示与交付判定共用。
+// 本文件负责解析助手消息：提取 Main 正文作为用户可见消息，供消息展示共用。
 
 package agent
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 )
 
@@ -46,23 +45,4 @@ func AssistantTextToUser(assistantContent []byte) string {
 		}
 	}
 	return strings.TrimSpace(combined.String())
-}
-
-type sendMessageArguments struct {
-	To   string `json:"to"`
-	Text string `json:"text"`
-}
-
-func parseSendMessage(call toolCall) (sendMessageArguments, error) {
-	if call.Function.Name != "send_message" {
-		return sendMessageArguments{}, errors.New("unknown tool " + call.Function.Name)
-	}
-	var arguments sendMessageArguments
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
-		return arguments, errors.New("arguments are not valid JSON")
-	}
-	if arguments.To == "" || strings.TrimSpace(arguments.Text) == "" {
-		return arguments, errors.New("to and text must not be empty")
-	}
-	return arguments, nil
 }

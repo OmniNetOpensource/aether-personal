@@ -3,6 +3,7 @@
 const apiMethods = new Map([
   // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
   ['/ws', 'GET'],
+  ['/images', 'POST'],
   ['/healthz', 'GET'],
 ]);
 

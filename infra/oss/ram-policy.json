@@ -1,0 +1,10 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject", "oss:PutObject"],
+      "Resource": ["acs:oss:*:*:aether-personal-images-20261102/aether-chat/*"]
+    }
+  ]
+}

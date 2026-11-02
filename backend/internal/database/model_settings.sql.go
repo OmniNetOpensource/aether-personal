@@ -12,20 +12,17 @@ import (
 
 const getModelSettings = `-- name: GetModelSettings :one
 
-SELECT main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_at_tokens, main_context_length, subagent_context_length, version, updated_at, updated_by FROM model_settings WHERE singleton = true
+SELECT main_model, main_model_max_tokens, compact_at_tokens, main_context_length, version, updated_at, updated_by FROM model_settings WHERE singleton = true
 `
 
 type GetModelSettingsRow struct {
-	MainModel              string
-	SubagentModel          *string
-	MainModelMaxTokens     *int32
-	SubagentModelMaxTokens *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	SubagentContextLength  *int64
-	Version                int64
-	UpdatedAt              time.Time
-	UpdatedBy              string
+	MainModel          string
+	MainModelMaxTokens *int32
+	CompactAtTokens    int32
+	MainContextLength  *int64
+	Version            int64
+	UpdatedAt          time.Time
+	UpdatedBy          string
 }
 
 // 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的模型配置（sqlc 据此生成代码）。
@@ -34,12 +31,9 @@ func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, er
 	var i GetModelSettingsRow
 	err := row.Scan(
 		&i.MainModel,
-		&i.SubagentModel,
 		&i.MainModelMaxTokens,
-		&i.SubagentModelMaxTokens,
 		&i.CompactAtTokens,
 		&i.MainContextLength,
-		&i.SubagentContextLength,
 		&i.Version,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
@@ -57,36 +51,29 @@ func (q *Queries) LockModelSettings(ctx context.Context) error {
 }
 
 const saveModelSettings = `-- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, subagent_model, main_model_max_tokens, subagent_model_max_tokens, compact_at_tokens, main_context_length, subagent_context_length, version, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)
+INSERT INTO model_settings (main_model, main_model_max_tokens, compact_at_tokens, main_context_length, version, updated_by)
+VALUES ($1, $2, $3, $4, 1, $5)
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
-    subagent_model = EXCLUDED.subagent_model, main_model_max_tokens = EXCLUDED.main_model_max_tokens,
-    subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
+    main_model_max_tokens = EXCLUDED.main_model_max_tokens,
     compact_at_tokens = EXCLUDED.compact_at_tokens,
-    main_context_length = EXCLUDED.main_context_length, subagent_context_length = EXCLUDED.subagent_context_length, version = model_settings.version + 1,
+    main_context_length = EXCLUDED.main_context_length, version = model_settings.version + 1,
     updated_at = now(), updated_by = EXCLUDED.updated_by
 `
 
 type SaveModelSettingsParams struct {
-	MainModel              string
-	SubagentModel          *string
-	MainModelMaxTokens     *int32
-	SubagentModelMaxTokens *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	SubagentContextLength  *int64
-	UpdatedBy              string
+	MainModel          string
+	MainModelMaxTokens *int32
+	CompactAtTokens    int32
+	MainContextLength  *int64
+	UpdatedBy          string
 }
 
 func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsParams) error {
 	_, err := q.db.Exec(ctx, saveModelSettings,
 		arg.MainModel,
-		arg.SubagentModel,
 		arg.MainModelMaxTokens,
-		arg.SubagentModelMaxTokens,
 		arg.CompactAtTokens,
 		arg.MainContextLength,
-		arg.SubagentContextLength,
 		arg.UpdatedBy,
 	)
 	return err

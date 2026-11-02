@@ -10,27 +10,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pgvector/pgvector-go"
 )
 
 const getHistoryMessage = `-- name: GetHistoryMessage :one
-SELECT m.id, m.subagent_id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at, m.search_text
+SELECT m.id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at, m.search_text
 FROM messages AS m
 WHERE m.user_id = $1
- AND ($2::boolean OR m.subagent_id = $3::uuid)
- AND m.id = $4
+ AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
+ AND m.id = $2
 `
 
 type GetHistoryMessageParams struct {
-	UserID     uuid.UUID
-	AllAgents  bool
-	SubagentID *uuid.UUID
-	MessageID  uuid.UUID
+	UserID    uuid.UUID
+	MessageID uuid.UUID
 }
 
 type GetHistoryMessageRow struct {
 	ID         uuid.UUID
-	SubagentID *uuid.UUID
 	Role       string
 	Sender     *string
 	IsSummary  bool
@@ -39,18 +35,12 @@ type GetHistoryMessageRow struct {
 	SearchText string
 }
 
-// 按 ID 读回一条消息的提取文本与归属信息；范围校验与搜索相同，查不到即视为不存在，不泄露其他用户或越界 Subagent 的消息。
+// 按 ID 读回一条消息的提取文本；只限当前用户，查不到即视为不存在，不泄露其他用户的消息。
 func (q *Queries) GetHistoryMessage(ctx context.Context, arg GetHistoryMessageParams) (GetHistoryMessageRow, error) {
-	row := q.db.QueryRow(ctx, getHistoryMessage,
-		arg.UserID,
-		arg.AllAgents,
-		arg.SubagentID,
-		arg.MessageID,
-	)
+	row := q.db.QueryRow(ctx, getHistoryMessage, arg.UserID, arg.MessageID)
 	var i GetHistoryMessageRow
 	err := row.Scan(
 		&i.ID,
-		&i.SubagentID,
 		&i.Role,
 		&i.Sender,
 		&i.IsSummary,
@@ -61,42 +51,9 @@ func (q *Queries) GetHistoryMessage(ctx context.Context, arg GetHistoryMessagePa
 	return i, err
 }
 
-const listMessagesNeedingEmbedding = `-- name: ListMessagesNeedingEmbedding :many
-SELECT m.id, m.search_text FROM messages AS m
-WHERE m.embedding IS NULL AND m.search_text <> ''
-ORDER BY m.id
-LIMIT $1::integer
-`
-
-type ListMessagesNeedingEmbeddingRow struct {
-	ID         uuid.UUID
-	SearchText string
-}
-
-// 向量补算清单：还没有向量且有可搜索文本的消息，按 ID（即写入先后）逐批取。
-func (q *Queries) ListMessagesNeedingEmbedding(ctx context.Context, limitCount int32) ([]ListMessagesNeedingEmbeddingRow, error) {
-	rows, err := q.db.Query(ctx, listMessagesNeedingEmbedding, limitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListMessagesNeedingEmbeddingRow
-	for rows.Next() {
-		var i ListMessagesNeedingEmbeddingRow
-		if err := rows.Scan(&i.ID, &i.SearchText); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const searchMessagesByKeyword = `-- name: SearchMessagesByKeyword :many
 
-SELECT m.id, m.subagent_id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at,
+SELECT m.id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at,
     CASE WHEN (length(lower(m.search_text)) - length(replace(lower(m.search_text), lower($1::text), ''))) > 0
         THEN (length(lower(m.search_text)) - length(replace(lower(m.search_text), lower($1::text), ''))) / length($1::text)
         ELSE 0 END::bigint AS keyword_hits,
@@ -104,29 +61,25 @@ SELECT m.id, m.subagent_id, m.role, m.sender, m.is_summary, coalesce(m.sequence,
         ELSE substring(m.search_text FROM greatest(1, strpos(lower(m.search_text), lower($1::text)) - 200) FOR 600) END::text AS excerpt
 FROM messages AS m
 WHERE m.user_id = $2
- AND ($3::boolean OR m.subagent_id = $4::uuid)
+ AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
  AND m.search_text <> ''
  AND ($1::text = '' OR strpos(lower(m.search_text), lower($1::text)) > 0)
- AND ($5::text = 'any'
-   OR ($5::text = 'user' AND m.sender = 'user')
-   OR ($5::text = 'main' AND ((m.subagent_id IS NULL AND m.role = 'assistant') OR m.sender = 'main'))
-   OR ($5::text = 'subagent' AND ((m.subagent_id IS NOT NULL AND m.role = 'assistant') OR m.sender = 'subagent')))
+ AND ($3::text = 'any'
+   OR ($3::text = 'user' AND m.sender = 'user')
+   OR ($3::text = 'main' AND (m.role = 'assistant' OR m.sender = 'main')))
 ORDER BY keyword_hits DESC, m.sequence DESC NULLS LAST, m.id DESC
-LIMIT $6::integer
+LIMIT $4::integer
 `
 
 type SearchMessagesByKeywordParams struct {
 	Keyword    string
 	UserID     uuid.UUID
-	AllAgents  bool
-	SubagentID *uuid.UUID
 	Who        string
 	LimitCount int32
 }
 
 type SearchMessagesByKeywordRow struct {
 	ID          uuid.UUID
-	SubagentID  *uuid.UUID
 	Role        string
 	Sender      *string
 	IsSummary   bool
@@ -136,15 +89,12 @@ type SearchMessagesByKeywordRow struct {
 	Excerpt     string
 }
 
-// 本文件是历史检索的查询集合：在当前用户允许范围内对 messages 全表做关键词与向量搜索、按 ID 读回原文，并为向量补算提供待算清单。
+// 本文件是历史检索的查询集合：在当前用户允许范围内对 messages 全表做关键词搜索，并按 ID 读回原文。
 // 关键词路：精确子串命中（中文不分词，靠 search_text 上的 pg_trgm 索引加速），按命中次数与新旧排序。
-// 范围由 all_agents 与 subagent_id 决定：Main 传 all_agents=true 搜该用户全部列表，Subagent 传自己的 ID 只搜自己。
 func (q *Queries) SearchMessagesByKeyword(ctx context.Context, arg SearchMessagesByKeywordParams) ([]SearchMessagesByKeywordRow, error) {
 	rows, err := q.db.Query(ctx, searchMessagesByKeyword,
 		arg.Keyword,
 		arg.UserID,
-		arg.AllAgents,
-		arg.SubagentID,
 		arg.Who,
 		arg.LimitCount,
 	)
@@ -157,7 +107,6 @@ func (q *Queries) SearchMessagesByKeyword(ctx context.Context, arg SearchMessage
 		var i SearchMessagesByKeywordRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.SubagentID,
 			&i.Role,
 			&i.Sender,
 			&i.IsSummary,
@@ -174,94 +123,4 @@ func (q *Queries) SearchMessagesByKeyword(ctx context.Context, arg SearchMessage
 		return nil, err
 	}
 	return items, nil
-}
-
-const searchMessagesByVector = `-- name: SearchMessagesByVector :many
-SELECT m.id, m.subagent_id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at,
-    (m.embedding <=> $1::vector)::float8 AS distance,
-    left(m.search_text, 600) AS excerpt
-FROM messages AS m
-WHERE m.user_id = $2
- AND ($3::boolean OR m.subagent_id = $4::uuid)
- AND m.search_text <> ''
- AND m.embedding IS NOT NULL
- AND ($5::text = 'any'
-   OR ($5::text = 'user' AND m.sender = 'user')
-   OR ($5::text = 'main' AND ((m.subagent_id IS NULL AND m.role = 'assistant') OR m.sender = 'main'))
-   OR ($5::text = 'subagent' AND ((m.subagent_id IS NOT NULL AND m.role = 'assistant') OR m.sender = 'subagent')))
-ORDER BY m.embedding <=> $1::vector
-LIMIT $6::integer
-`
-
-type SearchMessagesByVectorParams struct {
-	QueryEmbedding *pgvector.Vector
-	UserID         uuid.UUID
-	AllAgents      bool
-	SubagentID     *uuid.UUID
-	Who            string
-	LimitCount     int32
-}
-
-type SearchMessagesByVectorRow struct {
-	ID         uuid.UUID
-	SubagentID *uuid.UUID
-	Role       string
-	Sender     *string
-	IsSummary  bool
-	Sequence   int64
-	CreatedAt  time.Time
-	Distance   float64
-	Excerpt    string
-}
-
-// 向量路：按余弦距离找语义相近的消息，只包含已补算向量的行；与关键词路的结果在 Go 代码里按排名合并。
-func (q *Queries) SearchMessagesByVector(ctx context.Context, arg SearchMessagesByVectorParams) ([]SearchMessagesByVectorRow, error) {
-	rows, err := q.db.Query(ctx, searchMessagesByVector,
-		arg.QueryEmbedding,
-		arg.UserID,
-		arg.AllAgents,
-		arg.SubagentID,
-		arg.Who,
-		arg.LimitCount,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []SearchMessagesByVectorRow
-	for rows.Next() {
-		var i SearchMessagesByVectorRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.SubagentID,
-			&i.Role,
-			&i.Sender,
-			&i.IsSummary,
-			&i.Sequence,
-			&i.CreatedAt,
-			&i.Distance,
-			&i.Excerpt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updateMessageEmbedding = `-- name: UpdateMessageEmbedding :exec
-UPDATE messages SET embedding = $1::vector WHERE id = $2 AND embedding IS NULL
-`
-
-type UpdateMessageEmbeddingParams struct {
-	Embedding *pgvector.Vector
-	MessageID uuid.UUID
-}
-
-func (q *Queries) UpdateMessageEmbedding(ctx context.Context, arg UpdateMessageEmbeddingParams) error {
-	_, err := q.db.Exec(ctx, updateMessageEmbedding, arg.Embedding, arg.MessageID)
-	return err
 }

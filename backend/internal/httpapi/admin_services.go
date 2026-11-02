@@ -36,6 +36,8 @@ func (s *server) updateAdminService(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		APIKey    *string `json:"api_key"`
+		OSSBucket *string `json:"oss_bucket"`
+		OSSRegion *string `json:"oss_region"`
 		BaseURL   *string `json:"base_url"`
 		EmailFrom *string `json:"email_from"`
 	}
@@ -47,6 +49,23 @@ func (s *server) updateAdminService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	// 已有 OSS 配置允许只改 Bucket 和地域，留空的凭证仍沿用当前密文载荷。
+	if service == services.AliyunOSS && request.APIKey == nil && (request.OSSBucket != nil || request.OSSRegion != nil) {
+		settings, err := s.services.LoadOSS(ctx)
+		if err != nil {
+			http.Error(w, "OSS credentials are not configured", http.StatusBadRequest)
+			return
+		}
+		if request.OSSBucket != nil {
+			settings.Bucket = *request.OSSBucket
+		}
+		if request.OSSRegion != nil {
+			settings.Region = *request.OSSRegion
+		}
+		raw, _ := json.Marshal(settings)
+		key := string(raw)
+		request.APIKey = &key
+	}
 	if err := s.services.Update(ctx, service, request.APIKey, request.BaseURL, request.EmailFrom); err != nil {
 		if errors.Is(err, services.ErrInvalid) {
 			http.Error(w, "invalid service settings", http.StatusBadRequest)

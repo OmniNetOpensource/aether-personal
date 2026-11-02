@@ -13,9 +13,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/google/uuid"
 )
 
@@ -25,64 +25,23 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-func (r *Runner) callModel(ctx context.Context, address agentAddress, contextMessages []json.RawMessage, stepIDs ...uuid.UUID) (response chatResponse, retryable bool, err error) {
-	model := r.model(address)
-	outputLimit := r.settings.MaxOutputTokens
-	if outputLimit == 0 {
-		outputLimit = config.DefaultMaxOutputTokens
+// agentRequest 组装一次 Agent 请求：指令注入加当前世代的原生消息，发出前先过工具配对与尾巴检查。
+func (r *Runner) agentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
+	messages := buildRequestMessages(rows)
+	if err := validateRequestMessages(messages); err != nil {
+		return modelRequest{}, err
 	}
-	if len(stepIDs) > 0 {
-		settings, loadErr := modelsettings.Load(ctx, database.New(r.databasePool), r.settings)
-		if loadErr != nil {
-			return response, false, fmt.Errorf("load active model settings: %w", loadErr)
-		}
-		model = settings.MainModel
-		outputLimit = settings.MainOutputLimit
-		if address.subagentID != nil {
-			model = settings.EffectiveSubagentModel
-			outputLimit = settings.SubagentOutputLimit
-		}
-	}
-	prepared := r.agentRequest(address, contextMessages, model, outputLimit)
-	var stepID uuid.UUID
-	if len(stepIDs) > 0 {
-		stepID = stepIDs[0]
-	}
-	return r.requestModel(ctx, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"})
-}
-
-// agentRequest 组装一次 Agent 请求：按身份选提示词与工具，注入当前时间，并把历史里的压缩摘要转成用户消息。
-func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMessage, model string, outputLimit int32) modelRequest {
-	prompt := mainPrompt
-	if address.subagentID != nil {
-		prompt = subagentPrompt
-	}
-	tools := toolDefinitions(address)
-	prompt += fmt.Sprintf(currentTimePrompt, time.Now().UTC().Format(time.RFC3339))
-	system, _ := json.Marshal(map[string]string{"role": "system", "content": prompt})
-	messages := []json.RawMessage{system}
-	for _, message := range contextMessages {
-		var summary struct {
-			Name    string `json:"name"`
-			Content string `json:"content"`
-		}
-		if json.Unmarshal(message, &summary) == nil && summary.Name == "context_summary" {
-			message, _ = json.Marshal(map[string]string{"role": "user", "name": "context_summary", "content": summary.Content})
-		}
-		messages = append(messages, message)
-	}
-
-	var toolChoice json.RawMessage
-	delivery := inspectDelivery(contextMessages, address)
-	if delivery.corrected && !delivery.satisfied {
-		toolChoice = json.RawMessage(`{"type":"function","function":{"name":"send_message"}}`)
-	}
-	return modelRequest{Model: model, Messages: messages, Tools: tools, ToolChoice: toolChoice, MaxTokens: outputLimit}
+	return modelRequest{Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
 // requestModel 发送一次模型请求并全程记账：渠道由 providers 按模型名自动选择，本函数只负责凭证、日志、传输与结果分类。
 func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
+	resolved, err := (images.Store{Services: r.services}).ResolveMessages(ctx, prepared.Messages)
+	if err != nil {
+		return response, false, err
+	}
+	prepared.Messages = resolved
 	provider := providers.ForModel(prepared.Model)
 	credentials, err := r.services.Load(ctx, provider.Service())
 	if err != nil {
@@ -132,7 +91,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 			var message assistantMessage
 			if json.Unmarshal(response.Choices[0].Message, &message) == nil {
 				for _, call := range message.ToolCalls {
-					toolNames = append(toolNames, recordedToolName(call.Function.Name))
+					toolNames = append(toolNames, tools.RecordedName(call.Function.Name))
 				}
 			}
 		}

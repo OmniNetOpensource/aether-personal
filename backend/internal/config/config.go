@@ -25,8 +25,6 @@ type Config struct {
 	DatabaseURL          string
 	DatabaseMaxConns     int32
 	MainModel            string
-	SubagentModel        string
-	SubagentFollowsMain  bool
 	FrontendDir          string
 }
 
@@ -66,11 +64,6 @@ func Load() (Config, error) {
 	if mainModel == "" {
 		mainModel = "deepseek/deepseek-v4.1-flash-1017"
 	}
-	subagentModel := os.Getenv("SUBAGENT_MODEL")
-	if subagentModel == "" {
-		subagentModel = mainModel
-	}
-
 	maxOutputTokens := int32(DefaultMaxOutputTokens)
 	if value := os.Getenv("MAX_OUTPUT_TOKENS"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 32)
@@ -109,8 +102,6 @@ func Load() (Config, error) {
 		DatabaseURL:          databaseURL,
 		DatabaseMaxConns:     databaseMaxConns,
 		MainModel:            mainModel,
-		SubagentModel:        subagentModel,
-		SubagentFollowsMain:  os.Getenv("SUBAGENT_MODEL") == "",
 		FrontendDir:          os.Getenv("FRONTEND_DIR"),
 	}, nil
 }
