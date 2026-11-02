@@ -1,0 +1,184 @@
+/* 本文件将 Aether Start 的 Markdown 排版映射到当前森林绿主题，并约束代码、表格和公式的移动端滚动。 */
+.markdown {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.markdown p {
+  margin: 0 0 0.75em;
+}
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.2em 0.55em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.markdown h1 {
+  font-size: 1.7em;
+}
+.markdown h2 {
+  font-size: 1.45em;
+}
+.markdown h3 {
+  font-size: 1.2em;
+}
+.markdown :is(h4, h5, h6) {
+  font-size: 1em;
+}
+.markdown strong {
+  font-weight: 800;
+}
+.markdown :is(ul, ol) {
+  margin-block: 0.75em;
+  padding-left: 1.75em;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li {
+  margin-block: 0.25em;
+}
+.markdown li > p {
+  margin-block: 0.5em;
+}
+.markdown :is(ul, ol) :is(ul, ol) {
+  margin-block: 0.25em;
+}
+.markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.25em;
+}
+.markdown .task-list-item > input {
+  margin-right: 0.5em;
+  accent-color: var(--forest);
+}
+.markdown blockquote {
+  margin: 1em 0;
+  padding-left: 1em;
+  border-left: 4px solid var(--line-strong);
+  color: var(--text-muted);
+}
+.markdown a {
+  color: var(--forest);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.markdown :not(pre) > code {
+  padding: 0.12em 0.35em;
+  border-radius: 0.3rem;
+  background: var(--surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.9em;
+}
+.markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-block: 1em;
+  border-radius: 0.5rem;
+}
+.markdown hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+}
+.markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.markdown :is(th, td) {
+  min-width: 100px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  vertical-align: top;
+}
+.markdown th {
+  background: var(--surface-muted);
+  font-weight: 600;
+}
+.markdown .markdown-code {
+  max-width: 100%;
+  min-width: 0;
+  margin-block: 1rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+.markdown-code > header {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-inline: 0.75rem;
+  color: var(--text-muted);
+  background: var(--canvas);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+}
+.markdown-code > header button {
+  background: transparent;
+  border-radius: 0.375rem;
+  padding: 4px 8px;
+}
+.markdown-code > header button:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+.markdown-code pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  tab-size: 2;
+}
+.markdown-code pre > code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  counter-reset: line;
+}
+.markdown-code-line {
+  display: block;
+  min-height: 1.6em;
+}
+.markdown-code-line::before {
+  content: counter(line);
+  counter-increment: line;
+  display: inline-block;
+  width: 2em;
+  margin-right: 1.25em;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: right;
+  user-select: none;
+}
+.markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25em;
+}
+.markdown .katex {
+  font-size: 1.1em;
+}
+.markdown > :first-child,
+.markdown blockquote > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child,
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}

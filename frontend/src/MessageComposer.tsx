@@ -1,67 +1,117 @@
-// 本文件是消息输入框组件：管理草稿、多行输入与发送入口，发送后通知消息列表贴底。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，发送后通知消息列表贴底。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
+import { uploadImages } from './messageAttachments.js';
+import type { MessagePart, MessageQuote } from './messageAttachments.js';
+import { RichMessageInput } from './RichMessageInput.js';
+import type { RichMessageInputHandle } from './RichMessageInput.js';
 import type { ChatController } from './ChatController.js';
 
+// MessageComposerHandle 供消息列表把选区引用插入当前光标处。
+export interface MessageComposerHandle {
+  insertQuote: (quote: MessageQuote) => void;
+}
+
+// MessageComposer 以结构化内容作为草稿，编辑器负责光标、混排和撤销，控制器负责可靠发送。
 export function MessageComposer({
   controller,
   onMessageSent,
+  composerRef,
 }: {
   controller: ChatController;
   onMessageSent: () => void;
+  composerRef: RefObject<MessageComposerHandle | null>;
 }) {
   const draftKey = `aether_draft:${controller.email}`;
-  const [draft, setDraft] = useState(() => {
+  const [parts, setParts] = useState<MessagePart[]>(() => {
     try {
-      return sessionStorage.getItem(draftKey) ?? '';
+      const text = sessionStorage.getItem(draftKey);
+      return text ? [{ type: 'text', text }] : [];
     } catch {
-      return '';
+      return [];
     }
   });
+  const initialParts = useRef(parts);
   const [error, setError] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const [reading, setReading] = useState(false);
+  const readingRef = useRef(false);
+  const input = useRef<RichMessageInputHandle | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerPadding = useRef<HTMLDivElement>(null);
   const sending = useRef(false);
   useEffect(() => {
+    composerRef.current = {
+      insertQuote: (quote) => input.current?.insert([{ type: 'quote', quote }]),
+    };
+    return () => {
+      composerRef.current = null;
+    };
+  }, [composerRef]);
+  useEffect(() => {
+    const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
     try {
-      if (draft) sessionStorage.setItem(draftKey, draft);
+      if (text) sessionStorage.setItem(draftKey, text);
       else sessionStorage.removeItem(draftKey);
     } catch {
-      /* Drafts still work in memory when storage is disabled. */
+      /* 禁用存储时草稿仍保留在内存。 */
     }
-  }, [draft, draftKey]);
-  useLayoutEffect(() => {
-    const element = input.current;
-    if (!element) return;
-    element.style.height = '0px';
-    element.style.height = `${Math.min(160, Math.max(48, element.scrollHeight))}px`;
-  }, [draft]);
+  }, [parts, draftKey]);
   useLayoutEffect(() => {
     const element = composerPadding.current;
     if (!element) return;
-    const resize = () => {
+    const resize = () =>
       element.parentElement?.style.setProperty('--composer-height', `${element.offsetHeight}px`);
-    };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  // addImages 统一处理选择、粘贴与拖放，失败保留其余草稿以便继续编辑。
+  const addImages = async (files: File[]) => {
+    if (readingRef.current || files.length === 0) return;
+    readingRef.current = true;
+    setReading(true);
+    try {
+      const existing = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
+      const images = await uploadImages(files, existing, (file) => controller.uploadImage(file));
+      input.current?.insert(images.map((image) => ({ type: 'image', image })));
+      setError('');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '图片上传失败');
+    } finally {
+      readingRef.current = false;
+      setReading(false);
+    }
+  };
+  // send 在提交边界检查总长度，禁止图片尚未准备好时发出不完整消息。
   const send = async () => {
-    if (sending.current || !draft.trim()) return;
-    if (Array.from(draft.trim()).length > 32000) {
-      setError('消息不能超过 32,000 个字符');
+    if (
+      sending.current ||
+      readingRef.current ||
+      !parts.some((part) => part.type !== 'text' || part.text.trim())
+    )
+      return;
+    if (parts.filter((part) => part.type === 'quote').length > 20) {
+      setError('每条消息最多添加 20 段引用');
+      return;
+    }
+    const text = parts
+      .flatMap((part) =>
+        part.type === 'text' ? [part.text] : part.type === 'quote' ? [part.quote.text] : [],
+      )
+      .join('');
+    if (Array.from(text).length > 32000) {
+      setError('正文和引用合计不能超过 32,000 个字符');
       return;
     }
     sending.current = true;
     try {
-      if (await controller.send(draft)) {
-        setDraft('');
+      if (await controller.send(parts)) {
+        input.current?.clear();
+        setParts([]);
         setError('');
         onMessageSent();
-        input.current?.focus({ preventScroll: true });
       }
     } finally {
       sending.current = false;
@@ -69,112 +119,103 @@ export function MessageComposer({
   };
   return (
     <div className="composer-padding" ref={composerPadding}>
-      {files.length > 0 && (
-        <div className="selected-files" aria-label="已选择的文件">
-          {files.map((file, index) => (
-            <span className="selected-file" key={`${file.name}-${index}`}>
-              <span className="selected-file-name">{file.name}</span>
-              <button
-                type="button"
-                className="remove-file"
-                aria-label={`移除 ${file.name}`}
-                onClick={() =>
-                  setFiles((selected) => selected.filter((_, position) => position !== index))
-                }
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
       {error && (
         <p className="error composer-error" role="alert">
           {error}
         </p>
       )}
       <form
-        className="composer"
+        className="composer multimodal-composer"
         onSubmit={(event) => {
           event.preventDefault();
           void send();
+        }}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes('Files')) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+          }
+        }}
+        onDrop={(event) => {
+          if (event.dataTransfer.files.length) {
+            event.preventDefault();
+            void addImages(Array.from(event.dataTransfer.files));
+          }
         }}
       >
         <input
           ref={fileInput}
           type="file"
           multiple
+          accept="image/png,image/jpeg,image/gif,image/webp"
           hidden
-          aria-label="选择文件"
+          aria-label="选择图片"
           onChange={(event) => {
-            setFiles(Array.from(event.currentTarget.files ?? []));
+            void addImages(Array.from(event.currentTarget.files ?? []));
             event.currentTarget.value = '';
           }}
         />
-        <button
-          type="button"
-          className="attach-button"
-          aria-label="添加文件"
-          onClick={() => fileInput.current?.click()}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-        <textarea
-          ref={input}
-          id="message-input"
-          className="message-input"
-          aria-label="消息"
-          placeholder="发消息给阿芒"
-          value={draft}
-          maxLength={128000}
-          rows={1}
-          enterKeyHint="send"
-          onChange={(event) => {
-            setDraft(event.target.value);
+        <RichMessageInput
+          inputRef={input}
+          initialParts={initialParts.current}
+          onChange={(value) => {
+            setParts(value);
             setError('');
           }}
-          onKeyDown={(event) => {
-            if (
-              event.key === 'Enter' &&
-              !event.shiftKey &&
-              !event.ctrlKey &&
-              !event.metaKey &&
-              !event.nativeEvent.isComposing &&
-              event.nativeEvent.keyCode !== 229
-            ) {
-              event.preventDefault();
-              void send();
-            }
-          }}
+          onFiles={(files) => void addImages(files)}
+          onSubmit={() => void send()}
         />
-        <button
-          type="submit"
-          className="send-button"
-          aria-label="发送消息"
-          disabled={!draft.trim()}
-        >
-          <svg
-            className="send-arrow"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        {reading && (
+          <span className="upload-status" role="status">
+            正在上传图片…
+          </span>
+        )}
+        <div className="composer-tools">
+          <button
+            type="button"
+            className="attach-button"
+            aria-label="添加图片"
+            title="添加图片，也可粘贴或拖入"
+            disabled={reading}
+            onClick={() => fileInput.current?.click()}
           >
-            <path d="M12 19V5m-6 6 6-6 6 6" />
-          </svg>
-        </button>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          <span className="composer-shortcut" aria-hidden="true">
+            <kbd>Ctrl</kbd>
+            <span>↵</span>
+            <span>发送</span>
+          </span>
+          <button
+            type="submit"
+            className="send-button"
+            aria-label="发送消息"
+            title="发送（Ctrl+Enter）"
+            disabled={reading || !parts.some((part) => part.type !== 'text' || part.text.trim())}
+          >
+            <svg
+              className="send-arrow"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 19V5m-6 6 6-6 6 6" />
+            </svg>
+          </button>
+        </div>
       </form>
     </div>
   );

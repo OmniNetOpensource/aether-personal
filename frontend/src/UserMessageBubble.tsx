@@ -1,5 +1,7 @@
 // 本文件是用户消息气泡组件：渲染用户发出的一条消息，并在最后一条或失败时显示送达状态与重试入口。
 
+import { ImagePreview } from './ImagePreview.js';
+import type { MessageQuote } from './messageAttachments.js';
 import type { ChatMessage } from './ChatController.js';
 
 export function UserMessageBubble({
@@ -8,12 +10,14 @@ export function UserMessageBubble({
   joinedWithPrevious,
   endsGroup,
   onRetry,
+  onQuoteNavigate,
 }: {
   message: ChatMessage;
   isLastUserMessage: boolean;
   joinedWithPrevious: boolean;
   endsGroup: boolean;
   onRetry: () => void;
+  onQuoteNavigate: (quote: MessageQuote) => void;
 }) {
   const showDeliveryStatus =
     isLastUserMessage || message.delivery === 'sending' || message.delivery === 'failed';
@@ -23,7 +27,27 @@ export function UserMessageBubble({
         <div
           className={`bubble user-bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
-          <p className="user-text">{message.text}</p>
+          {message.parts.map((part, index) =>
+            part.type === 'quote' ? (
+              <button
+                type="button"
+                className="sent-quote"
+                key={index}
+                onClick={() => onQuoteNavigate(part.quote)}
+                aria-label="查看引用原文"
+              >
+                <blockquote>{part.quote.text}</blockquote>
+              </button>
+            ) : part.type === 'image' ? (
+              <div className="message-images" key={index}>
+                <ImagePreview image={part.image} />
+              </div>
+            ) : (
+              <p className="user-text" key={index}>
+                {part.text}
+              </p>
+            ),
+          )}
         </div>
         {showDeliveryStatus &&
           (message.delivery === 'failed' ? (

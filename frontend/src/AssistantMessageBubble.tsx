@@ -14,11 +14,13 @@ export function AssistantMessageBubble({
 }) {
   return (
     <div className={`message-row ${joinedWithPrevious ? 'joined' : ''}`}>
-      <article className="message-column" aria-label="阿芒">
+      <article className="message-column assistant-column" aria-label="阿芒">
         <div
           className={`bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
-          <Markdown text={message.text} />
+          <div data-quote-body data-message-id={message.id}>
+            <Markdown text={message.text} />
+          </div>
         </div>
       </article>
     </div>

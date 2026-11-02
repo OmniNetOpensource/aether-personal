@@ -1,36 +1,27 @@
-// 本文件是 Rsbuild 构建配置：设定 React 入口、页面标题与 PWA 元信息、开发代理，并把产物输出到 build/web。
+// 本文件配置 TanStack Start 与 Rsbuild，生成静态 SPA 外壳并保留同源聊天 WebSocket 的开发代理。
 
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
+import { tanstackStart } from '@tanstack/react-start/plugin/rsbuild';
 
 export default defineConfig({
-  plugins: [pluginReact()],
+  plugins: [
+    pluginReact(),
+    tanstackStart({
+      router: { semicolons: true },
+      spa: { enabled: true, prerender: { outputPath: '/index.html' } },
+    }),
+  ],
   server: {
     port: 3000,
     proxy: {
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
+      '/images': { target: 'http://127.0.0.1:8080' },
     },
   },
-  source: { entry: { index: './src/index.tsx' } },
-  html: {
-    title: '阿芒',
-    template: './index.html',
-    tags: [
-      { tag: 'link', attrs: { rel: 'icon', type: 'image/png', href: '/app-icon.png' } },
-      { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/icons/apple-touch-icon.png' } },
-      { tag: 'link', attrs: { rel: 'manifest', href: '/manifest.webmanifest' } },
-    ],
-    meta: {
-      viewport:
-        'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content',
-      'theme-color': '#204b32',
-      'apple-mobile-web-app-capable': 'yes',
-      'apple-mobile-web-app-status-bar-style': 'black-translucent',
-      'apple-mobile-web-app-title': '阿芒',
-      description: '和阿芒聊聊，你的个人 AI 助手。',
-    },
-  },
-  output: {
-    distPath: { root: 'build/web' },
+  // 服务端产物仅供构建时预渲染，不进入 Go 或 Cloudflare 分发的静态目录。
+  environments: {
+    client: { output: { distPath: { root: 'build/web' } } },
+    ssr: { output: { distPath: { root: 'build/server' } } },
   },
 });

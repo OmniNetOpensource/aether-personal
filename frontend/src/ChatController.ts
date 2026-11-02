@@ -1,14 +1,18 @@
-// 本文件是聊天业务控制器：管理登录状态、消息列表、发送与重发，并驱动服务器事件中转，是前端聊天状态的唯一来源。
+// 本文件是聊天业务控制器：管理登录状态、消息列表、图片上传、发送与重发，并驱动服务器事件中转，是前端聊天状态的唯一来源。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
 import type { ClientCommand } from './ServerEventRelay.js';
 import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
 
+import { messageImageSchema } from './messageAttachments.js';
+import type { MessageImage, MessagePart } from './messageAttachments.js';
+
 type Delivery = 'sending' | 'failed' | 'delivered' | 'read';
 export interface ChatMessage {
   id: string;
   text: string;
+  parts: MessagePart[];
   isUser: boolean;
   createdAt: Date;
   order: number;
@@ -53,7 +57,7 @@ interface PendingRequest {
 }
 
 // ChatController 只维护界面状态：它订阅 ServerEventRelay 中转的服务器事件，
-// 并通过中转发送命令，不再直接使用 HTTP 或原始 WebSocket 帧。
+// 并通过中转发送聊天命令；图片字节单独通过 HTTP 上传，不直接接触原始 WebSocket 帧。
 export class ChatController {
   messages: ChatMessage[] = [];
   initializing = true;
@@ -283,10 +287,13 @@ export class ChatController {
     command: Extract<ClientCommand, { request_id: string }>,
   ): Promise<ServerEvent> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(command.request_id);
-        reject(new Error('连接超时，请检查网络后重试'));
-      }, command.type === 'request_code' ? 30000 : 15000);
+      const timer = setTimeout(
+        () => {
+          this.pendingRequests.delete(command.request_id);
+          reject(new Error('连接超时，请检查网络后重试'));
+        },
+        command.type === 'request_code' ? 30000 : 15000,
+      );
       this.pendingRequests.set(command.request_id, { resolve, reject, timer });
       if (!this.socketOpen || !this.relay.send(command)) {
         clearTimeout(timer);
@@ -399,6 +406,7 @@ export class ChatController {
       const message: ChatMessage = {
         id: row.id,
         text: row.text,
+        parts: row.parts ?? (row.text ? [{ type: 'text', text: row.text }] : []),
         isUser: row.sender === 'user',
         createdAt: new Date(row.created_at),
         order: this.messages[index]?.order ?? this.nextOrder++,
@@ -422,9 +430,30 @@ export class ChatController {
     );
   }
 
-  async send(text: string) {
+  // uploadImage 以原始字节上传图片；聊天消息只携带服务端生成的 OSS 引用。
+  async uploadImage(file: File): Promise<MessageImage> {
+    if (!this.token) throw new Error('请先登录');
+    const response = await fetch(this.baseURL + '/images?name=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': file.type },
+      body: file,
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || '图片上传失败');
+    return messageImageSchema.parse(await response.json());
+  }
+
+  async send(parts: MessagePart[]) {
+    const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
+    const quotes = parts.flatMap((part) => (part.type === 'quote' ? [part.quote] : []));
+    const images = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
     const trimmed = text.trim();
-    if (!trimmed || Array.from(trimmed).length > 32000 || !this.token) return false;
+    if (
+      (!trimmed && quotes.length === 0 && images.length === 0) ||
+      Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 32000 ||
+      !this.token
+    )
+      return false;
     const id = crypto.randomUUID();
     this.messages = [
       ...this.messages,
@@ -432,13 +461,14 @@ export class ChatController {
         id,
         clientId: id,
         text: trimmed,
+        parts,
         isUser: true,
         createdAt: new Date(),
         order: this.nextOrder++,
         delivery: 'sending',
       },
     ];
-    this.sendFrame(id, trimmed);
+    this.sendFrame(id, parts);
     this.notify();
     return true;
   }
@@ -446,14 +476,14 @@ export class ChatController {
   retry(message: ChatMessage) {
     if (!message.clientId) return;
     this.setDelivery(message.clientId, 'sending');
-    this.sendFrame(message.clientId, message.text);
+    this.sendFrame(message.clientId, message.parts);
     this.notify();
   }
 
-  private sendFrame(id: string, text: string) {
+  private sendFrame(id: string, parts: MessagePart[]) {
     if (
       !this.connected ||
-      !this.relay.send({ type: 'send_message', client_message_id: id, text })
+      !this.relay.send({ type: 'send_message', client_message_id: id, parts })
     ) {
       this.setDelivery(id, 'failed');
       this.reconnect();

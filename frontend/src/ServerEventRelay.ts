@@ -1,5 +1,6 @@
 // 本文件是前端唯一接触聊天 WebSocket 的中转：负责连接与发送命令，把后端原始帧校验成服务器事件后转交订阅者。
 
+import type { MessagePart } from './messageAttachments.js';
 import { serverEventSchema } from './serverEvents.js';
 import type { ServerEvent } from './serverEvents.js';
 
@@ -10,7 +11,11 @@ export type ClientCommand =
   | { type: 'dev_login'; request_id: string }
   | { type: 'load_history'; request_id: string; before?: string }
   | { type: 'logout'; request_id: string }
-  | { type: 'send_message'; client_message_id: string; text: string };
+  | {
+      type: 'send_message';
+      client_message_id: string;
+      parts: MessagePart[];
+    };
 
 // ServerEventRelay 是前端唯一接触聊天 WebSocket 的文件：
 // 它负责连接、发送 hello 与命令，并把后端原始帧校验为 serverEvents.ts

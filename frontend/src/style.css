@@ -72,6 +72,12 @@ body {
 .user-row .message-column {
   align-items: flex-end;
 }
+/* 助手消息按内容收缩，最长不超过消息区域，沿用外层留白。 */
+.assistant-column {
+  width: fit-content;
+  max-width: 100%;
+  align-items: stretch;
+}
 .bubble {
   min-width: 0;
   max-width: 100%;
@@ -186,40 +192,6 @@ body {
   width: 24px;
   height: 24px;
 }
-.selected-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-  max-height: 132px;
-  overflow-y: auto;
-  pointer-events: auto;
-}
-.selected-file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-  padding: 4px 8px 4px 12px;
-  border-radius: 12px;
-  background: var(--surface);
-  font-size: 14px;
-  line-height: 22px;
-}
-.selected-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.remove-file {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 22px;
-  line-height: 1;
-}
 .composer-error {
   margin: 0 0 8px;
   pointer-events: auto;
@@ -267,74 +239,9 @@ body {
     transform: translateY(-3px);
   }
 }
-.markdown {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.md-block {
-  white-space: pre-wrap;
-  margin-top: 0;
-  margin-bottom: 8px;
-}
-.markdown > :last-child {
-  margin-bottom: 0;
-}
 .link {
   color: var(--forest);
   text-decoration: underline;
-}
-.heading {
-  font-weight: 600;
-}
-.h1 {
-  font-size: 22px;
-  line-height: 33px;
-}
-.h2 {
-  font-size: 20px;
-  line-height: 30px;
-}
-.code-inline,
-.code-body {
-  font-family: monospace;
-  font-size: 15px;
-  line-height: 23px;
-  background: var(--surface-muted);
-}
-.code-block {
-  min-width: 0;
-  width: 100%;
-  background: var(--surface-muted);
-  border-radius: 8px;
-  margin-bottom: 8px;
-  padding: 10px;
-  max-width: 100%;
-}
-.code-body {
-  white-space: pre;
-}
-.list-row {
-  display: flex;
-  flex-direction: row;
-}
-.list-marker {
-  width: 21px;
-  flex-shrink: 0;
-}
-.list-body {
-  flex: 1;
-  min-width: 0;
-}
-.quote {
-  border-left: 3px solid var(--line-strong);
-  padding-left: 12px;
-  margin-bottom: 8px;
-}
-.rule {
-  height: 1px;
-  background: var(--line-strong);
-  margin: 8px 0;
 }
 .login-page {
   width: 100%;
@@ -589,45 +496,313 @@ button.link {
   color: var(--on-forest-muted);
   font-size: 14px;
 }
-.code-block {
-  overflow-x: auto;
-}
-.code-inline {
-  border-radius: 4px;
-  padding: 1px 4px;
-}
-.table-scroll {
-  max-width: 100%;
-  overflow-x: auto;
-  margin-bottom: 8px;
-}
-table {
-  border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
-}
-th,
-td {
-  min-width: 120px;
-  max-width: 320px;
-  border: 1px solid var(--line-strong);
-  padding: 8px;
-  text-align: left;
-  vertical-align: top;
-}
-.rule {
-  border: 0;
-  flex-shrink: 0;
-}
-.quote {
-  margin-left: 0;
-  margin-right: 0;
-}
 @media (max-width: 699px) {
   .login-center {
     padding: 18px;
   }
   .login-card {
     padding: 28px;
+  }
+}
+
+/* 引用作为独立快照展示，正文选区入口与回看高亮共用消息位置。 */
+.quote-toolbar {
+  position: fixed;
+  z-index: 20;
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 2px 12px #0004;
+}
+.sent-quote blockquote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 3px solid currentColor;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.sent-quote {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #0001;
+  color: inherit;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.sent-quote blockquote {
+  max-height: 150px;
+  overflow: auto;
+}
+.quote-target {
+  outline: 2px solid var(--gold);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+::highlight(quote-source) {
+  background: #f4ce66;
+  color: #17251b;
+}
+
+/* 图片缩略图用于草稿与消息，原生 dialog 负责完整图片与焦点返回。 */
+.image-thumbnail {
+  display: block;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: transparent;
+}
+.image-thumbnail img {
+  display: block;
+  width: 180px;
+  height: 140px;
+  object-fit: contain;
+}
+.message-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 8px;
+}
+.image-preview {
+  max-width: 96vw;
+  max-height: 94dvh;
+  padding: 36px 8px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.image-preview::backdrop {
+  background: #000b;
+}
+.image-preview > img {
+  display: block;
+  max-width: 90vw;
+  max-height: 82dvh;
+  object-fit: contain;
+}
+.image-preview-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  font-size: 24px;
+  background: transparent;
+  color: inherit;
+}
+
+/* 输入框以 4px 为间距单位，统一正文、附件节点和工具栏的对齐与触控空间。 */
+.multimodal-composer {
+  --composer-chip-size: 44px;
+  --composer-item-gap: 4px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  border-radius: 24px;
+  padding: 12px;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+.multimodal-composer:focus-within {
+  border-color: var(--forest-border);
+  box-shadow: 0 0 0 3px var(--shadow);
+}
+.rich-input-host {
+  min-width: 0;
+}
+.rich-message-input {
+  position: relative;
+  min-height: 48px;
+  max-height: 240px;
+  overflow-y: auto;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 2px 4px 6px;
+  line-height: 32px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.rich-message-input p {
+  min-height: 32px;
+  margin: 0;
+}
+.rich-message-input p + p {
+  margin-top: 4px;
+}
+.rich-message-input:has(> p:only-child > br:only-child)::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline: 4px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.composer-tools .attach-button,
+.composer-tools .send-button {
+  width: 40px;
+  height: 40px;
+  margin: 0;
+}
+.composer-tools .attach-button svg,
+.composer-tools .send-arrow {
+  width: 22px;
+  height: 22px;
+}
+.composer-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  margin-inline-end: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  user-select: none;
+}
+.composer-shortcut kbd {
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+/* 节点外壳保留真实内边距，避免浏览器把原生光标画在卡片边框上。 */
+.composer-node {
+  display: inline-flex;
+  max-width: min(100%, calc(320px + var(--composer-item-gap) + var(--composer-item-gap)));
+  vertical-align: middle;
+  margin-block: 2px;
+  padding-inline: var(--composer-item-gap);
+  line-height: 20px;
+}
+.composer-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--composer-item-gap);
+  height: var(--composer-chip-size);
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  line-height: 20px;
+  user-select: all;
+}
+.composer-chip--image {
+  background: var(--surface);
+}
+.composer-quote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-inline-start: 5px;
+  font-size: 14px;
+}
+.composer-quote-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--forest-border);
+}
+.composer-quote-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-chip .image-thumbnail {
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+.composer-chip .image-thumbnail img {
+  width: calc(var(--composer-chip-size) - 8px);
+  height: calc(var(--composer-chip-size) - 8px);
+  object-fit: contain;
+}
+.chip-remove {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  height: 28px;
+  width: 28px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.chip-remove svg {
+  width: 14px;
+  height: 14px;
+}
+.chip-remove:hover {
+  background: var(--line);
+  color: var(--forest-deep);
+}
+.composer-chip button:focus-visible,
+.composer-tools button:focus-visible {
+  outline: 2px solid var(--forest-border);
+  outline-offset: 2px;
+}
+.composer-node.ProseMirror-selectednode .composer-chip {
+  outline: 2px solid var(--forest-border);
+  outline-offset: 1px;
+}
+.upload-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+.composer-padding .composer-error {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--error-soft);
+  color: var(--error);
+  font-size: 14px;
+  line-height: 20px;
+}
+@media (pointer: coarse) {
+  .composer-tools .attach-button,
+  .composer-tools .send-button {
+    width: 44px;
+    height: 44px;
+  }
+  .chip-remove {
+    width: 32px;
+    height: 32px;
+  }
+  .composer-shortcut {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .multimodal-composer,
+  .chip-remove {
+    transition: none;
   }
 }

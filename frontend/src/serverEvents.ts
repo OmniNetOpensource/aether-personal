@@ -1,6 +1,7 @@
 // 本文件集中定义后端 WebSocket 服务器事件的校验结构：与后端 events.go 一一对应，业务代码只处理校验后的事件。
 
 import { z } from 'zod';
+import { messagePartSchema } from './messageAttachments.js';
 
 // 后端通过聊天 WebSocket 发来的全部事件类型集中定义在本文件，与后端 events.go 一一对应。
 // 原始帧只在 ServerEventRelay.ts 中解析，业务代码只处理这里校验后的事件。
@@ -8,6 +9,7 @@ import { z } from 'zod';
 export const chatMessageRowSchema = z.object({
   id: z.string().min(1),
   text: z.string(),
+  parts: z.array(messagePartSchema).optional(),
   sender: z.enum(['user', 'main']),
   created_at: z.iso.datetime({ offset: true }),
   position: z.uuid(),
