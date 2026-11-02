@@ -79,7 +79,9 @@ export class ChatController {
   private disposed = false;
   private suspended = false;
   private devLoginAttempted = false;
-  private lastPosition?: string;
+  // 重连按变更序号续推，历史分页只按已读取的历史页推进；迟到的旧回复不应跳过中间一页。
+  private lastChangeCursor?: string;
+  private oldestHistoryPosition?: string;
   private listeners = new Set<() => void>();
 
   subscribe = (listener: () => void) => {
@@ -117,7 +119,7 @@ export class ChatController {
     clearTimeout(this.readyTimer);
     this.readyTimer = setTimeout(() => this.closeSocket(), 10000);
     try {
-      this.relay.connect(this.baseURL, this.token, this.lastPosition);
+      this.relay.connect(this.baseURL, this.token, this.lastChangeCursor);
     } catch {
       this.handleSocketClosed('');
     }
@@ -171,12 +173,11 @@ export class ChatController {
         this.turnstileSiteKey = event.turnstile_site_key ?? '';
         this.error = null;
         if (event.authenticated) {
+          this.lastChangeCursor = event.change_cursor;
           this.connected = true;
           this.email = event.email ?? this.email;
           if (event.history) {
-            this.merge(event.history);
-            this.historyLoaded = true;
-            this.hasMoreHistory = event.history.messages.length > 0;
+            this.mergeHistory(event.history);
           }
           this.initializing = false;
         } else {
@@ -199,15 +200,14 @@ export class ChatController {
         break;
       }
       case 'authenticated': {
+        this.lastChangeCursor = event.change_cursor;
         const pending = this.takePendingRequest(event.request_id);
         void saveSession(event.token, event.email)
           .then(() => {
             this.token = event.token;
             this.email = event.email;
             this.connected = true;
-            this.merge(event.history);
-            this.historyLoaded = true;
-            this.hasMoreHistory = event.history.messages.length > 0;
+            this.mergeHistory(event.history);
             this.error = null;
             this.initializing = false;
             pending?.resolve(event);
@@ -226,13 +226,12 @@ export class ChatController {
         this.resolvePendingRequest(event.request_id, event);
         break;
       case 'history':
-        this.merge(event);
-        this.historyLoaded = true;
-        this.hasMoreHistory = event.messages.length > 0;
+        this.mergeHistory(event);
         this.error = null;
         this.resolvePendingRequest(event.request_id, event);
         break;
       case 'messages':
+        this.lastChangeCursor = event.change_cursor;
         this.connected = true;
         this.mainThinking = event.main_thinking === true;
         this.error = null;
@@ -262,7 +261,8 @@ export class ChatController {
     this.mainThinking = false;
     this.historyLoaded = false;
     this.loadingHistory = false;
-    this.lastPosition = undefined;
+    this.lastChangeCursor = undefined;
+    this.oldestHistoryPosition = undefined;
     this.hasMoreHistory = true;
     this.messages = [];
     clearSession();
@@ -353,7 +353,7 @@ export class ChatController {
     if (this.loadingHistory || !this.token || (older && !this.hasMoreHistory)) return;
     this.loadingHistory = true;
     this.notify();
-    const before = older ? this.messages[0]?.position : undefined;
+    const before = older ? this.oldestHistoryPosition : undefined;
     const token = this.token;
     try {
       await this.sendRequest({
@@ -371,10 +371,20 @@ export class ChatController {
     }
   }
 
+  // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻。
+  private mergeHistory(page: ChatPage) {
+    const first = page.messages[0]?.position;
+    if (first && (!this.oldestHistoryPosition || first < this.oldestHistoryPosition)) {
+      this.oldestHistoryPosition = first;
+    }
+    this.merge(page);
+    this.historyLoaded = true;
+    this.hasMoreHistory = page.messages.length > 0;
+  }
+
   // merge 把服务器发来的一页消息并入列表：同一 ID 覆盖旧值，再按服务器位置排序。
   private merge(page: ChatPage) {
     for (const row of page.messages) {
-      if (!this.lastPosition || row.position > this.lastPosition) this.lastPosition = row.position;
       const message: ChatMessage = {
         id: row.id,
         text: row.text,

@@ -13,6 +13,8 @@ import (
 
 // Request 是 Agent 发给任意渠道的统一请求：消息与工具保留原始 JSON，各渠道在自己的文件里翻成自家协议。
 type Request struct {
+	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
+	InputSequence int64             `json:"-"`
 	Reasoning     map[string]any    `json:"reasoning,omitempty"`
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`
@@ -50,6 +52,7 @@ type Provider interface {
 	Matches(model string) bool
 	Service() string
 	PrepareRequest(ctx context.Context, credentials services.Settings, request Request) (OutgoingRequest, error)
+	HasOutput(payload []byte) bool
 	DecodeStream(payloads [][]byte, request Request) (response Response, incomplete bool, err error)
 }
 

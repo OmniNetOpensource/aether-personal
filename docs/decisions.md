@@ -109,7 +109,7 @@
 | 消息 ID | 数据库生成；`client_message_id` 只用于识别重发 | [04](wiki/04-messaging.md#消息-id-与重发) |
 | 写入顺序 | 同一用户的插入先取 `pg_advisory_xact_lock` | [04](wiki/04-messaging.md#写入顺序) |
 | 不合规则的消息 | 直接断开 WebSocket，不回错误消息 | [04](wiki/04-messaging.md#websocket) |
-| 重连位置 | 推送的消息带 `position`（所在行 ID），重连时 `auth` 带 `last_position`；不用 `sequence` | [04](wiki/04-messaging.md#websocket) |
+| 重连位置 | 展示与历史翻页按行位置；`hello.last_change_cursor` 按变更序号恢复推送，补齐先占位后完成的旧回复 | [04](wiki/04-messaging.md#websocket) |
 
 ### Main 运行时
 
@@ -120,7 +120,7 @@
 | Schedule 职责 | 2026-10-27 确认 Agent 通过工具布置一次性和周期安排，到期后将任务上下文发给该用户的 Main，复用现有执行流程；开发中 | [10](wiki/10-schedules.md) |
 | 回复用户 | 2026-10-30 改为 Main 正文直达：模型正文（与工具同批的正文）即用户消息，后端等整条回复生成结束后再一次性推给前端；无 Agent 间通信与交付检查 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | 运行循环 | 2026-11-02 简化：用户消息入库、一批工具回执齐全、日程投递后唤醒 Runner；Runner 只看消息尾部决定执行缺回执的工具、回复或停下，要不要运行由视图 `main_work`（最新一条消息）判断；失败收尾记 `users.main_failed_through_sequence`，有更新的消息才再试；assistant 消息与 step 同事务落库，删除 `steps.model_reply`。理由是消息表成为唯一事实，不再另外维护已读位置与未完成步骤 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| 处理中收到新消息 | 当前请求或工具调用结束后、下一次模型调用前加入；工具执行期间到达的用户消息组装时排在这批回执之后 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 处理中收到新消息 | 2026-11-03：还在等首段正文／工具时取消旧请求、重组上下文；首段正文或工具片段在写入锁内占位，已占位或工具在执行时待本批结束再取新输入。理由是允许及时补充指令，同时保住已开始回复的顺序 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 按用户串行 | `pg_try_advisory_lock`，释放后唤醒调度；周期扫描补偿漏通知 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |

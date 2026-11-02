@@ -35,7 +35,7 @@ export class ServerEventRelay {
     };
   }
 
-  connect(baseURL: string, token: string | null, lastPosition?: string) {
+  connect(baseURL: string, token: string | null, lastChangeCursor?: string) {
     this.close();
     this.intentionallyClosed = false;
     const channel = new WebSocket(baseURL.replace(/^http/, 'ws') + '/ws');
@@ -46,7 +46,7 @@ export class ServerEventRelay {
         JSON.stringify({
           type: 'hello',
           ...(token ? { token } : {}),
-          ...(lastPosition ? { last_position: lastPosition } : {}),
+          ...(lastChangeCursor ? { last_change_cursor: lastChangeCursor } : {}),
         }),
       );
     };

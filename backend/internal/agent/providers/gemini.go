@@ -24,7 +24,7 @@ func (geminiProvider) Matches(model string) bool { return strings.HasPrefix(mode
 // Service 返回看板中保存 ikun Gemini 凭证的服务名。
 func (geminiProvider) Service() string { return services.IkunGemini }
 
-// PrepareRequest 把统一请求转为 Gemini 的流式 generateContent 请求；流式端点逐块返回 SSE 事件，后端拼完才落库与推送。
+// PrepareRequest 把统一请求转为 Gemini 的流式 generateContent 请求；流式端点逐块返回 SSE 事件，首段有效输出占位，完整响应供最终保存与推送。
 func (geminiProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
 	endpoint := credentials.BaseURL + "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(prepared.Model, "ikun:")) + ":streamGenerateContent?alt=sse"
 	body, err := geminiRequestBody(prepared)
@@ -40,6 +40,35 @@ func (geminiProvider) PrepareRequest(ctx context.Context, credentials services.S
 	request.Header.Set("Content-Type", "application/json")
 	// 自定义密钥头不跟随重定向，避免被 HTTP 客户端转发给其他主机。
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
+}
+
+// HasOutput 逐事件认出 Gemini 的正文与工具调用，只有 thought 或签名的 part 仍可被新输入打断。
+func (geminiProvider) HasOutput(payload []byte) bool {
+	var chunk struct {
+		Candidates []struct {
+			Content struct {
+				Parts []geminiOutputPart `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if json.Unmarshal(payload, &chunk) != nil {
+		return false
+	}
+	for _, candidate := range chunk.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.Call != nil || (!part.Thought && strings.TrimSpace(part.Text) != "") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// geminiOutputPart 供流式首段判定和完整回复解析共用，思考片段通过 thought 区分。
+type geminiOutputPart struct {
+	Text    string              `json:"text"`
+	Thought bool                `json:"thought"`
+	Call    *geminiFunctionCall `json:"functionCall"`
 }
 
 // DecodeStream 把 Gemini 的流式分片拼成一条完整响应。
@@ -278,15 +307,13 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 	texts := []string{}
 	calls := []map[string]any{}
 	ids := map[string]bool{}
+	onlyThoughts := len(candidate.Content.Parts) > 0
 	for _, raw := range candidate.Content.Parts {
-		var part struct {
-			Text    string              `json:"text"`
-			Thought bool                `json:"thought"`
-			Call    *geminiFunctionCall `json:"functionCall"`
-		}
+		var part geminiOutputPart
 		if err := json.Unmarshal(raw, &part); err != nil {
 			return response, fmt.Errorf("decode Gemini content part: %w", err)
 		}
+		onlyThoughts = onlyThoughts && part.Thought
 		if !part.Thought && part.Text != "" {
 			texts = append(texts, part.Text)
 		}
@@ -306,7 +333,9 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 			calls = append(calls, map[string]any{"id": id, "type": "function", "function": map[string]string{"name": part.Call.Name, "arguments": string(part.Call.Args)}})
 		}
 	}
-	if len(texts) == 0 && len(calls) == 0 {
+	// 普通 Main 可在思考后安静结束；压缩仍需要有效的摘要响应。
+	silentReply := onlyThoughts && len(prepared.ToolChoice) == 0
+	if len(texts) == 0 && len(calls) == 0 && !silentReply {
 		return response, fmt.Errorf("Gemini returned no text or function calls")
 	}
 	message, _ := json.Marshal(map[string]any{

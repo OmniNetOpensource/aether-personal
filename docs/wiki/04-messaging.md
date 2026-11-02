@@ -39,8 +39,8 @@ sequenceDiagram
     participant Runner as 后端 A 或 B：Main 运行时
     participant Model as OpenRouter
 
-    App->>WS: hello {token?, last_position?}
-    WS-->>App: ready {authenticated, history}
+    App->>WS: hello {token?, last_change_cursor?}
+    WS-->>App: ready {authenticated, history, change_cursor}
     App->>WS: send_message {client_message_id, text}
     WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
     WS-->>App: messages {这条用户消息, main_thinking}
@@ -77,7 +77,7 @@ sequenceDiagram
 
 | 命令 | 说明 |
 | --- | --- |
-| `{"type": "hello", "token": "...", "last_position": "..."}` | 连接后的第一帧；`last_position` 为最后收到的消息位置，用于重连补齐，首次连接可省略，令牌也可省略 |
+| `{"type": "hello", "token": "...", "last_change_cursor": "123"}` | 连接后的第一帧；`last_change_cursor` 为最后收到的变更序号（十进制字符串），用于重连补齐，首次连接可省略，令牌也可省略 |
 | `{"type": "request_code", "request_id": "...", "email": "..."}` | 未登录时请求邮箱验证码 |
 | `{"type": "verify_code", "request_id": "...", "email": "...", "code": "..."}` | 未登录时用验证码登录 |
 | `{"type": "dev_login", "request_id": "..."}` | 未登录时请求开发测试登录，仅 dev 后端接受 |
@@ -89,23 +89,23 @@ sequenceDiagram
 
 | 事件 | 说明 |
 | --- | --- |
-| `{"type": "ready", "authenticated": false, "dev_login": false}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
-| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}}` | 在当前连接上登录成功，带最新一页历史 |
+| `{"type": "ready", "authenticated": false, "dev_login": false, "change_cursor": "0"}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
+| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}, "change_cursor": "123"}` | 在当前连接上登录成功，带最新一页历史 |
 | `{"type": "code_sent", "request_id": "..."}` | 验证码已发送 |
 | `{"type": "history", "request_id": "...", "messages": [...]}` | 一页历史消息 |
 | `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
 | `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
 | `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
-| `{"type": "messages", "messages": [...], "main_thinking": false}` | 新消息与 Main 处理状态 |
+| `{"type": "messages", "messages": [...], "main_thinking": false, "change_cursor": "123"}` | 新消息与 Main 处理状态 |
 
-> 重连字段叫 `last_position` 而非 `last_message_id`：Main 一行里可能有多条消息，它们的 `id`（工具调用 ID）各不相同但 `position`（行 ID）相同，分开命名避免前端误把消息 `id` 当作重连位置。重连位置用行 ID：行 ID 在写入时即生成，并由写入锁保证与写入顺序一致。（2026-11-02 之前用户消息在 Main 读到前 `sequence` 为空，这也是当初不用 `sequence` 的原因之一；去掉待读状态后位置仍沿用行 ID，不再改动协议。）
+2026-11-03，助手开始输出时先占住行位置，整条回复完成后才对用户可见。一条旧行可能晚于后来的用户消息推送，因此聊天按 `position` 排序，实时同步单独用 `change_cursor`。新可见消息用写入时的序号，隐藏行转为可见时分配一个新的变更序号。首屏先读取推送游标再取历史，期间提交的消息可以按 ID 去重。历史翻页只推进历史断点。兼容旧客户端传 `last_position`，服务端用对应的原始写入序号补发后续变更。
 
 ### 推送的消息
 
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 显示 ID：用户与 Main 的消息都用所在行 ID（Main 一行至多一条正文消息） |
-| `position` | 所在行的 ID，App 记下最后一条的值，重连时带上 |
+| `position` | 所在行的 ID，用于显示排序和向前翻页 |
 | `client_message_id` | 仅用户消息有；对应 App 发送时生成的 ID |
 | `sender` | `user` 或 `main` |
 | `text` | 正文文字，兼容旧客户端 |
@@ -168,8 +168,8 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 ## 推送
 
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
-- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息，连同 Main 处理状态推送给 App。
-- 前端重连时在 `hello` 中带上最后收到的位置，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
+- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
+- 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
 - 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。
 
 ## 助手消息宽度

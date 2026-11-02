@@ -1,4 +1,4 @@
-// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型自动选择渠道发送，记录实际请求响应与用量，并按可重试规则处理失败。
+// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型选择渠道，首段正文或工具调用交运行时占位，并记录完整请求响应与用量。
 
 package agent
 
@@ -31,11 +31,16 @@ func (r *Runner) agentRequest(rows []database.ListAgentContextRowsRow, model str
 	if err := validateRequestMessages(messages); err != nil {
 		return modelRequest{}, err
 	}
-	return modelRequest{Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
+	// 只取实际组装的这批行的最大序号；摘要排在首位，其物理序号可能大于保留的原文。
+	var inputSequence int64
+	for _, row := range rows {
+		inputSequence = max(inputSequence, row.Sequence)
+	}
+	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
 // requestModel 发送一次模型请求并全程记账：渠道由 providers 按模型名自动选择，本函数只负责凭证、日志、传输与结果分类。
-func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams) (response chatResponse, retryable bool, err error) {
+func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
 	resolved, err := (images.Store{Services: r.services}).ResolveMessages(ctx, prepared.Messages)
 	if err != nil {
@@ -144,12 +149,23 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 		retryable := httpResponse.StatusCode == http.StatusTooManyRequests || httpResponse.StatusCode >= 500
 		return response, retryable, fmt.Errorf("model provider returned %d: %.500s", httpResponse.StatusCode, responseBody)
 	}
-	// 逐块读取事件流并在内存里拼成完整回复；日志存档保留实际收到的原始分片。
-	payloads, captured, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body)
+	// 仅在首次有效输出时通知运行时占位；压缩请求和已经占位的请求直接继续收流。
+	var outputErr error
+	payloads, captured, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body, func(payload []byte) error {
+		if onOutput != nil && provider.HasOutput(payload) {
+			outputErr = onOutput()
+			onOutput = nil
+		}
+		return outputErr
+	})
 	capturedResponseBody, responseTruncated = captured, truncated
 	if truncated {
 		outcome = "invalid_response"
 		return response, false, fmt.Errorf("model response exceeds 8 MiB")
+	}
+	if outputErr != nil {
+		outcome = "interrupted"
+		return response, false, outputErr
 	}
 	if readErr != nil {
 		outcome = "transport_error"

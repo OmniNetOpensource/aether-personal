@@ -30,6 +30,7 @@ const (
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
 // 已登录时同时带上最新一页历史，前端收到后才结束 loading 态。
 type readyEvent struct {
+	ChangeCursor     int64         `json:"change_cursor,string"`
 	Type             string        `json:"type"`
 	Authenticated    bool          `json:"authenticated"`
 	DevLogin         bool          `json:"dev_login"`
@@ -40,11 +41,12 @@ type readyEvent struct {
 
 // authenticatedEvent 在同一条连接上完成登录（验证码或开发登录）后发出。
 type authenticatedEvent struct {
-	Type      string       `json:"type"`
-	RequestID string       `json:"request_id"`
-	Token     string       `json:"token"`
-	Email     string       `json:"email"`
-	History   chatMessages `json:"history"`
+	ChangeCursor int64        `json:"change_cursor,string"`
+	Type         string       `json:"type"`
+	RequestID    string       `json:"request_id"`
+	Token        string       `json:"token"`
+	Email        string       `json:"email"`
+	History      chatMessages `json:"history"`
 }
 
 type codeSentEvent struct {
@@ -59,6 +61,7 @@ type historyEvent struct {
 }
 
 type messagesEvent struct {
+	ChangeCursor int64  `json:"change_cursor,string"`
 	Type         string `json:"type"`
 	MainThinking bool   `json:"main_thinking"`
 	chatMessages

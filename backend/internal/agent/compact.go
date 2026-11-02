@@ -114,8 +114,8 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	}()
 	// 真正调用压缩模型，等待期间同样靠 whileRequest 看住执行锁连接。
 	beforeValue := int32(min(before, math.MaxInt32))
-	result, err := whileRequest(ctx, connection, func(requestContext context.Context) (chatResponse, error) {
-		response, _, requestErr := r.requestModel(requestContext, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through})
+	result, err := whileRequest(ctx, connection, nil, func(requestContext context.Context, _ func() error) (chatResponse, error) {
+		response, _, requestErr := r.requestModel(requestContext, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through}, nil)
 		return response, requestErr
 	})
 	if err != nil {

@@ -56,6 +56,20 @@ func (openRouterProvider) PrepareRequest(ctx context.Context, credentials servic
 	return OutgoingRequest{Request: request, Body: body}, nil
 }
 
+// HasOutput 在收到首段正文或工具调用时返回 true，忽略 reasoning、空正文与仅含用量的事件。
+func (openRouterProvider) HasOutput(payload []byte) bool {
+	var chunk openRouterStreamChunk
+	if json.Unmarshal(payload, &chunk) != nil {
+		return false
+	}
+	for _, choice := range chunk.Choices {
+		if strings.TrimSpace(streamContentText(choice.Delta.Content)) != "" || len(choice.Delta.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // DecodeStream 把 OpenRouter 的流式分片拼成一条完整响应。
 func (openRouterProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool, error) {
 	return assembleOpenRouterStream(payloads)

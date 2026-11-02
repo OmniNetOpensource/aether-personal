@@ -57,6 +57,8 @@ type Message struct {
 	SummaryThroughSequence *int64
 	SearchText             string
 	Visible                bool
+	Generating             bool
+	ChatUpdatedSequence    *int64
 }
 
 type ModelCall struct {

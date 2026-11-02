@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -24,19 +25,20 @@ const maxMessageCharacters = 32000
 // clientFrame 是前端通过聊天 WebSocket 发来的全部命令的统一形状；
 // 后端发出的事件类型见 events.go。
 type clientFrame struct {
-	Type            string         `json:"type"`
-	RequestID       string         `json:"request_id"`
-	Token           string         `json:"token"`
-	LastPosition    *uuid.UUID     `json:"last_position"`
-	Email           string         `json:"email"`
-	Code            string         `json:"code"`
-	TurnstileToken  string         `json:"turnstile_token"`
-	Before          *uuid.UUID     `json:"before"`
-	ClientMessageID uuid.UUID      `json:"client_message_id"`
-	Text            string         `json:"text"`
-	Parts           []messagePart  `json:"parts"`
-	Quotes          []messageQuote `json:"-"`
-	Images          []messageImage `json:"-"`
+	Type             string         `json:"type"`
+	RequestID        string         `json:"request_id"`
+	Token            string         `json:"token"`
+	LastChangeCursor *int64         `json:"last_change_cursor,string"`
+	LastPosition     *uuid.UUID     `json:"last_position"`
+	Email            string         `json:"email"`
+	Code             string         `json:"code"`
+	TurnstileToken   string         `json:"turnstile_token"`
+	Before           *uuid.UUID     `json:"before"`
+	ClientMessageID  uuid.UUID      `json:"client_message_id"`
+	Text             string         `json:"text"`
+	Parts            []messagePart  `json:"parts"`
+	Quotes           []messageQuote `json:"-"`
+	Images           []messageImage `json:"-"`
 }
 
 // chatConnections 记录本机每个用户的 WebSocket 连接；收到该用户的 NOTIFY 时唤醒这些连接去查表推送。
@@ -117,7 +119,7 @@ func (s *server) listenOnce(ctx context.Context) error {
 	connection := pooledConnection.Hijack()
 	defer connection.Close(ctx)
 
-	if _, err := connection.Exec(ctx, "LISTEN user_messages"); err != nil {
+	if _, err := connection.Exec(ctx, "LISTEN main_input; LISTEN user_messages"); err != nil {
 		return err
 	}
 	// 未监听期间的通知已经丢失，让所有连接各自查一次表。
@@ -126,6 +128,19 @@ func (s *server) listenOnce(ctx context.Context) error {
 		notification, err := connection.WaitForNotification(ctx)
 		if err != nil {
 			return err
+		}
+		// 只有已提交的新输入能取消思考中的请求，普通消息通知只负责刷新和扫描。
+		if notification.Channel == "main_input" {
+			var input struct {
+				UserID   uuid.UUID `json:"user_id"`
+				Sequence int64     `json:"sequence"`
+			}
+			if err := json.Unmarshal([]byte(notification.Payload), &input); err != nil {
+				slog.Error("invalid main input notification", "error", err)
+				continue
+			}
+			s.runner.NewInput(input.UserID, input.Sequence)
+			continue
 		}
 		s.connections.wake(uuid.MustParse(notification.Payload))
 		s.runner.Wake(uuid.MustParse(notification.Payload))
@@ -154,7 +169,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	var hello clientFrame
 	err = wsjson.Read(helloContext, connection, &hello)
 	cancelHello()
-	if err != nil || hello.Type != "hello" {
+	if err != nil || hello.Type != "hello" || (hello.LastChangeCursor != nil && *hello.LastChangeCursor < 0) {
 		connection.Close(websocket.StatusPolicyViolation, "hello required")
 		return
 	}
@@ -162,7 +177,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	// 以下连接状态只由本函数的主循环读写，接收 goroutine 只负责转发帧。
 	var userID, sessionID uuid.UUID
 	var email string
-	var position uuid.UUID
+	var changeCursor int64
 	var wakeSignal chan struct{}
 	authenticated := false
 	bindSession := func(session database.GetActiveSessionRow) {
@@ -174,7 +189,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.connections.remove(userID, wakeSignal)
 			wakeSignal = nil
 		}
-		userID, sessionID, email, position, authenticated = uuid.Nil, uuid.Nil, "", uuid.Nil, false
+		userID, sessionID, email, changeCursor, authenticated = uuid.Nil, uuid.Nil, "", 0, false
 	}
 	defer func() {
 		if wakeSignal != nil {
@@ -193,23 +208,28 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil {
 			bindSession(session)
-			if hello.LastPosition != nil {
-				position = *hello.LastPosition
-			} else if latest, err := s.queries.GetLatestMainMessageID(ctx, userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				slog.Error("get latest message failed", "error", err)
+			// 旧客户端仍带行 ID，换算为它接收过的插入序号后补齐更新。
+			switch {
+			case hello.LastChangeCursor != nil:
+				changeCursor = *hello.LastChangeCursor
+			case hello.LastPosition != nil:
+				changeCursor, err = s.queries.GetLegacyChatCursor(ctx, database.GetLegacyChatCursorParams{UserID: userID, ID: *hello.LastPosition})
+			default:
+				changeCursor, err = s.queries.GetLatestChatChange(ctx, userID)
+			}
+			if err != nil {
+				slog.Error("load chat cursor failed", "error", err)
 				connection.Close(websocket.StatusInternalError, "internal server error")
 				return
-			} else if err == nil {
-				position = latest
 			}
 		}
 	}
 
-	ready := readyEvent{Type: "ready", Authenticated: authenticated, DevLogin: devLogin, Email: email}
+	ready := readyEvent{Type: "ready", Authenticated: authenticated, DevLogin: devLogin, Email: email, ChangeCursor: changeCursor}
 	if !devLogin {
 		ready.TurnstileSiteKey = s.appConfig.TurnstileSiteKey
 	}
-	if authenticated && hello.LastPosition == nil {
+	if authenticated && hello.LastPosition == nil && hello.LastChangeCursor == nil {
 		history, err := s.historyPage(ctx, userID, uuid.Max)
 		if err != nil {
 			slog.Error("load initial history failed", "error", err)
@@ -222,7 +242,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if authenticated {
-		if err := s.pushChatMessages(ctx, relay, userID, &position); err != nil {
+		if err := s.pushChatMessages(ctx, relay, userID, &changeCursor); err != nil {
 			return
 		}
 	}
@@ -252,7 +272,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-wakeSignal:
-			if err := s.pushChatMessages(ctx, relay, userID, &position); err != nil {
+			if err := s.pushChatMessages(ctx, relay, userID, &changeCursor); err != nil {
 				return
 			}
 		case <-heartbeat.C:
@@ -263,7 +283,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if authenticated {
-				if err := s.pushChatMessages(ctx, relay, userID, &position); err != nil {
+				if err := s.pushChatMessages(ctx, relay, userID, &changeCursor); err != nil {
 					return
 				}
 			}
@@ -277,7 +297,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					connection.Close(websocket.StatusPolicyViolation, "invalid send_message")
 					return
 				}
-				if !s.saveUserMessage(ctx, relay, userID, frame, &position) {
+				if !s.saveUserMessage(ctx, relay, userID, frame, &changeCursor) {
 					return
 				}
 			case "load_history":
@@ -317,7 +337,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 					continue
 				}
-				if !s.handleLoginFrame(ctx, relay, frame, clientIP, bindSession, &position) {
+				if !s.handleLoginFrame(ctx, relay, frame, clientIP, bindSession, &changeCursor) {
 					return
 				}
 			case "logout":
@@ -352,7 +372,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleLoginFrame 处理未登录连接上的登录命令；登录成功后把连接绑定到该用户并回 authenticated 事件。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
-func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame clientFrame, clientIP netip.Addr, bindSession func(database.GetActiveSessionRow), position *uuid.UUID) bool {
+func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame clientFrame, clientIP netip.Addr, bindSession func(database.GetActiveSessionRow), changeCursor *int64) bool {
 	// fail 把失败码按本次请求的 request_id 回给前端，并以“事件是否发得出”作为连接是否可用的判断。
 	fail := func(code string) bool {
 		return relay.send(ctx, requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: code}) == nil
@@ -391,11 +411,10 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 		return fail(requestFailedInternal)
 	}
 	bindSession(session)
-	if latest, err := s.queries.GetLatestMainMessageID(ctx, session.UserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		slog.Error("get latest message failed", "error", err)
+	*changeCursor, err = s.queries.GetLatestChatChange(ctx, session.UserID)
+	if err != nil {
+		slog.Error("load chat cursor failed", "error", err)
 		return false
-	} else if err == nil {
-		*position = latest
 	}
 	history, err := s.historyPage(ctx, session.UserID, uuid.Max)
 	if err != nil {
@@ -403,14 +422,14 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 		return false
 	}
 	return relay.send(ctx, authenticatedEvent{
-		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, History: history,
+		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, History: history, ChangeCursor: *changeCursor,
 	}) == nil
 }
 
 // saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接也能被唤醒推送；成功后唤醒 agent，
 // 先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
-func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, position *uuid.UUID) bool {
+func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
@@ -432,25 +451,25 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 	}
 
 	s.runner.Wake(userID)
-	if s.pushChatMessages(ctx, relay, userID, position) != nil {
+	if s.pushChatMessages(ctx, relay, userID, changeCursor) != nil {
 		return false
 	}
 	return relay.send(ctx, deliveredEvent{Type: "delivered", ClientMessageID: frame.ClientMessageID}) == nil
 }
 
-// pushChatMessages 把 position 之后的新消息一次性推给连接，并推进 position 作为下次推送的断点；同一事件还附带 Main 是否在处理，供前端一次更新列表与状态指示。
-func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID uuid.UUID, position *uuid.UUID) error {
+// pushChatMessages 按变更序号补发消息，并把本次读到的游标交给连接用于重连；同一事件还附带 Main 是否在处理，供前端一次更新列表与状态指示。
+func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID uuid.UUID, changeCursor *int64) error {
 	// 单页查询上限 100 行，循环取到不满页为止，避免积压较多时漏掉后面的消息。
 	var rows []database.ListChatRowsAfterRow
 	for {
-		page, err := s.queries.ListChatRowsAfter(ctx, database.ListChatRowsAfterParams{UserID: userID, ID: *position})
+		page, err := s.queries.ListChatRowsAfter(ctx, database.ListChatRowsAfterParams{UserID: userID, AfterCursor: *changeCursor})
 		if err != nil {
 			slog.Error("list chat rows failed", "user_id", userID, "error", err)
 			return err
 		}
 		rows = append(rows, page...)
 		if len(page) > 0 {
-			*position = page[len(page)-1].ID
+			*changeCursor = page[len(page)-1].ChangeCursor
 		}
 		if len(page) < 100 {
 			break
@@ -463,7 +482,7 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		return err
 	}
 	return relay.send(ctx, messagesEvent{
-		Type: "messages", MainThinking: mainThinking,
+		Type: "messages", MainThinking: mainThinking, ChangeCursor: *changeCursor,
 		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows)},
 	})
 }

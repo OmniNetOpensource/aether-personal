@@ -13,6 +13,33 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const completeMainReply = `-- name: CompleteMainReply :execrows
+UPDATE messages SET content = $2, generating = false, visible = true
+WHERE id = $1 AND generating
+`
+
+type CompleteMainReplyParams struct {
+	ID      uuid.UUID
+	Content []byte
+}
+
+func (q *Queries) CompleteMainReply(ctx context.Context, arg CompleteMainReplyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeMainReply, arg.ID, arg.Content)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const discardGeneratingReply = `-- name: DiscardGeneratingReply :exec
+DELETE FROM messages WHERE user_id = $1 AND generating
+`
+
+func (q *Queries) DiscardGeneratingReply(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, discardGeneratingReply, userID)
+	return err
+}
+
 const failUnfinishedSteps = `-- name: FailUnfinishedSteps :exec
 UPDATE steps SET error = $1, finished_at = now()
 WHERE user_id = $2 AND finished_at IS NULL
@@ -70,18 +97,32 @@ func (q *Queries) GetLastContextUsage(ctx context.Context, userID uuid.UUID) (Ge
 	return i, err
 }
 
-const getLatestMainMessageID = `-- name: GetLatestMainMessageID :one
-SELECT id FROM messages
-WHERE user_id = $1
-ORDER BY id DESC
-LIMIT 1
+const getLatestChatChange = `-- name: GetLatestChatChange :one
+SELECT coalesce(max(coalesce(chat_updated_sequence, sequence)), 0)::bigint FROM messages WHERE user_id = $1 AND visible
 `
 
-func (q *Queries) GetLatestMainMessageID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getLatestMainMessageID, userID)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+func (q *Queries) GetLatestChatChange(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getLatestChatChange, userID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const getLegacyChatCursor = `-- name: GetLegacyChatCursor :one
+SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2
+`
+
+type GetLegacyChatCursorParams struct {
+	UserID uuid.UUID
+	ID     uuid.UUID
+}
+
+// 已打开的旧客户端重连时仍提交行 ID；其原始写入序号之后发生的完成事件也需补发。
+func (q *Queries) GetLegacyChatCursor(ctx context.Context, arg GetLegacyChatCursorParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getLegacyChatCursor, arg.UserID, arg.ID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const hasMainWork = `-- name: HasMainWork :one
@@ -91,6 +132,24 @@ SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
 // 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
 func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, hasMainWork, userID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const hasNewMainInput = `-- name: HasNewMainInput :one
+SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = $1
+    AND role = 'user' AND NOT is_summary AND sequence > $2::bigint)
+`
+
+type HasNewMainInputParams struct {
+	UserID  uuid.UUID
+	Through int64
+}
+
+// 只比较实际投递的输入，摘要和工具回执不打断生成。
+func (q *Queries) HasNewMainInput(ctx context.Context, arg HasNewMainInputParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasNewMainInput, arg.UserID, arg.Through)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -178,7 +237,7 @@ WITH summary AS (
  ORDER BY sequence DESC LIMIT 1
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
-WHERE m.user_id = $1
+WHERE m.user_id = $1 AND NOT m.generating
  AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
@@ -225,15 +284,15 @@ func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([
 }
 
 const listChatRowsAfter = `-- name: ListChatRowsAfter :many
-SELECT id, role, sender, client_message_id, content, created_at FROM messages
-WHERE user_id = $1 AND visible AND id > $2
-ORDER BY id
+SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+WHERE user_id = $1 AND visible AND coalesce(chat_updated_sequence, sequence) > $2::bigint
+ORDER BY coalesce(chat_updated_sequence, sequence)
 LIMIT 100
 `
 
 type ListChatRowsAfterParams struct {
-	UserID uuid.UUID
-	ID     uuid.UUID
+	UserID      uuid.UUID
+	AfterCursor int64
 }
 
 type ListChatRowsAfterRow struct {
@@ -243,10 +302,12 @@ type ListChatRowsAfterRow struct {
 	ClientMessageID *uuid.UUID
 	Content         []byte
 	CreatedAt       time.Time
+	ChangeCursor    int64
 }
 
+// 连接已确认的变更序号之后，包含先占位、现在才公开的旧行。
 func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterParams) ([]ListChatRowsAfterRow, error) {
-	rows, err := q.db.Query(ctx, listChatRowsAfter, arg.UserID, arg.ID)
+	rows, err := q.db.Query(ctx, listChatRowsAfter, arg.UserID, arg.AfterCursor)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +322,7 @@ func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterPa
 			&i.ClientMessageID,
 			&i.Content,
 			&i.CreatedAt,
+			&i.ChangeCursor,
 		); err != nil {
 			return nil, err
 		}
@@ -273,7 +335,7 @@ func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterPa
 }
 
 const listChatRowsBefore = `-- name: ListChatRowsBefore :many
-SELECT id, role, sender, client_message_id, content, created_at FROM messages
+SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND id < $2
 ORDER BY id DESC
 LIMIT 50
@@ -291,6 +353,7 @@ type ListChatRowsBeforeRow struct {
 	ClientMessageID *uuid.UUID
 	Content         []byte
 	CreatedAt       time.Time
+	ChangeCursor    int64
 }
 
 func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBeforeParams) ([]ListChatRowsBeforeRow, error) {
@@ -309,6 +372,7 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 			&i.ClientMessageID,
 			&i.Content,
 			&i.CreatedAt,
+			&i.ChangeCursor,
 		); err != nil {
 			return nil, err
 		}
@@ -374,6 +438,23 @@ SELECT pg_notify('user_messages', $1::uuid::text)
 func (q *Queries) NotifyUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, notifyUserMessages, userID)
 	return err
+}
+
+const reserveMainReply = `-- name: ReserveMainReply :one
+INSERT INTO messages (user_id, role, content, step_id, generating)
+VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id
+`
+
+type ReserveMainReplyParams struct {
+	UserID uuid.UUID
+	StepID *uuid.UUID
+}
+
+func (q *Queries) ReserveMainReply(ctx context.Context, arg ReserveMainReplyParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.StepID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const startCompactStep = `-- name: StartCompactStep :one

@@ -38,6 +38,7 @@ export const requestFailedCodeSchema = z.enum([
 export const serverEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('ready'),
+    change_cursor: z.string().regex(/^\d+$/).optional(),
     authenticated: z.boolean(),
     dev_login: z.boolean(),
     turnstile_site_key: z.string().optional(),
@@ -46,6 +47,7 @@ export const serverEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('authenticated'),
+    change_cursor: z.string().regex(/^\d+$/).optional(),
     request_id: z.uuid(),
     token: z.string().min(1),
     email: z.string().min(1),
@@ -55,6 +57,7 @@ export const serverEventSchema = z.discriminatedUnion('type', [
   chatPageSchema.extend({ type: z.literal('history'), request_id: z.uuid() }),
   chatPageSchema.extend({
     type: z.literal('messages'),
+    change_cursor: z.string().regex(/^\d+$/).optional(),
     main_thinking: z.boolean().optional(),
   }),
   z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),

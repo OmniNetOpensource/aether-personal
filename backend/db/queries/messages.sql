@@ -29,6 +29,22 @@ ON CONFLICT (user_id, client_message_id) DO NOTHING;
 INSERT INTO messages (user_id, role, content, step_id, sender, visible)
 VALUES ($1, $2, $3, $4, $5, $6);
 
+-- name: HasNewMainInput :one
+-- 只比较实际投递的输入，摘要和工具回执不打断生成。
+SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
+    AND role = 'user' AND NOT is_summary AND sequence > sqlc.arg(through)::bigint);
+
+-- name: ReserveMainReply :one
+INSERT INTO messages (user_id, role, content, step_id, generating)
+VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id;
+
+-- name: CompleteMainReply :execrows
+UPDATE messages SET content = $2, generating = false, visible = true
+WHERE id = $1 AND generating;
+
+-- name: DiscardGeneratingReply :exec
+DELETE FROM messages WHERE user_id = $1 AND generating;
+
 -- name: ListRunnableAgents :many
 SELECT user_id FROM main_work ORDER BY user_id;
 
@@ -48,7 +64,7 @@ WITH summary AS (
  ORDER BY sequence DESC LIMIT 1
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
-WHERE m.user_id = sqlc.arg(user_id)
+WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
  AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
@@ -68,22 +84,24 @@ UPDATE steps SET error = sqlc.arg(error), finished_at = now()
 WHERE user_id = sqlc.arg(user_id) AND finished_at IS NULL;
 
 -- name: ListChatRowsAfter :many
-SELECT id, role, sender, client_message_id, content, created_at FROM messages
-WHERE user_id = $1 AND visible AND id > $2
-ORDER BY id
+-- 连接已确认的变更序号之后，包含先占位、现在才公开的旧行。
+SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+WHERE user_id = $1 AND visible AND coalesce(chat_updated_sequence, sequence) > sqlc.arg(after_cursor)::bigint
+ORDER BY coalesce(chat_updated_sequence, sequence)
 LIMIT 100;
 
 -- name: ListChatRowsBefore :many
-SELECT id, role, sender, client_message_id, content, created_at FROM messages
+SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND id < $2
 ORDER BY id DESC
 LIMIT 50;
 
--- name: GetLatestMainMessageID :one
-SELECT id FROM messages
-WHERE user_id = $1
-ORDER BY id DESC
-LIMIT 1;
+-- name: GetLatestChatChange :one
+SELECT coalesce(max(coalesce(chat_updated_sequence, sequence)), 0)::bigint FROM messages WHERE user_id = $1 AND visible;
+
+-- name: GetLegacyChatCursor :one
+-- 已打开的旧客户端重连时仍提交行 ID；其原始写入序号之后发生的完成事件也需补发。
+SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2;
 
 -- name: StartCompactStep :one
 INSERT INTO steps (user_id, model, started_at, purpose)
