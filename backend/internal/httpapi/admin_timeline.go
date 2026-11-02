@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -171,7 +172,7 @@ func parseTimelineUser(r *http.Request) (uuid.UUID, bool) {
 	return userID, err == nil
 }
 
-// adminTimeline 返回一页时间线：默认最新一页，before 游标向更早翻页；首页附带该用户 Main 落库的不可见指令。
+// adminTimeline 返回一页时间线：默认最新一页，before 游标向更早翻页；首页附带每次请求注入的固定指令。
 func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 	userID, ok := parseTimelineUser(r)
 	if !ok {
@@ -225,23 +226,17 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slices.Reverse(calls)
+	// 固定指令不落库，每次请求由代码注入，首页直接展示当前部署的原文。
 	var systemPrompt any
 	if cursor == nil {
-		prompt, err := queries.GetAdminTimelineSystemPrompt(ctx, userID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			internalError(w, "read admin timeline system prompt failed", err)
-			return
-		}
-		if err == nil {
-			systemPrompt = map[string]any{"text": prompt.Prompt, "from_call_at": prompt.StartedAt}
-		}
+		systemPrompt = map[string]any{"text": agent.MainInstructions}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		internalError(w, "commit admin timeline failed", err)
 		return
 	}
 
-	// 消息按 sequence 排序；别人发来的消息到达早、读取晚，因此用不回退的时间作为合并失败请求的位置。
+	// 消息按 sequence 排序，同一事务内的入库时间可能早于前一条，因此用不回退的时间作为合并失败请求的位置。
 	items := []timelineItem{}
 	var position time.Time
 	nextCall := 0

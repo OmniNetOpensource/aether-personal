@@ -39,10 +39,14 @@ type LoginRateLimit struct {
 	WindowStartedAt time.Time
 }
 
+type MainWork struct {
+	UserID uuid.UUID
+}
+
 type Message struct {
 	ID                     uuid.UUID
 	UserID                 uuid.UUID
-	Sequence               *int64
+	Sequence               int64
 	Role                   string
 	Content                []byte
 	Sender                 *string
@@ -147,12 +151,12 @@ type Step struct {
 	Error        *string
 	StartedAt    time.Time
 	FinishedAt   *time.Time
-	ModelReply   []byte
 	Purpose      string
 }
 
 type User struct {
-	ID        uuid.UUID
-	Email     string
-	CreatedAt time.Time
+	ID                        uuid.UUID
+	Email                     string
+	CreatedAt                 time.Time
+	MainFailedThroughSequence *int64
 }

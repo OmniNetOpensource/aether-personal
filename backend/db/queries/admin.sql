@@ -13,7 +13,7 @@ WITH calls AS (
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
   AND sqlc.narg(outcome)::text IS NULL
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id)
 ), buckets AS (
  SELECT generate_series(date_trunc(sqlc.arg(bucket)::text, sqlc.arg(from_at)::timestamptz, 'UTC'),
@@ -60,8 +60,7 @@ WITH page AS (
 )
 SELECT u.id,u.created_at,jsonb_build_object('id',u.id,'email',u.email,'created_at',u.created_at,
  'last_activity_at',(SELECT max(s.started_at) FROM steps s WHERE s.user_id=u.id),
- 'main_active',EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
-   OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL),
+ 'main_active',EXISTS(SELECT 1 FROM main_work w WHERE w.user_id=u.id),
  'attempts',stats.attempts,'failed',stats.failed,'input_tokens',stats.input_tokens,'output_tokens',stats.output_tokens,
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
  'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=u.id AND s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
@@ -69,7 +68,7 @@ SELECT u.id,u.created_at,jsonb_build_object('id',u.id,'email',u.email,'created_a
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
   AND sqlc.narg(outcome)::text IS NULL
   AND (sqlc.arg(search)::text = '' OR strpos(lower(u.email), lower(sqlc.arg(search)::text)) > 0)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id))
 )::jsonb AS payload
 FROM page u CROSS JOIN LATERAL (
@@ -87,9 +86,8 @@ FROM page u CROSS JOIN LATERAL (
 -- 每位用户只有一个 Main，选中用户时返回它的单行状态。
 WITH agents AS (
  SELECT NULL::uuid AS id,u.id AS user_id,u.email,u.created_at,
-   CASE WHEN EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
-     OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL)
-     THEN 'processing' WHEN (SELECT s.error IS NOT NULL FROM steps s WHERE s.user_id=u.id ORDER BY s.started_at DESC,s.id DESC LIMIT 1)
+   CASE WHEN EXISTS(SELECT 1 FROM main_work w WHERE w.user_id=u.id)
+     THEN 'processing' WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id=u.id)
      THEN 'failed' ELSE 'idle' END AS status
  FROM users u WHERE u.id=sqlc.arg(selected_user_id)::uuid
 ), page AS (
@@ -106,7 +104,7 @@ SELECT a.cursor_id AS id,a.created_at,jsonb_build_object('id',a.id,'kind','main'
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
  'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=a.user_id AND s.started_at >= sqlc.arg(from_at)::timestamptz AND s.started_at < sqlc.arg(to_at)::timestamptz
   AND (sqlc.narg(model)::text IS NULL OR s.model = sqlc.narg(model)::text)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id))
 )::jsonb AS payload FROM page a CROSS JOIN LATERAL (
  SELECT count(*) AS attempts,count(*) FILTER(WHERE c.outcome IN ('http_error','transport_error','invalid_response')) AS failed,
@@ -139,8 +137,8 @@ SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_
 SELECT request_body, response_body, response_truncated FROM model_calls WHERE id = $1;
 
 -- name: ListAdminTimelineMessages :many
--- 按 sequence 从新到旧取一页已读消息；模型输出附上产生它的那次成功请求。
-SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
+-- 按 sequence 从新到旧取一页消息；模型输出附上产生它的那次成功请求。
+SELECT m.id, m.sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
  CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,
   'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
@@ -151,8 +149,7 @@ FROM messages m LEFT JOIN LATERAL (
  ORDER BY mc.started_at DESC LIMIT 1
 ) c ON true
 WHERE m.user_id = sqlc.arg(user_id)
- AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
- AND m.sequence IS NOT NULL AND (sqlc.narg(before_sequence)::bigint IS NULL OR m.sequence < sqlc.narg(before_sequence)::bigint)
+ AND (sqlc.narg(before_sequence)::bigint IS NULL OR m.sequence < sqlc.narg(before_sequence)::bigint)
 ORDER BY m.sequence DESC LIMIT sqlc.arg(page_limit)::integer;
 
 -- name: ListAdminTimelineFailedCalls :many
@@ -167,14 +164,6 @@ WHERE c.user_id = sqlc.arg(user_id) AND c.outcome <> 'succeeded'
  AND (sqlc.narg(from_at)::timestamptz IS NULL OR c.started_at >= sqlc.narg(from_at)::timestamptz)
  AND (sqlc.narg(to_at)::timestamptz IS NULL OR c.started_at < sqlc.narg(to_at)::timestamptz)
 ORDER BY c.started_at DESC LIMIT 200;
-
--- name: GetAdminTimelineSystemPrompt :one
--- 不可见指令就是该 Agent 消息列表中的 instructions 行，取最近一份原文展示。
-SELECT created_at AS started_at, (content ->> 'content')::text AS prompt
-FROM messages
-WHERE user_id = sqlc.arg(user_id)
- AND content ->> 'name' = 'instructions'
-ORDER BY id DESC LIMIT 1;
 
 -- name: GetAdminTimelineMessage :one
 SELECT role, content FROM messages WHERE id = $1;

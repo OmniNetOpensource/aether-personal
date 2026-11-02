@@ -84,81 +84,13 @@ func (q *Queries) GetLatestMainMessageID(ctx context.Context, userID uuid.UUID) 
 	return id, err
 }
 
-const getReadUpTo = `-- name: GetReadUpTo :one
-SELECT id FROM messages
-WHERE user_id = $1 AND sender = 'user' AND sequence IS NOT NULL
-ORDER BY id DESC
-LIMIT 1
+const hasMainWork = `-- name: HasMainWork :one
+SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
 `
 
-func (q *Queries) GetReadUpTo(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getReadUpTo, userID)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const getStepModelReply = `-- name: GetStepModelReply :one
-SELECT model_reply FROM steps WHERE id = $1
-`
-
-// 进程中断后复用已保存的模型回复，避免同一步骤再次请求模型。
-func (q *Queries) GetStepModelReply(ctx context.Context, stepID uuid.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, getStepModelReply, stepID)
-	var model_reply []byte
-	err := row.Scan(&model_reply)
-	return model_reply, err
-}
-
-const getUnfinishedStep = `-- name: GetUnfinishedStep :one
-SELECT id FROM steps
-WHERE user_id = $1 AND finished_at IS NULL AND purpose = 'agent'
-ORDER BY started_at LIMIT 1
-`
-
-func (q *Queries) GetUnfinishedStep(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getUnfinishedStep, userID)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const hasStepAssistantMessage = `-- name: HasStepAssistantMessage :one
-SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = $1 AND role = 'assistant')
-`
-
-func (q *Queries) HasStepAssistantMessage(ctx context.Context, stepID *uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasStepAssistantMessage, stepID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const hasStepCurrentTime = `-- name: HasStepCurrentTime :one
-SELECT EXISTS (
-    SELECT 1 FROM messages
-    WHERE step_id = $1 AND content ->> 'name' = 'current_time'
-)
-`
-
-func (q *Queries) HasStepCurrentTime(ctx context.Context, stepID *uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasStepCurrentTime, stepID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const hasStepToolResult = `-- name: HasStepToolResult :one
-SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = $1 AND role = 'tool' AND content->>'tool_call_id' = $2::text)
-`
-
-type HasStepToolResultParams struct {
-	StepID     *uuid.UUID
-	ToolCallID string
-}
-
-func (q *Queries) HasStepToolResult(ctx context.Context, arg HasStepToolResultParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasStepToolResult, arg.StepID, arg.ToolCallID)
+// 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
+func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasMainWork, userID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -213,10 +145,9 @@ func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSum
 }
 
 const insertUserMessage = `-- name: InsertUserMessage :execrows
-INSERT INTO messages (user_id, sequence, role, content, sender, client_message_id, visible)
+INSERT INTO messages (user_id, role, content, sender, client_message_id, visible)
 VALUES (
     $1,
-    NULL,
     'user',
     $2::jsonb,
     'user',
@@ -240,69 +171,15 @@ func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessagePa
 	return result.RowsAffected(), nil
 }
 
-const isMainThinking = `-- name: IsMainThinking :one
-SELECT EXISTS (
-    SELECT 1 FROM steps AS main_step
-    WHERE main_step.user_id = $1::uuid
-        AND main_step.finished_at IS NULL
-    UNION ALL
-    SELECT 1 FROM messages AS main_message
-    WHERE main_message.user_id = $1::uuid
-        AND main_message.sequence IS NULL
-)
-`
-
-func (q *Queries) IsMainThinking(ctx context.Context, userID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, isMainThinking, userID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const listAgentContext = `-- name: ListAgentContext :many
-WITH summary AS (
- SELECT id, summary_through_sequence FROM messages
- WHERE user_id = $1 AND is_summary
- ORDER BY sequence DESC LIMIT 1
-)
-SELECT m.content FROM messages AS m
-WHERE m.user_id = $1
- AND m.sequence IS NOT NULL AND (
-  m.id = (SELECT id FROM summary)
-  OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
- )
-ORDER BY m.is_summary DESC, m.sequence
-`
-
-func (q *Queries) ListAgentContext(ctx context.Context, userID uuid.UUID) ([][]byte, error) {
-	rows, err := q.db.Query(ctx, listAgentContext, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items [][]byte
-	for rows.Next() {
-		var content []byte
-		if err := rows.Scan(&content); err != nil {
-			return nil, err
-		}
-		items = append(items, content)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listAgentContextRows = `-- name: ListAgentContextRows :many
 WITH summary AS (
  SELECT id, summary_through_sequence FROM messages
  WHERE user_id = $1 AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.sender FROM messages AS m
+SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
 WHERE m.user_id = $1
- AND m.sequence IS NOT NULL AND (
+ AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
  )
@@ -315,6 +192,8 @@ type ListAgentContextRowsRow struct {
 	Content   []byte
 	IsSummary bool
 	Sender    *string
+	StepID    *uuid.UUID
+	CreatedAt time.Time
 }
 
 func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([]ListAgentContextRowsRow, error) {
@@ -332,6 +211,8 @@ func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([
 			&i.Content,
 			&i.IsSummary,
 			&i.Sender,
+			&i.StepID,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -439,41 +320,8 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 	return items, nil
 }
 
-const listPendingAgentMessageIDs = `-- name: ListPendingAgentMessageIDs :many
-SELECT id FROM messages
-WHERE user_id = $1 AND sequence IS NULL
-ORDER BY id
-`
-
-func (q *Queries) ListPendingAgentMessageIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listPendingAgentMessageIDs, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listRunnableAgents = `-- name: ListRunnableAgents :many
-SELECT candidates.user_id FROM (
-    SELECT user_id FROM messages WHERE sequence IS NULL
-    UNION
-    SELECT user_id FROM steps WHERE finished_at IS NULL
-    UNION
-    SELECT user_id FROM model_calls WHERE outcome = 'in_flight'
-) AS candidates
-ORDER BY candidates.user_id
+SELECT user_id FROM main_work ORDER BY user_id
 `
 
 func (q *Queries) ListRunnableAgents(ctx context.Context) ([]uuid.UUID, error) {
@@ -501,19 +349,21 @@ const lockUserMessages = `-- name: LockUserMessages :exec
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || $1::uuid::text, 0))
 `
 
-// 本文件是消息与 Agent 运行时的核心查询集合：消息写入与投递、上下文读取、步骤推进和运行时锁，是对话主循环的数据基础（sqlc 据此生成代码）。
+// 本文件是消息与 Agent 运行时的核心查询集合：消息写入与读取、上下文读取、步骤记账、运行时锁与“是否有活”判断，是对话主循环的数据基础（sqlc 据此生成代码）。
 // 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
 func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockUserMessages, userID)
 	return err
 }
 
-const markMessageRead = `-- name: MarkMessageRead :exec
-UPDATE messages SET sequence = nextval('message_sequence') WHERE id = $1
+const markMainFailed = `-- name: MarkMainFailed :exec
+UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = $1::uuid)
+WHERE id = $1::uuid
 `
 
-func (q *Queries) MarkMessageRead(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, markMessageRead, id)
+// 记下失败时最后一条消息的序号，之后有新消息才再次运行。
+func (q *Queries) MarkMainFailed(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markMainFailed, userID)
 	return err
 }
 
@@ -523,47 +373,6 @@ SELECT pg_notify('user_messages', $1::uuid::text)
 
 func (q *Queries) NotifyUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, notifyUserMessages, userID)
-	return err
-}
-
-const recoverCompactSteps = `-- name: RecoverCompactSteps :exec
-UPDATE steps SET finished_at = now(), error = 'compaction interrupted before commit'
-WHERE user_id = $1
- AND purpose = 'compact' AND finished_at IS NULL
-`
-
-func (q *Queries) RecoverCompactSteps(ctx context.Context, userID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, recoverCompactSteps, userID)
-	return err
-}
-
-const saveCompactedContextSize = `-- name: SaveCompactedContextSize :exec
-UPDATE model_calls SET context_tokens_after = $2 WHERE step_id = $1 AND purpose = 'compact' AND outcome = 'succeeded'
-`
-
-type SaveCompactedContextSizeParams struct {
-	StepID             uuid.UUID
-	ContextTokensAfter *int32
-}
-
-func (q *Queries) SaveCompactedContextSize(ctx context.Context, arg SaveCompactedContextSizeParams) error {
-	_, err := q.db.Exec(ctx, saveCompactedContextSize, arg.StepID, arg.ContextTokensAfter)
-	return err
-}
-
-const saveStepModelReply = `-- name: SaveStepModelReply :exec
-UPDATE steps SET model_reply = $1::jsonb
-WHERE id = $2 AND model_reply IS NULL
-`
-
-type SaveStepModelReplyParams struct {
-	Payload []byte
-	StepID  uuid.UUID
-}
-
-// 只在尚未保存时写入，恢复过程不会覆盖第一次拿到的回复。
-func (q *Queries) SaveStepModelReply(ctx context.Context, arg SaveStepModelReplyParams) error {
-	_, err := q.db.Exec(ctx, saveStepModelReply, arg.Payload, arg.StepID)
 	return err
 }
 

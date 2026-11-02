@@ -68,23 +68,6 @@ func (q *Queries) FinishModelCall(ctx context.Context, arg FinishModelCallParams
 	return result.RowsAffected(), nil
 }
 
-const hasAgentExecutionWork = `-- name: HasAgentExecutionWork :one
-SELECT EXISTS (
- SELECT 1 FROM messages AS m WHERE m.user_id = $1
-  AND m.sequence IS NULL
- UNION ALL
- SELECT 1 FROM steps AS s WHERE s.user_id = $1
-  AND s.finished_at IS NULL
-) AS has_work
-`
-
-func (q *Queries) HasAgentExecutionWork(ctx context.Context, userID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasAgentExecutionWork, userID)
-	var has_work bool
-	err := row.Scan(&has_work)
-	return has_work, err
-}
-
 const interruptModelCalls = `-- name: InterruptModelCalls :exec
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = $1
@@ -117,7 +100,7 @@ type StartModelCallParams struct {
 	StepID                 uuid.UUID
 }
 
-// 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断，并判断 Agent 是否还有待执行的步骤（sqlc 据此生成代码）。
+// 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断（sqlc 据此生成代码）。
 func (q *Queries) StartModelCall(ctx context.Context, arg StartModelCallParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, startModelCall,
 		arg.RequestedModel,

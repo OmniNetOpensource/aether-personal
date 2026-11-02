@@ -13,10 +13,9 @@ import (
 )
 
 const getHistoryMessage = `-- name: GetHistoryMessage :one
-SELECT m.id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at, m.search_text
+SELECT m.id, m.role, m.sender, m.is_summary, m.sequence, m.created_at, m.search_text
 FROM messages AS m
 WHERE m.user_id = $1
- AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
  AND m.id = $2
 `
 
@@ -53,7 +52,7 @@ func (q *Queries) GetHistoryMessage(ctx context.Context, arg GetHistoryMessagePa
 
 const searchMessagesByKeyword = `-- name: SearchMessagesByKeyword :many
 
-SELECT m.id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS sequence, m.created_at,
+SELECT m.id, m.role, m.sender, m.is_summary, m.sequence, m.created_at,
     CASE WHEN (length(lower(m.search_text)) - length(replace(lower(m.search_text), lower($1::text), ''))) > 0
         THEN (length(lower(m.search_text)) - length(replace(lower(m.search_text), lower($1::text), ''))) / length($1::text)
         ELSE 0 END::bigint AS keyword_hits,
@@ -61,13 +60,12 @@ SELECT m.id, m.role, m.sender, m.is_summary, coalesce(m.sequence, 0)::bigint AS 
         ELSE substring(m.search_text FROM greatest(1, strpos(lower(m.search_text), lower($1::text)) - 200) FOR 600) END::text AS excerpt
 FROM messages AS m
 WHERE m.user_id = $2
- AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
  AND m.search_text <> ''
  AND ($1::text = '' OR strpos(lower(m.search_text), lower($1::text)) > 0)
  AND ($3::text = 'any'
    OR ($3::text = 'user' AND m.sender = 'user')
    OR ($3::text = 'main' AND (m.role = 'assistant' OR m.sender = 'main')))
-ORDER BY keyword_hits DESC, m.sequence DESC NULLS LAST, m.id DESC
+ORDER BY keyword_hits DESC, m.sequence DESC, m.id DESC
 LIMIT $4::integer
 `
 

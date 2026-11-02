@@ -1,4 +1,4 @@
--- 本文件是消息与 Agent 运行时的核心查询集合：消息写入与投递、上下文读取、步骤推进和运行时锁，是对话主循环的数据基础（sqlc 据此生成代码）。
+-- 本文件是消息与 Agent 运行时的核心查询集合：消息写入与读取、上下文读取、步骤记账、运行时锁与“是否有活”判断，是对话主循环的数据基础（sqlc 据此生成代码）。
 
 -- name: LockUserMessages :exec
 -- 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
@@ -14,10 +14,9 @@ SELECT pg_advisory_unlock(hashtextextended(sqlc.arg(lock_key)::text, 0));
 SELECT pg_notify('user_messages', sqlc.arg(user_id)::uuid::text);
 
 -- name: InsertUserMessage :execrows
-INSERT INTO messages (user_id, sequence, role, content, sender, client_message_id, visible)
+INSERT INTO messages (user_id, role, content, sender, client_message_id, visible)
 VALUES (
     sqlc.arg(user_id),
-    NULL,
     'user',
     sqlc.arg(content)::jsonb,
     'user',
@@ -30,43 +29,17 @@ ON CONFLICT (user_id, client_message_id) DO NOTHING;
 INSERT INTO messages (user_id, role, content, step_id, sender, visible)
 VALUES ($1, $2, $3, $4, $5, $6);
 
--- name: HasStepAssistantMessage :one
-SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = sqlc.arg(step_id) AND role = 'assistant');
-
--- name: HasStepToolResult :one
-SELECT EXISTS (SELECT 1 FROM messages WHERE step_id = sqlc.arg(step_id) AND role = 'tool' AND content->>'tool_call_id' = sqlc.arg(tool_call_id)::text);
-
--- name: ListPendingAgentMessageIDs :many
-SELECT id FROM messages
-WHERE user_id = sqlc.arg(user_id) AND sequence IS NULL
-ORDER BY id;
-
--- name: MarkMessageRead :exec
-UPDATE messages SET sequence = nextval('message_sequence') WHERE id = $1;
-
 -- name: ListRunnableAgents :many
-SELECT candidates.user_id FROM (
-    SELECT user_id FROM messages WHERE sequence IS NULL
-    UNION
-    SELECT user_id FROM steps WHERE finished_at IS NULL
-    UNION
-    SELECT user_id FROM model_calls WHERE outcome = 'in_flight'
-) AS candidates
-ORDER BY candidates.user_id;
+SELECT user_id FROM main_work ORDER BY user_id;
 
--- name: ListAgentContext :many
-WITH summary AS (
- SELECT id, summary_through_sequence FROM messages
- WHERE user_id = sqlc.arg(user_id) AND is_summary
- ORDER BY sequence DESC LIMIT 1
-)
-SELECT m.content FROM messages AS m
-WHERE m.user_id = sqlc.arg(user_id)
- AND m.sequence IS NOT NULL AND (
-  m.id = (SELECT id FROM summary)
-  OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
- )
-ORDER BY m.is_summary DESC, m.sequence;
+-- name: HasMainWork :one
+-- 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
+SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid);
+
+-- name: MarkMainFailed :exec
+-- 记下失败时最后一条消息的序号，之后有新消息才再次运行。
+UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = sqlc.arg(user_id)::uuid)
+WHERE id = sqlc.arg(user_id)::uuid;
 
 -- name: ListAgentContextRows :many
 WITH summary AS (
@@ -74,9 +47,9 @@ WITH summary AS (
  WHERE user_id = sqlc.arg(user_id) AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.content, m.is_summary, m.sender FROM messages AS m
+SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id)
- AND m.sequence IS NOT NULL AND (
+ AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))
  )
@@ -86,11 +59,6 @@ ORDER BY m.is_summary DESC, m.sequence;
 INSERT INTO steps (user_id, model, started_at)
 VALUES ($1, $2, now())
 RETURNING id;
-
--- name: GetUnfinishedStep :one
-SELECT id FROM steps
-WHERE user_id = sqlc.arg(user_id) AND finished_at IS NULL AND purpose = 'agent'
-ORDER BY started_at LIMIT 1;
 
 -- name: FinishStep :exec
 UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now() WHERE id = $1;
@@ -117,31 +85,9 @@ WHERE user_id = $1
 ORDER BY id DESC
 LIMIT 1;
 
--- name: GetReadUpTo :one
-SELECT id FROM messages
-WHERE user_id = $1 AND sender = 'user' AND sequence IS NOT NULL
-ORDER BY id DESC
-LIMIT 1;
-
--- name: IsMainThinking :one
-SELECT EXISTS (
-    SELECT 1 FROM steps AS main_step
-    WHERE main_step.user_id = sqlc.arg(user_id)::uuid
-        AND main_step.finished_at IS NULL
-    UNION ALL
-    SELECT 1 FROM messages AS main_message
-    WHERE main_message.user_id = sqlc.arg(user_id)::uuid
-        AND main_message.sequence IS NULL
-);
-
 -- name: StartCompactStep :one
 INSERT INTO steps (user_id, model, started_at, purpose)
 VALUES ($1, $2, now(), 'compact') RETURNING id;
-
--- name: RecoverCompactSteps :exec
-UPDATE steps SET finished_at = now(), error = 'compaction interrupted before commit'
-WHERE user_id = sqlc.arg(user_id)
- AND purpose = 'compact' AND finished_at IS NULL;
 
 -- name: InsertContextSummary :exec
 INSERT INTO messages (user_id, role, content, step_id, is_summary, summary_through_sequence)
@@ -152,21 +98,3 @@ SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM model_calls WHERE user_id = sqlc.arg(user_id)
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL
 ORDER BY started_at DESC LIMIT 1;
-
--- name: HasStepCurrentTime :one
-SELECT EXISTS (
-    SELECT 1 FROM messages
-    WHERE step_id = sqlc.arg(step_id) AND content ->> 'name' = 'current_time'
-);
-
--- name: SaveCompactedContextSize :exec
-UPDATE model_calls SET context_tokens_after = $2 WHERE step_id = $1 AND purpose = 'compact' AND outcome = 'succeeded';
-
--- name: GetStepModelReply :one
--- 进程中断后复用已保存的模型回复，避免同一步骤再次请求模型。
-SELECT model_reply FROM steps WHERE id = sqlc.arg(step_id);
-
--- name: SaveStepModelReply :exec
--- 只在尚未保存时写入，恢复过程不会覆盖第一次拿到的回复。
-UPDATE steps SET model_reply = sqlc.arg(payload)::jsonb
-WHERE id = sqlc.arg(step_id) AND model_reply IS NULL;

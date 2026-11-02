@@ -25,7 +25,7 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-// agentRequest 组装一次 Agent 请求：指令注入加当前世代的原生消息，发出前先过工具配对与尾巴检查。
+// agentRequest 组装一次 Agent 请求：指令注入加按组装规则排好的当前世代消息，发出前先过工具配对与尾巴检查。
 func (r *Runner) agentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
 	messages := buildRequestMessages(rows)
 	if err := validateRequestMessages(messages); err != nil {

@@ -35,8 +35,8 @@ FROM schedules WHERE user_id = $1 AND id = $2
 FOR UPDATE SKIP LOCKED;
 
 -- name: DeliverScheduleMessage :one
-INSERT INTO messages (user_id, sequence, role, content, sender)
-VALUES ($1, NULL, 'user', $2, 'system') RETURNING id;
+INSERT INTO messages (user_id, role, content, sender)
+VALUES ($1, 'user', $2, 'system') RETURNING id;
 
 -- name: InsertScheduleOccurrence :exec
 INSERT INTO schedule_occurrences (id, schedule_id, schedule_version, scheduled_for, delivered_at, context, trigger_message_id)

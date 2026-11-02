@@ -1,16 +1,16 @@
-// 本文件集中存放全部发给模型的静态指令文本：Main 创建时落库的不可见指令、上下文压缩提示、运行时注入的提醒与带占位的动态模板，是模型行为契约的文字来源；工具定义仍在 tools.go 与参数结构一同登记。
+// 本文件集中存放全部发给模型的静态指令文本：每次请求注入的固定指令、上下文压缩提示、组装时插入的提醒与带占位的动态模板，是模型行为契约的文字来源；工具定义仍在 tools.go 与参数结构一同登记。
 
 package agent
 
-// 运行时不可见 user 消息用 name 区分用途，模型请求与交付、进度判断都按它识别，不再使用 system 角色。
+// 组装请求时注入的不可见 user 消息用 name 标明用途，不使用 system 角色。
 const (
 	instructionsMessageName     = "instructions"
 	currentTimeMessageName      = "current_time"
 	progressReminderMessageName = "progress_reminder"
 )
 
-// mainInstructions 是每次请求第一条以不可见 user 消息注入的固定指令，不落库；改动随代码部署对全部 Main 生效。
-const mainInstructions = `You are Aether (阿芒 in Chinese), a personal agent. Each person you work with has exactly one
+// MainInstructions 是每次请求第一条以不可见 user 消息注入的固定指令，不落库；改动随代码部署对全部 Main 生效，看板时间线也展示这份原文。
+const MainInstructions = `You are Aether (阿芒 in Chinese), a personal agent. Each person you work with has exactly one
 conversation with you, and it never resets: the same relationship continues
 across days, months, and years. Older parts of the conversation may appear as
 summaries; treat them as your own memory of what happened.
@@ -134,8 +134,8 @@ const compactSummaryLengthPrompt = " Keep the summary text below %d tokens; shor
 // contextSummaryPrompt 是落库摘要正文的开头，告诉接手模型这段是历史摘要、只作参考并继续未完成的任务。
 const contextSummaryPrompt = "Historical context summary. Use as reference; continue the outstanding task.\n\n"
 
-// progressReminder 是插入上下文的提醒原文。用整段文字识别已经插入过的提醒，避免再数成一轮工具。
+// progressReminder 是组装请求时插在连续多轮无正文工具调用之后的提醒原文。
 const progressReminder = `Runtime progress check: several tool rounds have passed with no assistant text, so the user has not heard from you. In this reply, write a short user-facing update about what you have learned and what you are doing next, then continue the work. You may call tools in the same reply. Do not end the task. Do not repeat an update you already sent. A progress update does not replace the final result.`
 
-// currentTimePrompt 是一条独立不可见 user 消息的当前时间正文，%s 由运行时填充 UTC 时间；它只追加在消息尾部，不写回第一条指令。
+// currentTimePrompt 是紧跟每条用户消息的时间正文，%s 填这条用户消息入库时的 UTC 时间。
 const currentTimePrompt = "Current time (UTC): %s"

@@ -100,8 +100,8 @@ func (q *Queries) DeleteSchedule(ctx context.Context, arg DeleteScheduleParams) 
 }
 
 const deliverScheduleMessage = `-- name: DeliverScheduleMessage :one
-INSERT INTO messages (user_id, sequence, role, content, sender)
-VALUES ($1, NULL, 'user', $2, 'system') RETURNING id
+INSERT INTO messages (user_id, role, content, sender)
+VALUES ($1, 'user', $2, 'system') RETURNING id
 `
 
 type DeliverScheduleMessageParams struct {

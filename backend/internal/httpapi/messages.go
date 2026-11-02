@@ -1,18 +1,16 @@
-// 本文件负责聊天历史的读取与转换：分页查询消息、转换成前端使用的消息结构，并计算已读位置。
+// 本文件负责聊天历史的读取与转换：分页查询消息，并转换成前端使用的消息结构。
 
 package httpapi
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 const historyPageSize = 50
@@ -29,7 +27,6 @@ type chatMessage struct {
 
 type chatMessages struct {
 	Messages []chatMessage `json:"messages"`
-	ReadUpTo *uuid.UUID    `json:"read_up_to"`
 }
 
 // historyPage 从 before 往前取一页用户可见消息，供 ready、authenticated 与 history 事件共用。
@@ -52,12 +49,7 @@ func (s *server) historyPage(ctx context.Context, userID uuid.UUID, before uuid.
 		before = rows[len(rows)-1].ID
 	}
 	slices.Reverse(rowsNewestFirst)
-
-	readUpTo, err := s.readUpTo(ctx, userID)
-	if err != nil {
-		return chatMessages{}, err
-	}
-	return chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rowsNewestFirst), ReadUpTo: readUpTo}, nil
+	return chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rowsNewestFirst)}, nil
 }
 
 func chatMessagesFromRows(rows []database.ListChatRowsAfterRow) []chatMessage {
@@ -106,15 +98,4 @@ func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
 		Text:      text,
 		CreatedAt: row.CreatedAt,
 	}}
-}
-
-func (s *server) readUpTo(ctx context.Context, userID uuid.UUID) (*uuid.UUID, error) {
-	messageID, err := s.queries.GetReadUpTo(ctx, userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &messageID, nil
 }

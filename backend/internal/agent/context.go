@@ -1,23 +1,23 @@
-// 本文件负责把数据库消息组装成模型请求：第一条注入固定指令，其后是上一个 compact 以来的原生消息；发出前修复缺失的工具回执，并确认最后一条能由模型回应。
+// 本文件负责把数据库消息组装成模型请求，并从消息尾部判断 Main 下一步该做什么：第一条注入固定指令，其后是上一个 compact 以来的原生消息，
+// 每组工具回执紧跟它的调用，时间与进度提醒在组装时按历史现算、不落库，所以同一段历史每次组装出的前缀都一样。
 
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// silentToolRoundsBeforeReminder 是从最近一条用户消息或 Main 的可见正文算起，连续多少轮只调工具后插入一次进度提醒。
+const silentToolRoundsBeforeReminder = 4
 
 // parsedContextMessage 是组装上下文时从一条已存消息里读出的共用字段。
 type parsedContextMessage struct {
 	Role       string          `json:"role"`
-	Name       string          `json:"name"`
 	Content    json.RawMessage `json:"content"`
 	ToolCalls  []toolCall      `json:"tool_calls"`
 	ToolCallID string          `json:"tool_call_id"`
@@ -30,25 +30,17 @@ func parseContextMessage(raw json.RawMessage) parsedContextMessage {
 	return message
 }
 
-// loadContextRows 读入该用户 Main 当前世代的上下文行，供组装与压缩共用同一份顺序。
-func loadContextRows(ctx context.Context, queries *database.Queries, userID uuid.UUID) ([]database.ListAgentContextRowsRow, error) {
-	return queries.ListAgentContextRows(ctx, userID)
-}
-
-// instructionsMessage 是每次请求第一条注入的不可见 user 消息：固定指令不以 system 角色发送，也不落库，改动随代码部署对全部 Main 生效。
-func instructionsMessage() json.RawMessage {
-	raw, _ := json.Marshal(map[string]string{"role": "user", "name": instructionsMessageName, "content": mainInstructions})
+// runtimeMessage 生成一条运行时注入的不可见 user 消息，用 name 标明用途；它只存在于请求里，不落库。
+func runtimeMessage(name, content string) json.RawMessage {
+	raw, _ := json.Marshal(map[string]string{"role": "user", "name": name, "content": content})
 	return raw
 }
 
-// contextRequestMessage 把一条已存消息转成请求中的原生消息：旧落库指令行跳过（指令已由第一条注入替代），其余只删前端展示字段，正文、工具调用与渠道原生字段原样保留。
-func contextRequestMessage(row database.ListAgentContextRowsRow) (json.RawMessage, bool) {
-	if parseContextMessage(row.Content).Name == instructionsMessageName {
-		return nil, false
-	}
+// requestMessage 把一条已存消息转成请求中的原生消息：只删前端展示字段，正文、工具调用与渠道原生字段原样保留。
+func requestMessage(row database.ListAgentContextRowsRow) json.RawMessage {
 	var message map[string]json.RawMessage
 	if json.Unmarshal(row.Content, &message) != nil {
-		return row.Content, true
+		return row.Content
 	}
 	// 界面引用位置和文件名只用于历史展示，不发送给模型供应商。
 	delete(message, "user_text")
@@ -56,68 +48,75 @@ func contextRequestMessage(row database.ListAgentContextRowsRow) (json.RawMessag
 	delete(message, "image_names")
 	delete(message, "parts")
 	raw, _ := json.Marshal(message)
-	return raw, true
+	return raw
 }
 
-// buildRequestMessages 组装一次普通请求：第一条是指令注入，其后是当前世代每条消息的原生形态，最后修复缺失的工具回执。
-func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
-	messages := []json.RawMessage{instructionsMessage()}
+// assembleMessages 按组装规则把当前世代的消息排成请求顺序，普通请求与压缩请求共用：
+// 每个工具调用的回执紧跟在它的 assistant 之后（工具执行期间到达的用户消息因此排在回执之后），
+// 每条用户发来的消息后接一条当时的时间，连续每满 4 轮没有可见正文的工具调用后插一条进度提醒。
+func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
+	results := map[string]json.RawMessage{}
 	for _, row := range rows {
-		if raw, ok := contextRequestMessage(row); ok {
-			messages = append(messages, raw)
+		if message := parseContextMessage(row.Content); message.Role == "tool" {
+			results[message.ToolCallID] = requestMessage(row)
 		}
 	}
-	return repairMissingToolResults(messages)
+	messages := []json.RawMessage{}
+	silentToolRounds := 0
+	for _, row := range rows {
+		message := parseContextMessage(row.Content)
+		switch message.Role {
+		case "tool":
+			continue
+		case "user":
+			messages = append(messages, requestMessage(row))
+			// 时间取这条消息自己的入库时间，同一条消息每次组装出的时间都一样，不破坏前缀缓存。
+			if row.Sender != nil && *row.Sender == "user" {
+				messages = append(messages, runtimeMessage(currentTimeMessageName, fmt.Sprintf(currentTimePrompt, row.CreatedAt.UTC().Format(time.RFC3339))))
+				silentToolRounds = 0
+			}
+		case "assistant":
+			messages = append(messages, requestMessage(row))
+			seen := map[string]bool{}
+			for _, call := range message.ToolCalls {
+				if result, ok := results[call.ID]; ok && !seen[call.ID] {
+					messages = append(messages, result)
+				}
+				seen[call.ID] = true
+			}
+			// Main 写了可见正文就重新计数；只有没有正文的工具轮才累计，满 4 轮插一次提醒。
+			if AssistantTextToUser(row.Content) != "" {
+				silentToolRounds = 0
+				continue
+			}
+			if len(message.ToolCalls) == 0 {
+				continue
+			}
+			silentToolRounds++
+			if silentToolRounds == silentToolRoundsBeforeReminder {
+				messages = append(messages, runtimeMessage(progressReminderMessageName, progressReminder))
+				silentToolRounds = 0
+			}
+		}
+	}
+	return messages
 }
 
-// buildCompactRequestMessages 组装一次压缩请求：压缩指令作为不可见 user 消息在前，待压历史保持原生形态，末尾一条用户消息提出摘要要求。
+// buildRequestMessages 组装一次普通请求：第一条是固定指令，其后是按组装规则排好的当前世代消息。
+func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
+	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, MainInstructions)}, assembleMessages(rows)...)
+}
+
+// buildCompactRequestMessages 组装一次压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，末尾一条用户消息提出摘要要求。
 func buildCompactRequestMessages(rows []database.ListAgentContextRowsRow, summaryPrompt string) []json.RawMessage {
 	compactInstructionsMessage, _ := json.Marshal(map[string]string{"role": "user", "content": compactInstructions})
-	messages := []json.RawMessage{compactInstructionsMessage}
-	for _, row := range rows {
-		if raw, ok := contextRequestMessage(row); ok {
-			messages = append(messages, raw)
-		}
-	}
-	messages = repairMissingToolResults(messages)
 	summaryRequestMessage, _ := json.Marshal(map[string]string{"role": "user", "content": summaryPrompt})
+	messages := append([]json.RawMessage{compactInstructionsMessage}, assembleMessages(rows)...)
 	return append(messages, summaryRequestMessage)
 }
 
-// repairMissingToolResults 在内存里给缺回执的工具调用补一条中断回执，紧跟在对应的 assistant 之后，保证发出的请求满足供应商对 tool_call_id 配对的要求；落库历史不改，真正的恢复仍由运行循环按回执重跑或收尾补齐。
-func repairMissingToolResults(messages []json.RawMessage) []json.RawMessage {
-	repaired := make([]json.RawMessage, 0, len(messages))
-	for index, raw := range messages {
-		repaired = append(repaired, raw)
-		message := parseContextMessage(raw)
-		if message.Role != "assistant" || len(message.ToolCalls) == 0 {
-			continue
-		}
-		// 先收集紧随其后的已有回执，缺哪个调用就补哪个的中断回执。
-		existing := map[string]bool{}
-		for _, following := range messages[index+1:] {
-			followingMessage := parseContextMessage(following)
-			if followingMessage.Role != "tool" {
-				break
-			}
-			existing[followingMessage.ToolCallID] = true
-		}
-		for _, call := range message.ToolCalls {
-			if existing[call.ID] {
-				continue
-			}
-			interrupted, _ := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": "Error: execution was interrupted before this tool call completed."})
-			repaired = append(repaired, interrupted)
-		}
-	}
-	return repaired
-}
-
-// validateRequestMessages 是发出请求前的最后一道检查：每个工具调用都有回执，且最后一条是 user 或 tool（有待模型回应的内容）；最后一条是已结束的 assistant 说明已经回复完毕，不应再发请求。
+// validateRequestMessages 是发给模型供应商前的最后一道检查：每个工具调用都有回执，且最后一条是 user 或 tool（有待模型回应的内容）。
 func validateRequestMessages(messages []json.RawMessage) error {
-	if len(messages) == 0 {
-		return fmt.Errorf("model request has no messages")
-	}
 	called := map[string]bool{}
 	answered := map[string]bool{}
 	for _, raw := range messages {
@@ -141,36 +140,33 @@ func validateRequestMessages(messages []json.RawMessage) error {
 	return nil
 }
 
-// ensureCurrentTimeMessage 在领到新消息的步骤第一次准备请求时，把当前时间作为一条不可见 user 消息追加到尾部；同一步重试复用已存的那条。
-func (r *Runner) ensureCurrentTimeMessage(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, rows []database.ListAgentContextRowsRow) ([]database.ListAgentContextRowsRow, error) {
-	if stepID == uuid.Nil {
-		return rows, nil
-	}
-	queries := database.New(connection)
-	exists, err := queries.HasStepCurrentTime(ctx, &stepID)
-	if err != nil || exists {
-		return rows, err
-	}
-	content, _ := json.Marshal(map[string]string{"role": "user", "name": currentTimeMessageName, "content": fmt.Sprintf(currentTimePrompt, time.Now().UTC().Format(time.RFC3339))})
-	sender := "system"
-	err = pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
-		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, userID); err != nil {
-			return err
+// pendingToolCalls 从消息尾部找出最后一条 assistant 里还没有回执的工具调用，连同产生它的步骤一起返回；
+// 正常情况下这是刚保存的模型回复，进程中断后重启时则是上次没跑完的那批工具。
+func pendingToolCalls(rows []database.ListAgentContextRowsRow) ([]toolCall, uuid.UUID) {
+	answered := map[string]bool{}
+	for index := len(rows) - 1; index >= 0; index-- {
+		message := parseContextMessage(rows[index].Content)
+		if message.Role == "tool" {
+			answered[message.ToolCallID] = true
+			continue
 		}
-		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "user", Content: content, StepID: &stepID, Sender: &sender})
-	})
-	if err != nil {
-		return nil, err
+		if message.Role != "assistant" {
+			continue
+		}
+		// 同一调用 ID 重复出现时只执行第一个，避免历史里出现两条同号回执。
+		pending := []toolCall{}
+		for _, call := range message.ToolCalls {
+			if !answered[call.ID] {
+				pending = append(pending, call)
+				answered[call.ID] = true
+			}
+		}
+		return pending, *rows[index].StepID
 	}
-	return loadContextRows(ctx, queries, userID)
+	return nil, uuid.Nil
 }
 
-// rawContextMessages 只取出上下文行的原始 JSON，供进度提醒等仍按单条消息判断的逻辑使用。
-func rawContextMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
-	messages := make([]json.RawMessage, len(rows))
-	for index, row := range rows {
-		messages[index] = row.Content
-	}
-	return messages
+// needsReply 判断 Main 是否该调用模型：最后一条消息是用户消息、摘要或工具回执时需要回应，是 assistant 说明已经回复完毕。
+func needsReply(rows []database.ListAgentContextRowsRow) bool {
+	return len(rows) > 0 && parseContextMessage(rows[len(rows)-1].Content).Role != "assistant"
 }

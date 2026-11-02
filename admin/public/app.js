@@ -294,7 +294,7 @@ function timelinePage(content) {
   const email = state.snapshot.users.items.find((user) => user.id === state.user)?.email ?? state.user;
   const list = el('ol', 'timeline');
   if (timeline.system_prompt) {
-    const node = timelineNode('runtime', '不可见指令', timeline.system_prompt.from_call_at, [el('span', 'timeline-meta', '落库的第一条 user 消息，同一世代内不改动')]);
+    const node = timelineNode('runtime', '不可见指令', null, [el('span', 'timeline-meta', '每次请求的第一条 user 消息，不落库，随部署生效')]);
     node.append(foldable('instructions', '展开查看', timeline.system_prompt.text)); list.append(node);
   }
   const results = new Map(timeline.items.filter((item) => item.role === 'tool').map((item) => [item.tool_call_id, item]));

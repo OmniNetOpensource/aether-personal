@@ -21,12 +21,12 @@ WITH calls AS (
   AND ($6::text IS NULL OR c.outcome = $6::text)
   AND ($7::text = '' OR strpos(lower(u.email), lower($7::text)) > 0)
 ), legacy AS (
- SELECT s.id, s.user_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.model_reply, s.purpose FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
+ SELECT s.id, s.user_id, s.model, s.input_tokens, s.output_tokens, s.cost, s.error, s.started_at, s.finished_at, s.purpose FROM steps s JOIN users u ON u.id = s.user_id WHERE s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
   AND ($4::uuid IS NULL OR s.user_id = $4::uuid)
   AND ($5::text IS NULL OR s.model = $5::text)
   AND $6::text IS NULL
   AND ($7::text = '' OR strpos(lower(u.email), lower($7::text)) > 0)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id)
 ), buckets AS (
  SELECT generate_series(date_trunc($3::text, $1::timestamptz, 'UTC'),
@@ -124,33 +124,11 @@ func (q *Queries) GetAdminTimelineMessage(ctx context.Context, id uuid.UUID) (Ge
 	return i, err
 }
 
-const getAdminTimelineSystemPrompt = `-- name: GetAdminTimelineSystemPrompt :one
-SELECT created_at AS started_at, (content ->> 'content')::text AS prompt
-FROM messages
-WHERE user_id = $1
- AND content ->> 'name' = 'instructions'
-ORDER BY id DESC LIMIT 1
-`
-
-type GetAdminTimelineSystemPromptRow struct {
-	StartedAt time.Time
-	Prompt    string
-}
-
-// 不可见指令就是该 Agent 消息列表中的 instructions 行，取最近一份原文展示。
-func (q *Queries) GetAdminTimelineSystemPrompt(ctx context.Context, userID uuid.UUID) (GetAdminTimelineSystemPromptRow, error) {
-	row := q.db.QueryRow(ctx, getAdminTimelineSystemPrompt, userID)
-	var i GetAdminTimelineSystemPromptRow
-	err := row.Scan(&i.StartedAt, &i.Prompt)
-	return i, err
-}
-
 const listAdminAgents = `-- name: ListAdminAgents :many
 WITH agents AS (
  SELECT NULL::uuid AS id,u.id AS user_id,u.email,u.created_at,
-   CASE WHEN EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
-     OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL)
-     THEN 'processing' WHEN (SELECT s.error IS NOT NULL FROM steps s WHERE s.user_id=u.id ORDER BY s.started_at DESC,s.id DESC LIMIT 1)
+   CASE WHEN EXISTS(SELECT 1 FROM main_work w WHERE w.user_id=u.id)
+     THEN 'processing' WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id=u.id)
      THEN 'failed' ELSE 'idle' END AS status
  FROM users u WHERE u.id=$5::uuid
 ), page AS (
@@ -167,7 +145,7 @@ SELECT a.cursor_id AS id,a.created_at,jsonb_build_object('id',a.id,'kind','main'
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
  'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=a.user_id AND s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
   AND ($3::text IS NULL OR s.model = $3::text)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id))
 )::jsonb AS payload FROM page a CROSS JOIN LATERAL (
  SELECT count(*) AS attempts,count(*) FILTER(WHERE c.outcome IN ('http_error','transport_error','invalid_response')) AS failed,
@@ -343,7 +321,7 @@ func (q *Queries) ListAdminTimelineFailedCalls(ctx context.Context, arg ListAdmi
 }
 
 const listAdminTimelineMessages = `-- name: ListAdminTimelineMessages :many
-SELECT m.id, coalesce(m.sequence, 0)::bigint AS sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
+SELECT m.id, m.sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
  CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,
   'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
@@ -354,8 +332,7 @@ FROM messages m LEFT JOIN LATERAL (
  ORDER BY mc.started_at DESC LIMIT 1
 ) c ON true
 WHERE m.user_id = $1
- AND m.content ->> 'name' IS DISTINCT FROM 'instructions'
- AND m.sequence IS NOT NULL AND ($2::bigint IS NULL OR m.sequence < $2::bigint)
+ AND ($2::bigint IS NULL OR m.sequence < $2::bigint)
 ORDER BY m.sequence DESC LIMIT $3::integer
 `
 
@@ -376,7 +353,7 @@ type ListAdminTimelineMessagesRow struct {
 	Call      []byte
 }
 
-// 按 sequence 从新到旧取一页已读消息；模型输出附上产生它的那次成功请求。
+// 按 sequence 从新到旧取一页消息；模型输出附上产生它的那次成功请求。
 func (q *Queries) ListAdminTimelineMessages(ctx context.Context, arg ListAdminTimelineMessagesParams) ([]ListAdminTimelineMessagesRow, error) {
 	rows, err := q.db.Query(ctx, listAdminTimelineMessages, arg.UserID, arg.BeforeSequence, arg.PageLimit)
 	if err != nil {
@@ -408,15 +385,14 @@ func (q *Queries) ListAdminTimelineMessages(ctx context.Context, arg ListAdminTi
 
 const listAdminUsers = `-- name: ListAdminUsers :many
 WITH page AS (
- SELECT u.id, u.email, u.created_at FROM users u WHERE ($3::uuid IS NULL OR u.id=$3::uuid)
+ SELECT u.id, u.email, u.created_at, u.main_failed_through_sequence FROM users u WHERE ($3::uuid IS NULL OR u.id=$3::uuid)
  AND ($6::text='' OR strpos(lower(u.email),lower($6::text))>0)
  AND ($7::timestamptz IS NULL OR (u.created_at,u.id)<($7::timestamptz,$8::uuid))
  ORDER BY u.created_at DESC,u.id DESC LIMIT $9::integer
 )
 SELECT u.id,u.created_at,jsonb_build_object('id',u.id,'email',u.email,'created_at',u.created_at,
  'last_activity_at',(SELECT max(s.started_at) FROM steps s WHERE s.user_id=u.id),
- 'main_active',EXISTS(SELECT 1 FROM steps s WHERE s.user_id=u.id AND s.finished_at IS NULL)
-   OR EXISTS(SELECT 1 FROM messages m WHERE m.user_id=u.id AND m.sequence IS NULL),
+ 'main_active',EXISTS(SELECT 1 FROM main_work w WHERE w.user_id=u.id),
  'attempts',stats.attempts,'failed',stats.failed,'input_tokens',stats.input_tokens,'output_tokens',stats.output_tokens,
  'cost_known_usd',stats.cost_known_usd,'cost_unknown',stats.cost_unknown,
  'legacy_steps',(SELECT count(*) FROM steps s WHERE s.user_id=u.id AND s.started_at >= $1::timestamptz AND s.started_at < $2::timestamptz
@@ -424,7 +400,7 @@ SELECT u.id,u.created_at,jsonb_build_object('id',u.id,'email',u.email,'created_a
   AND ($4::text IS NULL OR s.model = $4::text)
   AND $5::text IS NULL
   AND ($6::text = '' OR strpos(lower(u.email), lower($6::text)) > 0)
-  AND (s.finished_at IS NOT NULL OR s.model_reply IS NOT NULL)
+  AND s.finished_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM model_calls mc WHERE mc.step_id = s.id))
 )::jsonb AS payload
 FROM page u CROSS JOIN LATERAL (

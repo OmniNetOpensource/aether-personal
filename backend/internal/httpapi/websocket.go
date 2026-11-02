@@ -277,7 +277,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					connection.Close(websocket.StatusPolicyViolation, "invalid send_message")
 					return
 				}
-				if !s.saveUserMessage(ctx, relay, userID, frame) {
+				if !s.saveUserMessage(ctx, relay, userID, frame, &position) {
 					return
 				}
 			case "load_history":
@@ -407,9 +407,10 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接也能被唤醒推送；成功后唤醒 agent 并回 delivered 确认。
+// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接也能被唤醒推送；成功后唤醒 agent，
+// 先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
-func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame) bool {
+func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, position *uuid.UUID) bool {
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
@@ -431,10 +432,13 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 	}
 
 	s.runner.Wake(userID)
+	if s.pushChatMessages(ctx, relay, userID, position) != nil {
+		return false
+	}
 	return relay.send(ctx, deliveredEvent{Type: "delivered", ClientMessageID: frame.ClientMessageID}) == nil
 }
 
-// pushChatMessages 把 position 之后的新消息一次性推给连接，并推进 position 作为下次推送的断点；同一事件还附带已读位置与 agent 工作状态，供前端一次更新列表与状态指示。
+// pushChatMessages 把 position 之后的新消息一次性推给连接，并推进 position 作为下次推送的断点；同一事件还附带 Main 是否在处理，供前端一次更新列表与状态指示。
 func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID uuid.UUID, position *uuid.UUID) error {
 	// 单页查询上限 100 行，循环取到不满页为止，避免积压较多时漏掉后面的消息。
 	var rows []database.ListChatRowsAfterRow
@@ -453,18 +457,13 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		}
 	}
 
-	readUpTo, err := s.readUpTo(ctx, userID)
-	if err != nil {
-		slog.Error("get read position failed", "user_id", userID, "error", err)
-		return err
-	}
-	mainThinking, err := s.queries.IsMainThinking(ctx, userID)
+	mainThinking, err := s.queries.HasMainWork(ctx, userID)
 	if err != nil {
 		slog.Error("get Main activity failed", "user_id", userID, "error", err)
 		return err
 	}
 	return relay.send(ctx, messagesEvent{
 		Type: "messages", MainThinking: mainThinking,
-		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows), ReadUpTo: readUpTo},
+		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows)},
 	})
 }

@@ -1,5 +1,5 @@
-// 本文件是 Agent 的执行调度中心：把数据库里“有消息待处理”的用户 Main
-// 一个个唤醒运行，保证同一个用户的 Main 同一时间只跑一处，模型回复落库后再推进下一步。
+// 本文件是 Agent 的执行调度中心：用户消息或工具回执入库后唤醒对应用户的 Main，保证同一个用户的 Main 同一时间只跑一处；
+// Main 被唤醒后只看消息表尾部决定下一步——补跑没有回执的工具、调用模型，或者已经回复完毕就结束。
 
 package agent
 
@@ -34,7 +34,7 @@ func runtimeLockKey(userID uuid.UUID) string {
 }
 
 // Runner 是进程内的执行调度器：它只持有连接池、配置和“谁正在跑”的临时登记，
-// 真正的待办队列始终在数据库里，所以进程重启后靠重新扫描就能恢复。
+// 要不要运行只由消息表尾部决定（见 main_work 视图），所以进程重启后靠重新扫描就能恢复。
 type Runner struct {
 	databasePool *pgxpool.Pool
 	settings     config.Config
@@ -58,7 +58,7 @@ func NewRunner(pool *pgxpool.Pool, settings config.Config, serviceSettings *serv
 	}
 }
 
-// Wake 在有新消息写入后敲一下调度循环，让它立刻重新扫队列；通道已满说明循环已被叫醒，不必排队。
+// Wake 在用户消息、日程消息入库后敲一下调度循环，让它立刻重新扫描；通道已满说明循环已被叫醒，不必排队。
 func (r *Runner) Wake(_ uuid.UUID) {
 	select {
 	case r.wakeSignal <- struct{}{}:
@@ -66,8 +66,8 @@ func (r *Runner) Wake(_ uuid.UUID) {
 	}
 }
 
-// Start 是常驻调度循环：被 Wake 叫醒或每秒定时醒来时，从数据库扫出待运行的 Agent 并逐个派发。
-// 数据库是队列的事实来源，所以这种扫描能补偿进程退出或通知丢失。
+// Start 是常驻调度循环：被 Wake 叫醒或每秒定时醒来时，从数据库扫出消息尾部需要 Main 处理的用户并逐个派发。
+// 消息表是唯一的事实来源，所以这种扫描能补偿进程退出、跨实例或通知丢失。
 func (r *Runner) Start(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -129,43 +129,41 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	if err != nil || !locked {
 		return false
 	}
-	keys := []string{runtimeLockKey(userID)}
-	// 收尾时按取得顺序的逆序释放全部咨询锁，并通知前端有新消息；释放失败就直接关连接，靠数据库会话结束兜底。
+	// 收尾时释放咨询锁，并通知前端刷新消息与思考状态；释放失败就直接关连接，靠数据库会话结束兜底。
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		for index := len(keys) - 1; index >= 0; index-- {
-			unlocked, err := queries.UnlockRuntime(cleanup, keys[index])
-			if err != nil || !unlocked {
-				connection.Conn().Close(cleanup)
-				return
-			}
+		unlocked, err := queries.UnlockRuntime(cleanup, runtimeLockKey(userID))
+		if err != nil || !unlocked {
+			connection.Conn().Close(cleanup)
+			return
 		}
 		if err := queries.NotifyUserMessages(cleanup, userID); err != nil {
 			slog.Error("notify agent activity failed", "user_id", userID, "error", err)
 		}
 	}()
-	// 先清理上次进程退出留下的未完成记录，避免它们把本次运行误判成还在进行中。
+	// 先收尾上次进程退出留下的记录：进行中的模型调用记为中断，未结束的步骤以中断收尾。
+	// 它们只供看板查看，不影响下面按消息尾部接着运行。
 	if err := queries.InterruptModelCalls(parent, userID); err != nil {
 		slog.Error("recover model call journal failed", "error", err)
 		return false
 	}
-	if err := queries.RecoverCompactSteps(parent, userID); err != nil {
-		slog.Error("recover compact steps failed", "error", err)
+	interrupted := "interrupted before the step finished"
+	if err := queries.FailUnfinishedSteps(parent, database.FailUnfinishedStepsParams{UserID: userID, Error: &interrupted}); err != nil {
+		slog.Error("recover unfinished steps failed", "error", err)
 		return false
 	}
-	// 没有待读消息就直接结束，让调度循环把名额让给其他 Agent。
-	hasWork, err := queries.HasAgentExecutionWork(parent, userID)
+	// 消息尾部已经回复完毕、或停在上次失败处，就直接结束，让调度循环把名额让给其他 Agent。
+	hasWork, err := queries.HasMainWork(parent, userID)
 	if err != nil {
-		slog.Error("check agent execution work failed", "error", err)
+		slog.Error("check Main work failed", "error", err)
 		return false
 	}
 	if !hasWork {
-		return true
+		return false
 	}
-	ctx := parent
-	// 真正干活的主循环在 runLoop；这里只分流它的结果：推迟不算失败，连接已断不重复记错，其余才落库为失败。
-	if err := r.runLoop(ctx, connection, userID); err != nil {
+	// 真正干活的主循环在 runLoop；这里只分流它的结果：进程退出或连接已断不记失败，下次按消息尾部接着跑，其余才落库为失败。
+	if err := r.runLoop(parent, connection, userID); err != nil {
 		if parent.Err() != nil || connection.Conn().IsClosed() {
 			return true
 		}
@@ -179,138 +177,37 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	return true
 }
 
-// prepareStep 为下一步模型调用做准备，一个事务里完成：优先续用未完成的步骤，
-// 把新到的待读消息标为已读，没有步骤且确有新消息时才新建步骤；返回零值表示暂时没活干。
-// 同时返回这一步刚领到的待读消息 ID，上下文准备靠它认出刚到的用户消息（见 compact.go 的新消息触发）。
-func (r *Runner) prepareStep(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
-	var stepID uuid.UUID
-	var newMessageIDs []uuid.UUID
-	err := pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
-		queries := database.New(tx)
-		var err error
-		stepID, err = queries.GetUnfinishedStep(ctx, userID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if err == nil {
-			stored, err := queries.GetStepModelReply(ctx, stepID)
-			if err != nil {
-				return err
-			}
-			if len(stored) != 0 {
-				return nil
-			}
-		}
-		pending, err := queries.ListPendingAgentMessageIDs(ctx, userID)
-		if err != nil {
-			return err
-		}
-		newMessageIDs = pending
-		for _, id := range pending {
-			if err := queries.MarkMessageRead(ctx, id); err != nil {
-				return err
-			}
-		}
-		if stepID == uuid.Nil {
-			if len(pending) == 0 {
-				stepID = uuid.Nil
-				return nil
-			}
-			stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel})
-		}
-		if err != nil {
-			return err
-		}
-		if len(pending) > 0 {
-			return queries.NotifyUserMessages(ctx, userID)
-		}
-		return nil
-	})
-	return stepID, newMessageIDs, err
-}
-
-// runLoop 是“准备步骤 → 调用模型 → 执行工具 → 保存回复”的循环，一轮处理一步，直到没有待处理消息为止。
+// runLoop 每一轮重读当前世代的消息，只按尾部决定下一步：最后一条 assistant 还有没回执的工具调用就并行执行它们，
+// 尾部是用户消息、摘要或齐全的工具回执就调用模型并保存回复，尾部是已结束的 assistant 就说明处理完毕。
+// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) error {
 	queries := database.New(connection)
-	// 每一轮先领一个步骤：领不到说明消息已处理完，直接退出等待下次唤醒。
 	for {
-		stepID, newMessageIDs, err := r.prepareStep(ctx, connection, userID)
+		rows, err := queries.ListAgentContextRows(ctx, userID)
 		if err != nil {
 			return err
 		}
-		if stepID == uuid.Nil {
+		if calls, stepID := pendingToolCalls(rows); len(calls) > 0 {
+			if err := r.executeToolCalls(ctx, connection, userID, stepID, calls); err != nil {
+				return err
+			}
+			continue
+		}
+		if !needsReply(rows) {
 			return nil
 		}
-		stored, err := queries.GetStepModelReply(ctx, stepID)
-		if err != nil {
+		if err := r.reply(ctx, connection, userID); err != nil {
 			return err
 		}
-		// 取本步的模型回复：已有存档就复用（进程中断后恢复用），否则真正调用模型并立刻存档。
-		var reply modelReply
-		if len(stored) != 0 {
-			var saved storedModelReply
-			if err := json.Unmarshal(stored, &saved); err != nil {
-				return err
-			}
-			reply = modelReply{response: saved.Response, stepID: stepID}
-		} else {
-			reply, err = r.callWithRetries(ctx, connection, userID, stepID, newMessageIDs)
-			if err != nil {
-				return err
-			}
-			payload, err := json.Marshal(storedModelReply{Response: reply.response})
-			if err != nil {
-				return err
-			}
-			if err := queries.SaveStepModelReply(ctx, database.SaveStepModelReplyParams{StepID: reply.stepID, Payload: payload}); err != nil {
-				return err
-			}
-		}
-		var message assistantMessage
-		if err := json.Unmarshal(reply.response.Choices[0].Message, &message); err != nil {
-			return err
-		}
-		// 先把助手消息落库，工具调用从此在历史里可见；随后并行执行全部工具，全部齐了再结束本步。
-		if err := r.saveAssistantMessage(ctx, connection, userID, reply.stepID, reply.response.Choices[0].Message); err != nil {
-			return err
-		}
-		if err := r.executeToolCalls(ctx, connection, userID, reply.stepID, message.ToolCalls); err != nil {
-			return err
-		}
-		// 全部工具都有回执后结束本步，再唤醒调度进入下一轮。
-		if err := r.finishReply(ctx, connection, userID, reply.stepID, reply.response, message); err != nil {
-			return err
-		}
-		r.Wake(userID)
 	}
 }
 
-// executeToolCalls 并行执行一步里模型点名的全部工具，不设并发上限：已有回执的跳过（中断恢复靠它去重），
-// 其余每个调用起一个协程。执行锁连接由调用方独占，不能被多个协程同时使用，所以每个工具都改走连接池：
+// executeToolCalls 并行执行同一条模型回复里还没有回执的全部工具，不设并发上限，每个调用起一个协程。
+// 执行锁连接由调用方独占，不能被多个协程同时使用，所以每个工具都改走连接池：
 // 数据库工具在各自从池中取连接的事务里执行并连回执一起提交，联网工具执行完立刻用池中连接单独存回执；
 // 批次执行期间另有看守协程定期 ping 锁连接，连接失效就取消整批，等看守退出后调用方才继续用锁连接。
 // 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
 func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, calls []toolCall) error {
-	queries := database.New(connection)
-	// 先在锁连接上串行核对回执、排出待执行列表：同一步恢复时已完成的工具不再重跑，重复的调用 ID 只执行第一个。
-	pending := make([]toolCall, 0, len(calls))
-	seen := map[string]bool{}
-	for _, call := range calls {
-		if seen[call.ID] {
-			continue
-		}
-		seen[call.ID] = true
-		saved, err := queries.HasStepToolResult(ctx, database.HasStepToolResultParams{StepID: &stepID, ToolCallID: call.ID})
-		if err != nil {
-			return err
-		}
-		if !saved {
-			pending = append(pending, call)
-		}
-	}
-	if len(pending) == 0 {
-		return nil
-	}
 	batchContext, cancelBatch := context.WithCancel(ctx)
 	defer cancelBatch()
 	// 看守协程在整批工具执行期间看住执行锁连接：连接一断就关掉它并取消整批，避免失去执行权后还继续干活。
@@ -341,14 +238,14 @@ func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn,
 			}
 		}
 	}()
-	// 全部待执行工具同时开工，每个协程只写自己下标的结果槽，等待结束后按调用顺序取第一个硬错误。
-	toolErrors := make([]error, len(pending))
+	// 全部工具同时开工，每个协程只写自己下标的结果槽，等待结束后按调用顺序取第一个硬错误。
+	toolErrors := make([]error, len(calls))
 	var waitGroup sync.WaitGroup
-	for index, call := range pending {
+	for index, call := range calls {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整步按中断处理。
+			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整批按中断处理。
 			if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
 				result, err := tool.Execute(batchContext, r.toolDeps, nil, userID, call.Function.Arguments)
 				if err != nil {
@@ -368,7 +265,7 @@ func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn,
 	waitGroup.Wait()
 	cancelBatch()
 	<-watcherDone
-	// 上下文取消或锁连接失效属于整步中断：已存的回执保留，未存的由失败收尾补中断回执。
+	// 上下文取消或锁连接失效属于整批中断：已存的回执保留，未存的由下次运行按消息尾部重跑，或由失败收尾补中断回执。
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -389,28 +286,21 @@ type modelResult struct {
 	retryable bool
 }
 
-// modelReply 是归一化后的模型回复：带上它属于哪个步骤。
-type modelReply struct {
-	response chatResponse
-	stepID   uuid.UUID
-}
-
-// storedModelReply 是 modelReply 存进数据库时的形状，进程中断重启后靠它原样恢复，不重复调用模型。
-type storedModelReply struct {
-	Response chatResponse `json:"response"`
-}
-
-// callWithRetries 调用模型并处理重试：把这一步刚领到的消息透传给上下文准备（用于新消息压缩触发），
-// 上下文准备、请求和退避共用十分钟预算，可重试的失败最多再试 3 次，
-// 每次重试都新开一个步骤记录，旧步骤以失败收尾，方便事后按步骤排查。
-func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, newMessageIDs []uuid.UUID) (modelReply, error) {
+// reply 调用模型并把回复存成 assistant 消息。每次尝试是一个步骤：上下文准备（含可能的压缩）、请求和退避共用十分钟预算，
+// 可重试的失败最多再试 3 次，失败的尝试以错误收尾，方便事后按步骤排查。每次尝试都重新组装上下文，期间新到的消息会一并带上。
+func (r *Runner) reply(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) error {
+	queries := database.New(connection)
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
 	defer cancel()
 	for attempt := 0; ; attempt++ {
-		prepared, _, err := r.prepareContext(retryContext, connection, userID, stepID, newMessageIDs)
+		stepID, err := queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel})
 		if err != nil {
-			return modelReply{}, err
+			return err
+		}
+		prepared, err := r.prepareContext(retryContext, connection, userID)
+		if err != nil {
+			return err
 		}
 		// 执行锁仍由外层上下文守护；预算到期后等请求完成日志收尾，再结束步骤，避免两边抢着落库。
 		result, callErr := whileRequest(ctx, connection, func(requestContext context.Context) (modelResult, error) {
@@ -420,43 +310,26 @@ func (r *Runner) callWithRetries(ctx context.Context, connection *pgxpool.Conn, 
 			return modelResult{response: response, retryable: retryable}, err
 		})
 		if callErr == nil {
-			return modelReply{response: result.response, stepID: stepID}, nil
+			return r.saveReply(ctx, connection, userID, stepID, result.response)
 		}
 		if ctx.Err() != nil || connection.Conn().IsClosed() {
-			return modelReply{}, callErr
+			return callErr
 		}
 		if retryContext.Err() != nil {
 			callErr = fmt.Errorf("%w: %w", context.Cause(retryContext), callErr)
 		}
-		canRetry := result.retryable && attempt < 3 && retryContext.Err() == nil
 		errorText := callErr.Error()
-		err = pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
-			queries := database.New(tx)
-			if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &errorText}); err != nil {
-				return err
-			}
-			if canRetry {
-				var err error
-				stepID, err = queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel})
-				return err
-			}
-			return nil
-		})
-		if err != nil {
-			return modelReply{}, err
+		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &errorText}); err != nil {
+			return err
 		}
 		slog.Error("model request failed", "agent", runtimeLockKey(userID), "attempt", attempt+1, "error", callErr)
-		if !canRetry {
-			return modelReply{}, callErr
+		if !result.retryable || attempt >= 3 || retryContext.Err() != nil {
+			return callErr
 		}
 		select {
 		case <-retryContext.Done():
-			return modelReply{}, context.Cause(retryContext)
+			return context.Cause(retryContext)
 		case <-time.After(time.Second << attempt):
-		}
-		stepID, newMessageIDs, err = r.prepareStep(retryContext, connection, userID)
-		if err != nil {
-			return modelReply{}, err
 		}
 	}
 }
@@ -496,32 +369,33 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, request 
 	}
 }
 
-// saveAssistantMessage 在执行任何工具之前先保存这一步的助手消息，工具调用从此成为历史的一部分；
-// 中断恢复时同一步已有助手消息就跳过，避免重复插入。
-func (r *Runner) saveAssistantMessage(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, content json.RawMessage) error {
+// saveReply 在一个事务里保存模型回复：写入 assistant 消息并给这一步记上用量。
+// 工具调用从此成为历史的一部分，下一轮 runLoop 按消息尾部看到它们没有回执，就去执行。
+func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, response chatResponse) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		saved, err := queries.HasStepAssistantMessage(ctx, &stepID)
-		if err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "assistant", Content: response.Choices[0].Message, StepID: &stepID, Visible: true}); err != nil {
 			return err
 		}
-		if saved {
-			return nil
-		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "assistant", Content: content, StepID: &stepID, Visible: true}); err != nil {
+		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost}); err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, userID)
 	})
 }
 
+// toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。
+func toolResultContent(call toolCall, result string) ([]byte, error) {
+	return json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
+}
+
 // saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
 // 工具并行执行时从连接池取连接保存，同一用户的插入由 LockUserMessages 在数据库内串行排队。
 func (r *Runner) saveToolResult(ctx context.Context, userID uuid.UUID, stepID uuid.UUID, call toolCall, result string) error {
-	content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
+	content, err := toolResultContent(call, result)
 	if err != nil {
 		return err
 	}
@@ -559,7 +433,7 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, userID uu
 		if err != nil {
 			return err
 		}
-		content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
+		content, err := toolResultContent(call, result)
 		if err != nil {
 			return err
 		}
@@ -570,77 +444,33 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, userID uu
 	})
 }
 
-// finishReply 在全部工具都有回执后结束本步：记下用量；有工具调用时顺手创建下一步。
-func (r *Runner) finishReply(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID uuid.UUID, response chatResponse, message assistantMessage) error {
-	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
-		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, userID); err != nil {
-			return err
-		}
-		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost}); err != nil {
-			return err
-		}
-		if len(message.ToolCalls) > 0 {
-			if _, err := queries.StartStep(ctx, database.StartStepParams{UserID: userID, Model: r.settings.MainModel}); err != nil {
-				return err
-			}
-		}
-		return queries.NotifyUserMessages(ctx, userID)
-	})
-}
-
-// failAgent 把一次运行的失败落库：未完成的步骤全部以失败收尾；助手消息已保存时，先给还没有回执的
-// 工具调用补一条中断回执，避免历史里留下没有回执的工具调用。
+// failAgent 把一次运行的失败落库：最后一条 assistant 里还没有回执的工具调用各补一条中断回执，避免历史里留下没有回执的调用；
+// 未完成的步骤以失败收尾，并记下失败时最后一条消息的序号，之后有新消息才再次运行，避免同一失败反复重试。
 func (r *Runner) failAgent(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, cause error) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		errorText := cause.Error()
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		stepID, err := queries.GetUnfinishedStep(ctx, userID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		rows, err := queries.ListAgentContextRows(ctx, userID)
+		if err != nil {
 			return err
 		}
-		if err == nil {
-			stored, err := queries.GetStepModelReply(ctx, stepID)
+		calls, stepID := pendingToolCalls(rows)
+		for _, call := range calls {
+			content, err := toolResultContent(call, "Error: execution was interrupted before this tool call completed.")
 			if err != nil {
 				return err
 			}
-			assistantSaved, err := queries.HasStepAssistantMessage(ctx, &stepID)
-			if err != nil {
+			if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
 				return err
-			}
-			if assistantSaved && len(stored) != 0 {
-				var storedReply storedModelReply
-				if err := json.Unmarshal(stored, &storedReply); err != nil {
-					return err
-				}
-				if len(storedReply.Response.Choices) != 0 {
-					var interruptedMessage assistantMessage
-					if err := json.Unmarshal(storedReply.Response.Choices[0].Message, &interruptedMessage); err != nil {
-						return err
-					}
-					for _, call := range interruptedMessage.ToolCalls {
-						hasResult, err := queries.HasStepToolResult(ctx, database.HasStepToolResultParams{StepID: &stepID, ToolCallID: call.ID})
-						if err != nil {
-							return err
-						}
-						if hasResult {
-							continue
-						}
-						content, err := json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": "Error: execution was interrupted before this tool call completed."})
-						if err != nil {
-							return err
-						}
-						if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
-							return err
-						}
-					}
-				}
 			}
 		}
+		errorText := cause.Error()
 		if err := queries.FailUnfinishedSteps(ctx, database.FailUnfinishedStepsParams{UserID: userID, Error: &errorText}); err != nil {
+			return err
+		}
+		if err := queries.MarkMainFailed(ctx, userID); err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, userID)

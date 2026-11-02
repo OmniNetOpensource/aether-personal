@@ -1,4 +1,4 @@
--- 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断，并判断 Agent 是否还有待执行的步骤（sqlc 据此生成代码）。
+-- 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断（sqlc 据此生成代码）。
 
 -- name: StartModelCall :one
 WITH step AS (
@@ -30,12 +30,3 @@ WHERE id = sqlc.arg(id) AND outcome = 'in_flight';
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = sqlc.arg(user_id)
     AND outcome = 'in_flight';
-
--- name: HasAgentExecutionWork :one
-SELECT EXISTS (
- SELECT 1 FROM messages AS m WHERE m.user_id = sqlc.arg(user_id)
-  AND m.sequence IS NULL
- UNION ALL
- SELECT 1 FROM steps AS s WHERE s.user_id = sqlc.arg(user_id)
-  AND s.finished_at IS NULL
-) AS has_work;
