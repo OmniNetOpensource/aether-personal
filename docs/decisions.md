@@ -54,7 +54,7 @@
 | 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
 | 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
-| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡；生产部署待完成 | [09](wiki/09-deployment.md) |
+| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡；2026-10-30 已部署并通过核心线上验收，定期异机备份尚未自动化 | [09](wiki/09-deployment.md) |
 | 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |
@@ -82,7 +82,7 @@
 | --- | --- | --- |
 | 本地开发登录 | 2026-10-28 确认 dev 默认自动使用固定 mock 用户 `dev@example.com`，前端在 WebSocket `ready` 后自动发 `dev_login` 命令，无需点击登录、输入邮箱或验证码；prod 不开放 | [03](wiki/03-auth.md#本地开发登录) |
 | 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户；登录命令走主页的聊天 WebSocket，不再提供 HTTP 登录接口 | [03](wiki/03-auth.md) |
-| 首版注册范围 | 2026-10-26 确认向公众开放注册，不要求邀请码或人工审核；生产防滥用待完成 | [03](wiki/03-auth.md#生产注册范围) |
+| 首版注册范围 | 2026-10-26 确认向公众开放注册，不要求邀请码或人工审核；2026-10-30 已部署生产登录防护，并通过真实 Turnstile、收信与验证码登录验收 | [03](wiki/03-auth.md#生产注册范围)、[09](wiki/09-deployment.md) |
 | 首版使用额度 | 2026-10-30 确认先无限额度开放，不设置每日输入次数、每用户模型费用额度或全站模型费用上限；保留验证码防刷和已有运行时约束 | [03](wiki/03-auth.md#生产注册范围) |
 | 验证码防刷实现 | PostgreSQL 共享 IP、邮箱与全站固定窗口；生产发信前校验 Turnstile 的 hostname 和 action，配置或验证失败不发码；不限制已登录聊天额度 | [03](wiki/03-auth.md#生产验证码防刷) |
 | 看板登录 | 仅输入独立管理员密码，无邮箱和验证码；使用独立管理会话，聊天账号不能访问管理接口 | [08](wiki/08-admin-observability.md#权限与-api) |
@@ -121,7 +121,7 @@
 | 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
 | Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；连续 5 轮只有工具、没有用户可见正文时插入一条用户不可见的系统提醒，同一次沉默最多 3 次。不写正文即沉默；`send_message` 只用于给 Subagent 发指令 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
-| Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值 | [05](wiki/05-main-runtime.md#模型) |
+| Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值。2026-10-30 用户指定维护者线上使用 ikun Gemini 4 Argon，生产已保存 `ikun:gemini-4-argon`，Subagent 跟随 Main | [05](wiki/05-main-runtime.md#模型)、[08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
 | ikun Gemini | 2026-10-30 确认接入 Aether 的 Gemini 原生渠道，供 Main、Subagent 与压缩使用；保留 OpenRouter。凭证由看板管理；用户指定默认地址 `https://api.ikuncode.cc`，页面只需填写 Key | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
 | 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | Subagent 模型 | `SUBAGENT_MODEL` 提供初始默认；管理端可独立切换或跟随 Main，保存后重启仍保留 | [05](wiki/05-main-runtime.md#模型) |
@@ -149,5 +149,5 @@
 - 边生成边显示的推送方式，以及各平台的 WebSocket 连接恢复行为。
 - 其余 HTTP 工具与 MCP 的接入方式和权限。
 - Android、iOS、macOS、Windows 原生宿主的发布和验收方式（Linux 已确认仅要求浏览器）。
-- 维护者阿里云新加坡实例的实际资源与连接信息、生产部署验收；实现配置见 [09](wiki/09-deployment.md)。
+- 定期异机备份的自动化；维护者生产部署与核心线上验收已完成，记录见 [09](wiki/09-deployment.md)。
 - 项目各部分的验收标准及验证环境。

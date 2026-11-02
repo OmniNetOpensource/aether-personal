@@ -136,6 +136,8 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 
 用户要求把 Aether 的 ikun 接入模型配置，随后明确选择 Gemini。实现采用 Aether 的 Gemini 原生协议与环境变量命名，保留 OpenRouter。选择理由是让 Main 与 Subagent 在同一个配置页选择渠道，无需把 Gemini 强行转换为 Chat Completions 服务。
 
+2026-10-30，用户进一步指定“线上用 ikun 的 Gemini4argon”。维护者生产实例已通过管理 API 保存 `ikun:gemini-4-argon`，Subagent 跟随 Main，配置持久化到生产数据库并从下一次请求生效。选择依据是用户明确指定线上渠道与型号；这项生产配置不修改其他 fork 的初始默认模型。真实生产聊天已收到“线上 Gemini 连接成功”的回复，工具续接与断线恢复的验收记录见 [09](09-deployment.md)。
+
 在“服务配置”页只需保存 ikun Gemini 的 Key，无需重启。2026-10-30 用户指定默认地址为 `https://api.ikuncode.cc`，页面不再要求输入接口地址。密钥只进入供应商请求头，不进入模型请求正文；管理端提交新 Key 后不回显原值。此前环境变量配置由下述一次性导入命令迁移。
 
 目录读取 `{baseURL}/v1beta/models`，处理分页，提供 `ikun:gemini-*` 候选。排除图片、语音、embedding、robotics 和 computer-use 专用模型，以及目录明确不支持 `generateContent` 的模型。Gemini 目录不提供工具能力证明，候选的实际能力以调用结果为准。容量元数据缺失时显示未知，不猜测容量；价格与实际费用未返回时也显示未知，不套用 OpenRouter 价格或记为零。已知的 `inputTokenLimit` 是独立输入上限，不再扣除输出预算；`outputTokenLimit` 与全局输出上限取较小值。
