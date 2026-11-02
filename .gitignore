@@ -14,6 +14,9 @@
 # Go 构建产物
 /backend/bin/
 
+# 本地上下文合并草稿
+/backend/internal/agent/merged_context.go
+
 # 本地实验生成的回答与原始执行记录
 /docs/experiments/main-role-ab/
 /docs/experiments/agent-research/
