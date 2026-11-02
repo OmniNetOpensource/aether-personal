@@ -1,4 +1,4 @@
-// 本文件是聊天业务控制器：管理登录状态、消息列表、图片上传、发送与重发，并驱动服务器事件中转，是前端聊天状态的唯一来源。
+// 本文件是聊天业务控制器：管理登录状态、消息列表、图片上传与消息发送，并驱动服务器事件中转，是前端聊天状态的唯一来源。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
@@ -8,17 +8,14 @@ import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js
 import { messageImageSchema } from './messageAttachments.js';
 import type { MessageImage, MessagePart } from './messageAttachments.js';
 
-type Delivery = 'sending' | 'failed' | 'delivered' | 'read';
+// ChatMessage 是消息列表里的一条消息；列表只放服务器已保存的消息，发送中的内容留在输入框里。
 export interface ChatMessage {
   id: string;
   text: string;
   parts: MessagePart[];
   isUser: boolean;
   createdAt: Date;
-  order: number;
-  position?: string;
-  clientId?: string;
-  delivery: Delivery;
+  position: string;
 }
 
 export class RequestError extends Error {
@@ -75,9 +72,7 @@ export class ChatController {
   private relay = new ServerEventRelay();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readyTimer?: ReturnType<typeof setTimeout>;
-  private deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pendingRequests = new Map<string, PendingRequest>();
-  private nextOrder = 0;
   private reconnectAttempt = 0;
   private historyLoaded = false;
   private socketOpen = false;
@@ -85,7 +80,6 @@ export class ChatController {
   private suspended = false;
   private devLoginAttempted = false;
   private lastPosition?: string;
-  private readUpTo?: string;
   private listeners = new Set<() => void>();
 
   subscribe = (listener: () => void) => {
@@ -140,11 +134,6 @@ export class ChatController {
     this.connected = this.mainThinking = false;
     clearTimeout(this.readyTimer);
     this.rejectPendingRequests(new Error('连接已断开，请稍后重试'));
-    this.messages = this.messages.map((message) =>
-      message.delivery === 'sending' ? { ...message, delivery: 'failed' } : message,
-    );
-    this.deliveryTimers.forEach(clearTimeout);
-    this.deliveryTimers.clear();
     if (reason === 'unauthorized') {
       this.clearLocalSession();
       this.error = '登录已过期，请重新登录';
@@ -250,9 +239,7 @@ export class ChatController {
         this.merge(event);
         break;
       case 'delivered':
-        clearTimeout(this.deliveryTimers.get(event.client_message_id));
-        this.deliveryTimers.delete(event.client_message_id);
-        this.setDelivery(event.client_message_id, 'delivered');
+        this.resolvePendingRequest(event.client_message_id, event);
         break;
       case 'logged_out':
         this.clearLocalSession();
@@ -275,29 +262,28 @@ export class ChatController {
     this.mainThinking = false;
     this.historyLoaded = false;
     this.loadingHistory = false;
-    this.lastPosition = this.readUpTo = undefined;
+    this.lastPosition = undefined;
     this.hasMoreHistory = true;
     this.messages = [];
-    this.deliveryTimers.forEach(clearTimeout);
-    this.deliveryTimers.clear();
     clearSession();
   }
 
-  private sendRequest(
-    command: Extract<ClientCommand, { request_id: string }>,
-  ): Promise<ServerEvent> {
+  // sendRequest 发出一条命令并等待它的回执：发送消息按 client_message_id 等 delivered，其余命令按 request_id 等对应事件。
+  private sendRequest(command: ClientCommand): Promise<ServerEvent> {
+    const requestID =
+      command.type === 'send_message' ? command.client_message_id : command.request_id;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => {
-          this.pendingRequests.delete(command.request_id);
+          this.pendingRequests.delete(requestID);
           reject(new Error('连接超时，请检查网络后重试'));
         },
         command.type === 'request_code' ? 30000 : 15000,
       );
-      this.pendingRequests.set(command.request_id, { resolve, reject, timer });
+      this.pendingRequests.set(requestID, { resolve, reject, timer });
       if (!this.socketOpen || !this.relay.send(command)) {
         clearTimeout(timer);
-        this.pendingRequests.delete(command.request_id);
+        this.pendingRequests.delete(requestID);
         reject(new Error('连接已断开，请稍后重试'));
       }
     });
@@ -367,10 +353,7 @@ export class ChatController {
     if (this.loadingHistory || !this.token || (older && !this.hasMoreHistory)) return;
     this.loadingHistory = true;
     this.notify();
-    const positions = this.messages
-      .flatMap((message) => (message.position ? [message.position] : []))
-      .sort();
-    const before = older ? positions[0] : undefined;
+    const before = older ? this.messages[0]?.position : undefined;
     const token = this.token;
     try {
       await this.sendRequest({
@@ -388,46 +371,23 @@ export class ChatController {
     }
   }
 
+  // merge 把服务器发来的一页消息并入列表：同一 ID 覆盖旧值，再按服务器位置排序。
   private merge(page: ChatPage) {
-    if (page.read_up_to && (!this.readUpTo || page.read_up_to > this.readUpTo)) {
-      this.readUpTo = page.read_up_to;
-    }
     for (const row of page.messages) {
       if (!this.lastPosition || row.position > this.lastPosition) this.lastPosition = row.position;
-      const index = this.messages.findIndex(
-        (message) =>
-          message.id === row.id ||
-          (row.client_message_id && message.clientId === row.client_message_id),
-      );
-      if (row.client_message_id) {
-        clearTimeout(this.deliveryTimers.get(row.client_message_id));
-        this.deliveryTimers.delete(row.client_message_id);
-      }
       const message: ChatMessage = {
         id: row.id,
         text: row.text,
         parts: row.parts ?? (row.text ? [{ type: 'text', text: row.text }] : []),
         isUser: row.sender === 'user',
         createdAt: new Date(row.created_at),
-        order: this.messages[index]?.order ?? this.nextOrder++,
         position: row.position,
-        clientId: row.client_message_id ?? undefined,
-        delivery: 'delivered',
       };
+      const index = this.messages.findIndex((existing) => existing.id === row.id);
       if (index < 0) this.messages.push(message);
       else this.messages[index] = message;
     }
-    this.messages = this.messages.map((message) =>
-      message.isUser && message.position && this.readUpTo && message.position <= this.readUpTo
-        ? { ...message, delivery: 'read' }
-        : message,
-    );
-    this.messages.sort(
-      (a, b) =>
-        (a.position && b.position
-          ? a.position.localeCompare(b.position)
-          : a.createdAt.getTime() - b.createdAt.getTime()) || a.order - b.order,
-    );
+    this.messages.sort((a, b) => a.position.localeCompare(b.position));
   }
 
   // uploadImage 以原始字节上传图片；聊天消息只携带服务端生成的 OSS 引用。
@@ -443,7 +403,9 @@ export class ChatController {
     return messageImageSchema.parse(await response.json());
   }
 
-  async send(parts: MessagePart[]) {
+  // send 发出一条消息并等服务器保存：成功时消息已经推进列表，失败时抛出错误，由输入框展示并保留内容。
+  // clientMessageID 由输入框为同一份草稿复用，重发时服务器按它去重，不会存成两条。
+  async send(parts: MessagePart[], clientMessageID: string) {
     const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
     const quotes = parts.flatMap((part) => (part.type === 'quote' ? [part.quote] : []));
     const images = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
@@ -454,63 +416,18 @@ export class ChatController {
       !this.token
     )
       return false;
-    const id = crypto.randomUUID();
-    this.messages = [
-      ...this.messages,
-      {
-        id,
-        clientId: id,
-        text: trimmed,
-        parts,
-        isUser: true,
-        createdAt: new Date(),
-        order: this.nextOrder++,
-        delivery: 'sending',
-      },
-    ];
-    this.sendFrame(id, parts);
-    this.notify();
-    return true;
-  }
-
-  retry(message: ChatMessage) {
-    if (!message.clientId) return;
-    this.setDelivery(message.clientId, 'sending');
-    this.sendFrame(message.clientId, message.parts);
-    this.notify();
-  }
-
-  private sendFrame(id: string, parts: MessagePart[]) {
-    if (
-      !this.connected ||
-      !this.relay.send({ type: 'send_message', client_message_id: id, parts })
-    ) {
-      this.setDelivery(id, 'failed');
+    if (!this.connected) {
       this.reconnect();
-      return;
+      throw new Error('连接已断开，请稍后重试');
     }
-    clearTimeout(this.deliveryTimers.get(id));
-    this.deliveryTimers.set(
-      id,
-      setTimeout(() => {
-        this.deliveryTimers.delete(id);
-        this.setDelivery(id, 'failed');
-        this.notify();
-      }, 15000),
-    );
-  }
-
-  private setDelivery(id: string, delivery: Delivery) {
-    this.messages = this.messages.map((message) =>
-      message.clientId === id && message.delivery !== 'read' ? { ...message, delivery } : message,
-    );
+    await this.sendRequest({ type: 'send_message', client_message_id: clientMessageID, parts });
+    return true;
   }
 
   dispose() {
     this.disposed = true;
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.readyTimer);
-    this.deliveryTimers.forEach(clearTimeout);
     this.rejectPendingRequests(new Error('连接已关闭'));
     this.relay.close();
     this.listeners.clear();

@@ -1,4 +1,4 @@
-// 本文件是用户消息气泡组件：渲染用户发出的一条消息，并在最后一条或失败时显示送达状态与重试入口。
+// 本文件是用户消息气泡组件：渲染用户发出的一条已保存消息；发送中与发送失败的状态由输入框展示，气泡不带状态。
 
 import { ImagePreview } from './ImagePreview.js';
 import type { MessageQuote } from './messageAttachments.js';
@@ -6,21 +6,15 @@ import type { ChatMessage } from './ChatController.js';
 
 export function UserMessageBubble({
   message,
-  isLastUserMessage,
   joinedWithPrevious,
   endsGroup,
-  onRetry,
   onQuoteNavigate,
 }: {
   message: ChatMessage;
-  isLastUserMessage: boolean;
   joinedWithPrevious: boolean;
   endsGroup: boolean;
-  onRetry: () => void;
   onQuoteNavigate: (quote: MessageQuote) => void;
 }) {
-  const showDeliveryStatus =
-    isLastUserMessage || message.delivery === 'sending' || message.delivery === 'failed';
   return (
     <div className={`message-row user-row ${joinedWithPrevious ? 'joined' : ''}`}>
       <article className="message-column" aria-label="你">
@@ -49,20 +43,6 @@ export function UserMessageBubble({
             ),
           )}
         </div>
-        {showDeliveryStatus &&
-          (message.delivery === 'failed' ? (
-            <button type="button" className="retry error delivery" onClick={onRetry}>
-              ⓘ 发送失败，点击重发
-            </button>
-          ) : (
-            <span className="delivery">
-              {message.delivery === 'sending'
-                ? '发送中…'
-                : message.delivery === 'read'
-                  ? '已读'
-                  : '已送达'}
-            </span>
-          ))}
       </article>
     </div>
   );

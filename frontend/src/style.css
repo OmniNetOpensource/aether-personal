@@ -22,8 +22,7 @@ body {
   align-items: center;
   justify-content: center;
 }
-.muted,
-.delivery {
+.muted {
   color: var(--text-muted);
 }
 .chat-page {
@@ -105,14 +104,6 @@ body {
 .user-body {
   color: var(--text);
   white-space: pre-wrap;
-}
-.delivery {
-  font-size: 13px;
-  line-height: 20px;
-  margin: 5px 5px 0 0;
-}
-.retry {
-  padding: 8px 0;
 }
 .error {
   color: var(--error);
@@ -333,8 +324,7 @@ body {
 }
 
 .loading .muted,
-.chat-page .date,
-.chat-page .delivery {
+.chat-page .date {
   color: var(--on-forest-muted);
 }
 .chat-page .error {
@@ -443,7 +433,6 @@ button.link {
 .send-button:disabled .send-arrow {
   color: var(--text-muted);
 }
-.retry,
 .history-error {
   background: transparent;
   text-align: left;

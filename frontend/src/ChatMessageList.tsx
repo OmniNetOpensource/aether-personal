@@ -68,10 +68,6 @@ export function ChatMessageList({
   };
   const messages = controller.messages;
   const thinking = controller.connected && controller.mainThinking;
-  const lastUserMessageIndex = messages.reduce(
-    (last, message, index) => (message.isUser ? index : last),
-    -1,
-  );
   const scrollToBottom = () => {
     userScrolling.current = false;
     const element = viewport.current;
@@ -173,10 +169,8 @@ export function ChatMessageList({
               {message.isUser ? (
                 <UserMessageBubble
                   message={message}
-                  isLastUserMessage={index === lastUserMessageIndex}
                   joinedWithPrevious={joinedWithPrevious}
                   endsGroup={endsGroup}
-                  onRetry={() => controller.retry(message)}
                   onQuoteNavigate={(quote) => void navigateQuote(quote)}
                 />
               ) : (

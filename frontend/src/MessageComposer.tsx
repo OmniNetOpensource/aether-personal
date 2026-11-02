@@ -1,4 +1,4 @@
-// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，发送后通知消息列表贴底。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，展示发送中与发送失败，发送成功后清空并通知消息列表贴底。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -39,7 +39,10 @@ export function MessageComposer({
   const input = useRef<RichMessageInputHandle | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerPadding = useRef<HTMLDivElement>(null);
-  const sending = useRef(false);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  // 同一份草稿重发时沿用同一个消息 ID：上次其实已保存、只是确认没送达时，服务器按 ID 去重，不会存成两条。
+  const clientMessageID = useRef(crypto.randomUUID());
   useEffect(() => {
     composerRef.current = {
       insertQuote: (quote) => input.current?.insert([{ type: 'quote', quote }]),
@@ -84,10 +87,10 @@ export function MessageComposer({
       setReading(false);
     }
   };
-  // send 在提交边界检查总长度，禁止图片尚未准备好时发出不完整消息。
+  // send 在提交边界检查总长度，禁止图片尚未准备好时发出不完整消息；等服务器保存后才清空，失败时保留内容并显示错误。
   const send = async () => {
     if (
-      sending.current ||
+      sendingRef.current ||
       readingRef.current ||
       !parts.some((part) => part.type !== 'text' || part.text.trim())
     )
@@ -105,16 +108,21 @@ export function MessageComposer({
       setError('正文和引用合计不能超过 32,000 个字符');
       return;
     }
-    sending.current = true;
+    sendingRef.current = true;
+    setSending(true);
+    setError('');
     try {
-      if (await controller.send(parts)) {
+      if (await controller.send(parts, clientMessageID.current)) {
         input.current?.clear();
         setParts([]);
-        setError('');
+        clientMessageID.current = crypto.randomUUID();
         onMessageSent();
       }
+    } catch (error) {
+      setError(`发送失败：${error instanceof Error ? error.message : '请稍后重试'}`);
     } finally {
-      sending.current = false;
+      sendingRef.current = false;
+      setSending(false);
     }
   };
   return (
@@ -161,13 +169,14 @@ export function MessageComposer({
           onChange={(value) => {
             setParts(value);
             setError('');
+            clientMessageID.current = crypto.randomUUID();
           }}
           onFiles={(files) => void addImages(files)}
           onSubmit={() => void send()}
         />
-        {reading && (
+        {(reading || sending) && (
           <span className="upload-status" role="status">
-            正在上传图片…
+            {reading ? '正在上传图片…' : '发送中…'}
           </span>
         )}
         <div className="composer-tools">
@@ -200,7 +209,9 @@ export function MessageComposer({
             className="send-button"
             aria-label="发送消息"
             title="发送（Ctrl+Enter）"
-            disabled={reading || !parts.some((part) => part.type !== 'text' || part.text.trim())}
+            disabled={
+              reading || sending || !parts.some((part) => part.type !== 'text' || part.text.trim())
+            }
           >
             <svg
               className="send-arrow"

@@ -21,7 +21,6 @@ export const chatPageSchema = z.object({
     .array(chatMessageRowSchema)
     .nullable()
     .transform((value) => value ?? []),
-  read_up_to: z.string().nullable().optional(),
 });
 
 export const requestFailedCodeSchema = z.enum([
