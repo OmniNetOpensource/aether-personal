@@ -22,7 +22,7 @@
 
 参考业界做法后，采用“实例无状态、状态放在共享存储”的结构（与 [LangGraph Agent Server](https://docs.langchain.com/langsmith/agent-server)、[DBOS](https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution) 同一思路），不采用把请求路由到固定实例的 Actor 模型（如 Cloudflare Durable Objects、Restate Virtual Objects），因为后者依赖专门的平台。
 
-- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文、待读消息等都在 PostgreSQL 中。
+- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文与运行状态（由消息表推出）都在 PostgreSQL 中。
 - 用户请求不需要路由到“正在运行 agent 的机器”：收到消息的机器只负责存入数据库；同一用户的 Main 由数据库锁保证同一时间只有一台机器运行，正在运行的机器在下一次模型调用前会取到新消息。
 - 机器之间通过 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，通知只带用户 ID，数据始终以表为准。不引入 Redis。
 - 内存中只有两样东西：WebSocket 连接（断开后 App 重连到任意机器即可）与进行中的模型调用（机器崩溃后由其他机器重新调用）。
@@ -42,14 +42,12 @@ sequenceDiagram
     App->>WS: hello {token?, last_position?}
     WS-->>App: ready {authenticated, history}
     App->>WS: send_message {client_message_id, text}
-    WS->>DB: 事务：按用户加写入锁，插入消息（sequence 为空），NOTIFY
+    WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
+    WS-->>App: messages {这条用户消息, main_thinking}
     WS-->>App: delivered {client_message_id}
     WS->>Runner: Wake(user_id)
-    Runner->>DB: 尝试获取该用户的 Main 锁
-    Runner->>DB: 待读消息补号（变为已读），NOTIFY
-    DB-->>WS: NOTIFY user_messages
-    WS-->>App: messages {..., read_up_to}
-    Runner->>Model: 指令注入（不可见 user）+ 上个 compact 以来的原生消息 + 工具
+    Runner->>DB: 尝试获取该用户的 Main 锁，读取上个 compact 以来的消息
+    Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
     DB-->>WS: NOTIFY user_messages
@@ -58,10 +56,10 @@ sequenceDiagram
 
 ### 用户发消息
 
-1. App 发送 `send_message`，`client_message_id` 由 App 生成，App 显示 `sending`。
+1. App 发送 `send_message`，`client_message_id` 由 App 生成；消息暂不进入消息列表，输入框保留内容并显示“发送中…”。
 2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用和图片组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 32,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。
-3. 存入 `messages`，`id` 由数据库生成，`sequence` 为空；同一用户下 `client_message_id` 已存在时不重复保存。
-4. 在同一连接上回复 `delivered`；App 超时未收到则显示 `failed`，可点击重发。
+3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存。
+4. 先把这条消息推给当前连接，再在同一连接上回复 `delivered`。顺序反过来时，输入框清空与消息出现在列表之间会有一瞬间两边都看不到这条消息。App 收到 `delivered` 即发送成功，输入框清空；15 秒未收到或连接断开即发送失败，输入框显示错误并保留内容，再按发送就用同一个 `client_message_id` 重发。
 5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
 6. 唤醒该用户的 Main：尝试获取锁，获取到则运行；获取不到说明已有机器在运行，到此为止。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
 
@@ -94,13 +92,13 @@ sequenceDiagram
 | `{"type": "ready", "authenticated": false, "dev_login": false}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
 | `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}}` | 在当前连接上登录成功，带最新一页历史 |
 | `{"type": "code_sent", "request_id": "..."}` | 验证码已发送 |
-| `{"type": "history", "request_id": "...", "messages": [...], "read_up_to": "..."}` | 一页历史消息 |
+| `{"type": "history", "request_id": "...", "messages": [...]}` | 一页历史消息 |
 | `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
 | `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
 | `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
-| `{"type": "messages", "messages": [...], "read_up_to": "...", "main_thinking": false, "activity": {...}}` | 新消息、当前已读位置与 Main 处理状态 |
+| `{"type": "messages", "messages": [...], "main_thinking": false}` | 新消息与 Main 处理状态 |
 
-> 重连字段叫 `last_position` 而非 `last_message_id`：Main 一行里可能有多条消息，它们的 `id`（工具调用 ID）各不相同但 `position`（行 ID）相同，分开命名避免前端误把消息 `id` 当作重连位置。不用 `sequence`：用户消息在 Main 读到前 `sequence` 为空，且 `sequence` 顺序不等于写入顺序；行 ID 在写入时即生成，并由写入锁保证与写入顺序一致。
+> 重连字段叫 `last_position` 而非 `last_message_id`：Main 一行里可能有多条消息，它们的 `id`（工具调用 ID）各不相同但 `position`（行 ID）相同，分开命名避免前端误把消息 `id` 当作重连位置。重连位置用行 ID：行 ID 在写入时即生成，并由写入锁保证与写入顺序一致。（2026-11-02 之前用户消息在 Main 读到前 `sequence` 为空，这也是当初不用 `sequence` 的原因之一；去掉待读状态后位置仍沿用行 ID，不再改动协议。）
 
 ### 推送的消息
 
@@ -108,7 +106,7 @@ sequenceDiagram
 | --- | --- |
 | `id` | 显示 ID：用户与 Main 的消息都用所在行 ID（Main 一行至多一条正文消息） |
 | `position` | 所在行的 ID，App 记下最后一条的值，重连时带上 |
-| `client_message_id` | 仅用户消息有；App 据此把本地 `failed` 的消息改为 `delivered` |
+| `client_message_id` | 仅用户消息有；对应 App 发送时生成的 ID |
 | `sender` | `user` 或 `main` |
 | `text` | 正文文字，兼容旧客户端 |
 | `parts` | 用户消息的有序多模态内容；图片项的 `url` 是本次读取生成的临时预览地址 |
@@ -151,11 +149,26 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 不新增列，后端返回消息时由 `sequence` 算出 `delivered` / `read`。
 
+2026-11-02，用户要求去掉已读状态，并重新规定消息状态：
+
+> 把已读什么的状态去掉。
+
+> 只有发送成功或失败，但是只有发送失败才显示错误
+
+> 输入框负责展示发送中状态，message list不展示这个状态。
+
+本段取代上表。消息只有发送成功与发送失败两种结果，消息列表里的消息不带任何状态标记：
+
+- 发送中：消息不进入列表，内容留在输入框，输入框显示“发送中…”，发送按钮不可用。
+- 发送成功（收到 `delivered`）：消息随后端推送出现在列表中，输入框清空，不显示任何回执。
+- 发送失败（超时或断线）：输入框显示“发送失败：原因”并保留内容；再按发送沿用同一个 `client_message_id`，后端若其实已经保存过就不再重复保存。
+
+后端同时删除待读机制（`sequence` 入库即分配，见 [05](05-main-runtime.md#运行循环-已实现)），`messages` 与 `history` 事件不再带 `read_up_to`。选择理由：已读只反映 Main 何时把消息放进上下文，对用户没有可以采取的行动；真正需要用户处理的只有发送失败。把发送中的状态放在输入框里，列表中就只有已经存进数据库的消息，前端不必再维护本地临时消息与服务器消息的对应和排序。
+
 ## 推送
 
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
-- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息，以及当前已读位置，推送给 App。
-- 已读位置用一个值 `read_up_to` 表示（最后一条已读的用户消息）：待读消息总是一次性按顺序补号，已读只会从前往后连续推进。
+- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出位置之后用户能看到的消息，连同 Main 处理状态推送给 App。
 - 前端重连时在 `hello` 中带上最后收到的位置，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
 - 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。
 
@@ -167,7 +180,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 2026-10-23，用户要求：“我希望main在thinking的时候，展示小气泡”。聊天列表底部显示一个与 Main 消息同色的小气泡，三个圆点依次浮动；完成、失败或断线后收起。不新增聊天消息，不展示思考内容，也不根据回复文本或固定计时猜测是否结束。
 
-WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 有待读消息或未完成步骤时为 true，覆盖排队、模型调用与工具执行；Main 已停下时为 false。状态依据数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Main 运行退出时通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
+WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 有待处理的工作时为 true（2026-11-02 起以 `main_work` 判断：最新一条消息是用户消息、工具回执或带工具调用的 assistant 消息，且不在失败停住状态），覆盖排队、模型调用与工具执行；Main 已停下时为 false。状态依据数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Main 运行退出时通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
 
 前端尊重系统的减少动画设置；用户上翻历史时，不因气泡变化强制滚动。读屏标签为“Aether 正在思考”。选择理由是用户能确认 Main 仍在处理，同时保持只有消息列表和输入框的界面。
 
@@ -184,14 +197,13 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 已登录连接发送 `load_history` 命令，后端回 `history` 事件。从最新往前翻页，每页 50 条用户可见的消息；首次连接的最新一页直接随 `ready` 或 `authenticated` 事件带回，不必再单独请求。
 
-- 以 UUIDv7 的消息 ID 作翻页位置，因为待读消息没有序号。
+- 以 UUIDv7 的消息 ID 作翻页位置，与推送和重连使用同一个位置值（最初是因为待读消息没有序号）。
 - 部分行（Main 未发消息给用户的 `assistant` 行）不产生可见消息，因此后端会继续往前查，直到凑满一页或没有更早的行。
 
 ## 消息 ID 与重发
 
 - 所有消息的 `id` 由数据库生成（`uuidv7()`），用于排序：若由 App 生成，UUIDv7 中的时间来自手机，手机时钟不准或被伪造时顺序会错乱。
-- `messages.client_message_id`（App 生成，同一用户下唯一）只用于识别重发：断网导致 `delivered` 未送达时，用户重发会带同一个 `client_message_id`，后端发现已存在则不再保存，直接回复 `delivered`。
-- 推送的消息带上 `client_message_id`，App 重连后收到断线期间已保存的消息，可自动将本地 `failed` 的消息改为 `delivered`。
+- `messages.client_message_id`（App 生成，同一用户下唯一）只用于识别重发：断网导致 `delivered` 未送达时，用户在输入框再按发送会带同一个 `client_message_id`，后端发现已存在则不再保存，直接回复 `delivered`。输入框内容被修改或发送成功后才换新的 `client_message_id`。
 
 ## 写入顺序
 

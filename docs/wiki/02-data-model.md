@@ -42,7 +42,7 @@ erDiagram
 
 - **主键**使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）：按时间递增，可直接用于排序。
 - **固定取值的字段**（如 `status`、`role`、`sender`）使用 `text` 加 `CHECK` 约束，不使用 PostgreSQL 枚举类型：取值仍在演变，`CHECK` 约束增删改名都容易；Go 代码中自行定义对应常量。
-- **不建 `runs` 表**：Main 可能持续运行，“一轮”的边界不清晰。执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，按用户串行处理用 PostgreSQL 咨询锁，重启恢复依据待读消息和未得到结果的工具调用判断。
+- **不建 `runs` 表**：Main 可能持续运行，“一轮”的边界不清晰。执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，按用户串行处理用 PostgreSQL 咨询锁，重启恢复依据最新一条消息和未得到结果的工具调用判断（2026-11-02 起，见 [05](05-main-runtime.md#运行循环-已实现)）。
 
 ## 各表字段
 
@@ -52,6 +52,7 @@ erDiagram
 | --- | --- | --- |
 | `id` | uuid | 主键 |
 | `email` | text | 登录邮箱，唯一 |
+| `main_failed_through_sequence` | bigint | Main 上次运行失败时的最大消息序号；最新消息不超过它时不再自动重试，空表示没有失败停住（`00026`） |
 | `created_at` | timestamptz | 注册时间 |
 
 ### `subagents`（已删除）
@@ -64,7 +65,7 @@ erDiagram
 | --- | --- | --- |
 | `id` | uuid | 主键，由数据库生成；`read_message` 使用的 ID，也用作推送位置与翻页位置 |
 | `user_id` | uuid | 所属用户 |
-| `sequence` | bigint | 全局递增序号，用于排序；**为空表示待读** |
+| `sequence` | bigint | 全局递增序号，用于排序；插入时分配、不能为空（2026-11-02 起，原先为空表示待读） |
 | `role` | text | `user` / `assistant` / `tool`（2026-11-02 由 `00021` 去掉 `system`） |
 | `visible` | boolean | 是否显示在用户聊天中；真人发给 Main 的消息与 Main 助手消息为 true，指令、日程、运行时提醒、工具回执与摘要为 false（`00021`） |
 | `content` | jsonb | 按 OpenRouter 格式保存的内容；普通请求组装时直接使用原文，只删前端展示字段，第一条由代码常量的不可见 user 指令注入、不落库 |
@@ -96,22 +97,16 @@ erDiagram
 
 `00005` 增加可空的 `model_reply jsonb`，在执行工具前保存模型回复，进程中断后复用，避免同一步骤再次请求模型。继续已有回复时不提前消费新消息；新消息在下一次真正调用模型前加入。同一次迁移还加过 `resume_after` 与沙盒表，2026-10-29 由 `00014` 删除。
 
-## 排序与待读规则
+2026-11-02 运行循环简化后，`00026` 删除 `model_reply`：assistant 消息与它的 step 在同一事务里落库，崩溃后不再需要从 step 里取回模型回复。此后一条普通 step 就是一次模型调用尝试（成功时对应一条 assistant 消息，失败时记下错误），压缩另记一条；工具回执的 `step_id` 指向发起调用的那条 step。
 
-```mermaid
-stateDiagram-v2
-    state "待读：sequence 为空" as pending
-    state "已读：sequence 有值" as read
-    [*] --> pending: 别人发来的消息到达
-    pending --> read: 该 Agent 下次调用模型前按到达顺序补号
-    [*] --> read: Agent 自己的输出与工具结果写入时直接取号
-```
+## 排序规则
 
-- `sequence` 由数据库序列 `message_sequence` 发号，整张表共用一个递增计数器。
-- Agent 自己产生的内容（模型输出、工具结果）写入时直接取号：`message_sequence` 是该列的默认值，插入时省略该列即可。由此保证工具调用之后紧跟工具结果。
-- 别人发来的消息到达时显式写入空值，即待读；该 Agent 下一次调用模型前，按到达顺序用 `nextval('message_sequence')` 补号。
-- 压缩实现后，`messageList` 由最新一条摘要与摘要覆盖位置之后、`sequence` 不为空的原始消息组成。摘要先放入上下文，原始消息按 `sequence` 排序；不能直接按摘要自身的插入位置截断。没有摘要时返回全部已读消息。
-- 聊天界面中的 `delivered` / `read` 由 `sequence` 是否为空算出，不另加列（见 [04 消息与实时通信](04-messaging.md#消息状态)）。
+2026-11-02 之前，别人发来的消息（用户、日程）入库时 `sequence` 为空，表示待读，Agent 下一次调用模型前才按到达顺序补号。用户要求去掉已读状态后，`00026` 把遗留的待读行按 `id` 顺序补号，再把列改为非空，现行规则是：
+
+- `sequence` 由数据库序列 `message_sequence` 发号，整张表共用一个递增计数器；所有消息插入时省略该列，直接取默认值。
+- 工具执行期间到达的用户消息会排在工具调用与回执之间，组装请求时回执仍紧跟它的调用（见 [05 请求组装规则](05-main-runtime.md#请求组装规则2026-11-02)），所以不需要靠延后补号来保证调用与回执相邻。
+- `messageList` 由最新一条摘要与摘要覆盖位置之后的原始消息组成。摘要先放入上下文，原始消息按 `sequence` 排序；不能直接按摘要自身的插入位置截断。没有摘要时返回全部消息。
+- 聊天界面不再显示 `delivered` / `read`（见 [04 消息与实时通信](04-messaging.md#消息状态)）。
 - 往某用户的列表插入消息时需先取按用户区分的写入锁，原因见 [04 消息与实时通信](04-messaging.md#写入顺序)。
 
 ## 压缩与上下文检索
@@ -138,7 +133,7 @@ stateDiagram-v2
 
 `00011` 新增摘要覆盖位置、已处理的超时回答位置（已由 `00018` 随闲置触发一并删除）、独立压缩步骤与调用用途。容量与阈值条件作用于 Main。摘要使用 Main 当前配置的模型，关闭工具，使用低推理强度并保留完整输出预算；摘要正文另设长度目标。压缩模型调用成功就使用返回的正文，不校验截断、空正文或工具调用，也不分批压缩；调用失败时不保存摘要、保留原上下文。
 
-看板保存模型时一并保存目录中的上下文容量；已知容量减去输出预留和安全余量后，可能早于配置阈值触发压缩。摘要请求期间新到的消息在后续普通请求前补读。
+看板保存模型时一并保存目录中的上下文容量；已知容量减去输出预留和安全余量后，可能早于配置阈值触发压缩。摘要请求期间新到的消息位于覆盖位置之后，后续普通请求中接在摘要后面。
 
 ### 历史检索 `已实现`
 
@@ -162,8 +157,8 @@ stateDiagram-v2
 | --- | --- | --- |
 | `users` | `email` 唯一 | 登录时按邮箱查找；保证邮箱不重复 |
 | `sessions` | `token_hash` 唯一、`(user_id)` | 按令牌查找会话；删除用户时级联 |
-| `messages` | `sequence` 唯一 | 保证序号不重复（待读消息为空值，不受限制） |
-| `messages` | `(user_id, sequence)` | 读取 Main 的 `messageList`，查找其待读消息 |
+| `messages` | `sequence` 唯一 | 保证序号不重复 |
+| `messages` | `(user_id, sequence)` | 读取 Main 的 `messageList`；`main_work` 取每个用户最新一条消息 |
 | `messages` | `(user_id, sequence) WHERE is_summary` | 查找 Main 最新的摘要 |
 | `messages` | `(user_id, id)` | 按位置推送、历史翻页 |
 | `messages` | `(user_id, client_message_id)` 唯一 | 识别重发 |
@@ -185,6 +180,7 @@ stateDiagram-v2
 | `00021_user_visible_messages.sql` | `messages.visible` 显式记录聊天可见性；`role` 去掉 `system`，旧运行时 system 行转为带 `name` 的不可见 user 行 | `已实现` |
 | `00024_drop_message_embedding.sql` | 删除 `messages.embedding` 列、HNSW 与待补算索引及 pgvector 扩展，向量检索整体移除 | `已实现` |
 | `00025_remove_subagents.sql` | 删除 `subagents` 表与各表 `subagent_id` 列，Subagent 整体移除（先清其历史行） | `已实现` |
+| `00026_derive_main_work_from_messages.sql` | 去掉待读：遗留待读行补号后 `sequence` 改为非空；删除落库的指令、当前时间与进度提醒行及 `steps.model_reply`；新增 `users.main_failed_through_sequence` 与视图 `main_work` | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。

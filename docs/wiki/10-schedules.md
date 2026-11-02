@@ -34,17 +34,17 @@ Main 使用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`
 
 ## 到期如何进入 Main
 
-当前 `Runner.Start` 在启动时和每秒扫描数据库队列，待读消息会唤醒对应 Agent。执行锁保证同一用户的 Main 串行工作。Schedule 可以复用这些能力，相关代码在 `backend/internal/agent/runner.go` 和 `backend/db/queries/messages.sql`。
+当前 `Runner.Start` 在启动时和每秒扫描 `main_work`，最新消息需要处理的用户会被唤醒（2026-11-02 起，见 [05](05-main-runtime.md#运行循环-已实现)）。执行锁保证同一用户的 Main 串行工作。Schedule 可以复用这些能力，相关代码在 `backend/internal/agent/runner.go` 和 `backend/db/queries/messages.sql`。
 
 调度器在启动时及之后每秒扫描，按以下流程投递：
 
 1. 从数据库扫描到期候选。
 2. 开启短事务，先取得该用户的消息写锁，再锁定计划行，重新检查状态、版本和到期时间。
-3. 使用数据库时间，写入本次触发记录和发给 Main 的待读消息。
+3. 使用数据库时间，写入本次触发记录和发给 Main 的触发消息。
 4. 周期计划计算下一次时间，一次性计划标记为已触发。
 5. 在同一事务发出通知并提交，随后唤醒现有 Runner。
 
-触发消息包含计划 ID、本次触发 ID、原定时间、实际投递时间和上下文快照。沿用 `role=user`、`sender=system`、`sequence=NULL` 的内部消息形态，并在内容中注明来源。`sender` 表示消息来源，模型消息的 `role` 表示输入形态，两者不能混为一谈。
+触发消息包含计划 ID、本次触发 ID、原定时间、实际投递时间和上下文快照。沿用 `role=user`、`sender=system` 的内部消息形态（2026-11-02 起与其他消息一样入库即分配 `sequence`），并在内容中注明来源。组装请求时不在触发消息后插入当前时间，正文已带原定时间、实际投递时间和时区。`sender` 表示消息来源，模型消息的 `role` 表示输入形态，两者不能混为一谈。
 
 现有聊天查询隐藏这类内部输入，Main 仍以正文联系用户（2026-10-30 起取代 `send_message(to=user)`）；不写正文即静默处理完本次触发。Main 正在工作时，新输入在后续模型请求前读取，不中断正在进行的请求。
 
@@ -52,7 +52,7 @@ Main 使用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`
 
 `schedules` 保存用户、标题、任务上下文、时间规则、时区、状态、版本和 `next_run_at`。状态为 `active`、`paused` 或 `triggered`，最后一种仅表示一次性安排已投递，不表示任务执行成功。`schedule_occurrences` 保存本次上下文快照、原定时间、投递时间和触发消息 ID，并以计划、版本、原定时间的组合建立唯一约束。
 
-触发记录、待读消息和下一次时间必须在同一事务提交。这样进程中途退出时，要么整次投递提交，要么留待下次扫描。内存中的 timer 和通知只负责唤醒，PostgreSQL 保存事实。创建、修改和删除计划也放在现有 `executeDatabaseTool` 事务内，与工具回执一起提交。
+触发记录、触发消息和下一次时间必须在同一事务提交。这样进程中途退出时，要么整次投递提交，要么留待下次扫描。内存中的 timer 和通知只负责唤醒，PostgreSQL 保存事实。创建、修改和删除计划也放在现有 `executeDatabaseTool` 事务内，与工具回执一起提交。
 
 现有 `saveReply` 先取得用户消息写锁，再执行数据库工具。调度器必须遵循相同锁顺序，避免修改计划和触发计划互相等待。等待未来时间不占 Agent 执行锁或模型请求。
 
