@@ -1,47 +1,33 @@
 flowchart TD
-    subgraph L1["第一层：React Web 应用 · 移动端 PWA"]
+    subgraph L1["第一层：TanStack Start Web 应用 · 移动端 PWA"]
         CLIENT["Main 聊天界面：WebSocket · 断线恢复"]
     end
 
     subgraph L2["第二层：Go 后端"]
         API["API：认证 · 收发消息 · WebSocket · 只读管理"]
         MESSAGES["消息服务：路由 · 保存消息 · 直接触发接收方"]
-        DB[("PostgreSQL：agent 身份 · 消息历史 · Agent 状态 · 步骤与模型请求日志")]
+        DB[("PostgreSQL：消息历史 · 步骤与模型请求日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
             MAIN["Main Runtime：messageList 上下文 · 按用户串行处理"]
-            ASSIGN["assign_subagents"]
-            SEND["send_message"]
             SEARCH["search_message"]
             READ["read_message"]
 
-            MAIN <-->|"任务说明 / subagent_id"| ASSIGN
-            MAIN <-->|"给 Subagent 发消息 / 投递回执"| SEND
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
             MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
         end
 
-        subgraph SUBBOX["Subagent：按任务创建"]
-            SUB["Sub Runtime：独立上下文 · 后台执行 · 限额并行"]
-        end
-
-        TOOLS["Main / Subagent 共用执行工具<br/>已实现：search · fetch_url<br/>待实现：其他 HTTP/MCP"]
-        SUB <-->|"工具调用 / 结果"| TOOLS
+        TOOLS["Main 执行工具<br/>已实现：search · fetch_url<br/>待实现：其他 HTTP/MCP"]
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 对外消息与事件"| MESSAGES
         MESSAGES <-->|"保存与读取消息"| DB
         MESSAGES -->|"消息保存后直接触发 main"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
-        ASSIGN <-->|"记录 Subagent 后异步启动 / 立即返回 subagent_id"| SUB
-        SEND <-->|"投递给指定 subagent / 回执"| MESSAGES
-        SEARCH <-->|"按用户权限搜索历史"| DB
-        READ <-->|"按 ID 和消息归属读取"| DB
+        SEARCH <-->|"按用户搜索历史"| DB
+        READ <-->|"按 ID 读取"| DB
 
-        MESSAGES -->|"投递给 sub 的补充消息"| SUB
-        SUB -.->|"send_message 发给 main；失败时由运行时代发通知"| MESSAGES
-        SUB <-->|"保存 Run 状态与执行轨迹"| DB
     end
 
     subgraph L3["第三层：外部服务"]
@@ -52,6 +38,5 @@ flowchart TD
     ADMIN["管理看板：admin/ · 模型调用观测与模型配置<br/>同一仓库 / 独立部署，开发中"]
     ADMIN <-->|"独立密码登录 / 管理会话 / 观测与模型配置"| API
     CLIENT <-->|"WebSocket 登录 / 历史 / 收发消息与推送"| API
-    MAIN <-->|"模型推理 / 消息、派发与执行工具请求"| MODEL
-    SUB <-->|"模型推理 / 执行工具的调用请求"| MODEL
+    MAIN <-->|"模型推理 / 消息与执行工具请求"| MODEL
     TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL

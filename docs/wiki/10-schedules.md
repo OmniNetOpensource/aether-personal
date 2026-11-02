@@ -6,13 +6,13 @@
 
 > agent拥有一个布置schedule任务的工具，时间到了之后，任务的上下文会发给main
 
-Agent 通过工具保存安排，到期后系统把任务上下文投递给该用户的 Main。Main 沿用长期对话和现有执行工具处理输入，可以直接工作，也可以派发 Subagent。选择理由是让未来任务复用 Main 的理解、执行与沟通能力。Schedule 负责时间和上下文投递。
+Agent 通过工具保存安排，到期后系统把任务上下文投递给该用户的 Main。Main 沿用长期对话和现有执行工具处理输入并直接工作。选择理由是让未来任务复用 Main 的理解、执行与沟通能力。Schedule 负责时间和上下文投递。
 
 用户随后确认按此方案直接实现，一次性和周期任务都支持。当前已有工具、数据表和调度代码，实现采用下面的投递与恢复规则。
 
 ## 工具与任务上下文
 
-Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`。`update` 的 `enabled=false` 暂停，`enabled=true` 恢复。用户归属从调用者身份取得，触发目标固定为该用户的 Main。列表每页最多 50 条，使用返回的 `next_before` 读取下一页。
+Main 使用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`。`update` 的 `enabled=false` 暂停，`enabled=true` 恢复。用户归属从调用者身份取得，触发目标固定为该用户的 Main。列表每页最多 50 条，使用返回的 `next_before` 读取下一页。
 
 创建时由 Agent 整理任务说明和必要背景，保存一份未来仍能理解的上下文，包括目标、资料位置、限制和交付要求。完整历史仍保留在 Main 的长期对话中，无需默认复制整段聊天。不能依赖“处理刚才那个”这样的临时指代，也不能把搜索结果中的指令当成用户授权。
 
@@ -56,15 +56,15 @@ Main 与 Subagent 共用 `schedule` 工具，支持 `create`、`list`、`update`
 
 现有 `saveReply` 先取得用户消息写锁，再执行数据库工具。调度器必须遵循相同锁顺序，避免修改计划和触发计划互相等待。等待未来时间不占 Agent 执行锁或模型请求。
 
-本次记录只证明上下文已投递给 Main。`steps.finished_at` 表示某个模型步骤结束，不能证明整个任务完成，Main 还可能等待 Subagent。首版无需因此新增通用任务或工作流实体，也不能承诺外部操作恰好执行一次。
+本次记录只证明上下文已投递给 Main。`steps.finished_at` 表示某个模型步骤结束，不能证明整个任务完成，首版无需因此新增通用任务或工作流实体，也不能承诺外部操作恰好执行一次。
 
 ## 实现位置与验证
 
-调度循环与 schedule 的创建、修改位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义、谁能调用和分发在 `backend/internal/agent/tools.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。
+调度循环与 schedule 的创建、修改位于 `backend/internal/scheduler/`，在 `backend/cmd/server/main.go` 启动。工具定义、谁能调用和分发在 `backend/internal/agent/tools/`，其中 schedule 的登记在 `schedule.go`。查询位于 `backend/db/queries/schedules.sql`，表结构由 `00013_add_schedules.sql` 创建，数据库代码由 sqlc 生成。
 
 2026-10-27 在隔离的 PostgreSQL 18 中完成迁移执行、回滚、再执行。构建、`go vet` 和差异空白检查通过。未新增测试文件。
 
-使用两个真实 Go 后端实例完成 21 项本地行为检查，覆盖工具创建与修改、暂停与恢复、分页、用户隔离、时区、并发去重、投递事务失败回滚、重启补投递、已投递消息保留，以及 Subagent 创建安排。这组检查通过已保存模型回复的恢复路径调用真实数据库工具，外部模型网络关闭。
+使用两个真实 Go 后端实例完成 21 项本地行为检查，覆盖工具创建与修改、暂停与恢复、分页、用户隔离、时区、并发去重、投递事务失败回滚、重启补投递、已投递消息保留，这组检查通过已保存模型回复的恢复路径调用真实数据库工具，外部模型网络关闭。
 
 另外使用真实 DeepSeek 模型通过工具创建一次性和每分钟周期安排。实际时钟触发一次性一次、周期两次，Main 均通过 `send_message` 交付指定结果，认证后的历史 API 返回对应消息。最后一次交付后中断未完成的后续请求，再重启恢复，未重复发送结果。该验证未依赖浏览器持续在线。验证计划结束后均暂停，本地证据位于被 Git 忽略的 `backend/bin/schedule-evidence/`。
 

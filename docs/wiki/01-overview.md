@@ -11,7 +11,7 @@
 因此：
 
 - 首要目标是维护者自己长期使用；功能取舍、优先级与体验以维护者自己的实际使用为准，不再以企业部署后服务众多终端用户为首要设计目标。
-- 项目仍然开源：其他人可以自行部署使用，也可以注册使用维护者向公众开放的实例；每位用户各自拥有自己的 Main 与 Subagent。
+- 项目仍然开源：其他人可以自行部署使用，也可以注册使用维护者向公众开放的实例；每位用户各自拥有自己的 Main（2026-11-02 起只有 Main）。
 - 部署、配置和本地开发流程应让其他自行部署者能照文档上手，不能依赖维护者本机的私有资源；但不为企业级集成（如统一登录、多角色权限）预留设计，以后确有需要再单独讨论。
 - 模型与发信的 Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担。
 - 支持删除用户，暂时只能由管理员删除，用户不能自行删除。
@@ -23,14 +23,14 @@
 
 ```mermaid
 flowchart LR
-    APP["第一层：React Web App<br/>移动端 PWA"]
+    APP["第一层：TanStack Start Web App<br/>移动端 PWA"]
     subgraph BACKEND["第二层：Go 后端（多台对等、无状态）"]
         API["API<br/>HTTP + WebSocket"]
-        RUNTIME["Agent 运行时<br/>Main · Subagent"]
+        RUNTIME["Agent 运行时<br/>Main"]
     end
-    DB[("PostgreSQL 18 + pgvector<br/>共享存储")]
+    DB[("PostgreSQL 18<br/>共享存储")]
     subgraph EXTERNAL["第三层：外部服务"]
-        OPENROUTER["OpenRouter<br/>模型 · embedding"]
+        OPENROUTER["OpenRouter<br/>模型"]
         RESEND["Resend<br/>验证码邮件"]
         TOOLS["搜索 · HTTP/MCP<br/>浏览器 · 代码隔离环境"]
     end
@@ -57,21 +57,25 @@ flowchart LR
 | 浏览器存储 | localStorage 保存登录，兼容早期 Flutter 与 Lynx 的键；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
 | PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
 
-保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。Subagent 和工具过程留在后台，Main 的实际消息进入聊天。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
+保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单、外层卡片和任务面板。工具过程留在后台，Main 的实际消息进入聊天。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；仅最新用户消息显示正常回执，失败消息保留重发入口。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
-2026-10-28，用户要求输入框外围透明，单行时文字与图标垂直居中，多行时加号和发送按钮固定在输入框底部，文字向上扩展，并在左侧增加加号。输入框以透明外围的浮层覆盖消息区，滚动内容为输入框实际高度预留底部空间；多行输入与已选文件改变高度时同步更新。用户确认本次加号仅提供本地文件选择入口，支持显示文件名和移除选择；不上传文件、不随聊天发送文件。
+2026-10-28，用户要求输入框外围透明，单行时文字与图标垂直居中，多行时加号和发送按钮固定在输入框底部，文字向上扩展，并在左侧增加加号。输入框以透明外围的浮层覆盖消息区，滚动内容为输入框实际高度预留底部空间；多行输入与已选文件改变高度时同步更新。用户确认本次加号仅提供本地文件选择入口，支持显示文件名和移除选择；不上传文件、不随聊天发送文件。 该阶段范围已被 2026-11-02 的多模态输入需求取代：当前在统一输入面板中混排文字、引用和图片，加号实际上传图片到私有 OSS，模型调用前由后端读取并转 base64，详见 [04](04-messaging.md#引用图片与多模态输入框)。
 
 中文名为「阿芒」，英文名为 Aether。保留用户指定的深绿背景黄色毛绒角色图标，原图位于 `frontend/public/app-icon.png`；管理看板独立部署的副本位于 `admin/public/app-icon.png`。界面沿用森林绿 `#204b32`、柔黄 `#f6cf83` 与奶油白 `#fffcf4`，前端色值集中在 `frontend/src/palette.css`。使用系统字体，避免离线应用外壳依赖大型字体下载。2026-10-28，用户要求整体字号略微放大：正文与输入框由 16px 调整为 18px，其余文字同步增加 2px，并相应增加行高，改善阅读舒适度。
 
-Main 正文由 marked 解析，再渲染成 React DOM，保留表格、代码块、列表、粗体、引用与来源链接。HTML 作为文本显示，远程图片显示替代文字；链接只允许无账号密码的 HTTP(S)，新窗口使用 `noopener noreferrer`。用户消息显示原文。Enter 发送、Shift+Enter 换行，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
+2026-11-02，用户要求 Markdown 渲染对齐 Aether Start。Main 正文改用同款 unified / remark 管线，支持中文紧邻标点的加粗与删除线、GFM 表格与任务列表、KaTeX 行内和块级公式，以及带语言标签、行号和复制反馈的 Shiki 高亮代码块；排版对齐其标题层级、列表缩进和块间距，配色与 18px 正文沿用当前主题。选择相同解析管线是为了统一语法和阅读体验，替代手工遍历 marked token。整条消息一次解析，保留跨段列表与引用式链接；当前后端整条推送，不引入 Start 的流式 DOM 动画。代码高亮器和常用语言包按需加载，未知语言或高亮加载失败显示原文。原始 HTML 不执行，也不转成 DOM；解析结果先清洗，再生成公式。图片与 Start 一样展示，仅允许无账号密码的 HTTP(S)，不发送页面来源；链接同样只允许这些地址，新窗口使用 `noopener noreferrer`。表格、代码块与块级公式在各自区域横向滚动。用户消息显示原文。Enter 换行、Ctrl+Enter 发送，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
 
 2026-10-28，用户要求删除整个顶部栏，让聊天内容直接占满页面顶部；同时删除页面的「安装应用」按钮和安装说明弹窗，安装继续使用浏览器自带入口。Service Worker 注册与显式更新继续保留，更新提示仅在有待更新版本时出现。
 
 PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/build-pwa.mjs` 从现有图标生成普通图标、Apple 图标与带安全边距的 maskable 图标，随后按构建内容生成 Service Worker。缓存只包含本次构建的公开静态资源，不缓存认证响应、消息 API 或 WebSocket。入口缓存 `/`，避免 Go 对 `/index.html` 的重定向影响离线导航。
 
-用户曾在线打开并完成缓存后，可在断网时打开应用、起草消息；聊天历史仍从服务器读取，重新打开后的离线界面不提供历史消息副本。发送消息、Main 推理和历史同步需要网络。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知、后台持续连接尚未实现。
+PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-02 迁移验收发现，外壳可以离线加载，但已有聊天控制器在离线冷启动时一直等待后端 `ready`，仍停留在 loading，草稿编辑尚不能进入；这段初始化逻辑在迁移前已存在。聊天历史仍从服务器读取，重新打开后的离线界面不提供历史消息副本。发送消息、Main 推理和历史同步需要网络。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知、后台持续连接尚未实现。
 
-代码位于 `frontend/src/`，构建工具沿用 Rsbuild，依赖固定在 `frontend/package-lock.json`。`npm run build` 只生成 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录，聊天 WebSocket 契约不变。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+2026-11-02，用户要求前端改为 TanStack Start。Start 基于现有 React、React DOM 与 TypeScript，接管文件路由、HTML 外壳和构建时预渲染，底层构建工具保留 Rsbuild。当前采用 [Start 官方 SPA 模式](https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode)：构建时生成公开的 HTML 外壳，登录与聊天在浏览器启动后通过既有 Go WebSocket 恢复。聊天数据属于登录用户，当前无需为了搜索引擎渲染消息，因此继续静态部署，避免新增常驻 JavaScript 服务或第二套认证与消息 API。
+
+代码位于 `frontend/src/`：`router.tsx` 创建路由器，`routes/__root.tsx` 维护 HTML、元信息与 PWA 清单，`routes/index.tsx` 挂载现有聊天应用。`routeTree.gen.ts` 由 Start 自动生成并提交，不手改；开发和构建时重新生成。聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑。移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
+
+依赖固定在 `frontend/package-lock.json`，Node.js 最低版本为 `22.12.0`。`npm run build` 先生成路由与构建、执行类型检查，再生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。构建时使用的服务端产物放在 `frontend/build/server`，不部署、不进入 PWA 缓存。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 
@@ -81,14 +85,10 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | 认证 | 邮箱验证码登录、退出，全部走聊天 WebSocket 命令，见 [03 认证](03-auth.md) | `已实现` |
 | 消息 API | WebSocket 登录、历史翻页、收发与推送；服务器事件定义与中转在 `events.go`，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
 | Main 运行时 | 按用户串行运行 Main，调用模型与工具，见 [05 Main 运行时](05-main-runtime.md) | `已实现` |
-| `send_message` | 仅 Agent 间：Main 发给 Subagent，Subagent 发给 Main；Main 回复用户走正文 | `已实现` |
-| `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `已实现` |
-| `assign_subagents` | 派出 Subagent，异步启动并立即返回 `subagent_id` | `已实现` |
-| `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将保存的上下文交给 Main，见 [10](10-schedules.md) | `开发中` |
-| Subagent 运行时 | 独立上下文、后台执行、每用户 3 个并行、持久排队、15 分钟超时 | `已实现` |
+| `read_message` / `search_message` | 按 ID 读取、按关键词搜索历史消息 | `已实现` |
+| `schedule` | Main 安排一次性或周期任务，到期将保存的上下文交给 Main，见 [10](10-schedules.md) | `开发中` |
 | 压缩 | 超过回答间隔或上下文阈值后，在下一次模型请求前生成摘要；阈值由看板配置 | `开发中` |
-| 向量计算 | 后台为消息补算 embedding | `仅设计` |
-| 管理员只读观测接口 | 用户、Main / Subagent、模型调用与历史步骤，见 [08](08-admin-observability.md) | `开发中` |
+| 管理员只读观测接口 | 用户、Main、模型调用与历史步骤，见 [08](08-admin-observability.md) | `开发中` |
 | 管理员用户操作接口 | 删除用户等管理操作 | `待确认` |
 
 ### 第三层：外部服务
@@ -96,7 +96,6 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | 服务 | 用途 | 状态 |
 | --- | --- | --- |
 | OpenRouter 对话接口 | Main 使用 `deepseek/deepseek-v4.1-flash-1017`（`MAIN_MODEL` 可改） | `已实现` |
-| OpenRouter embedding 接口 | `google/gemini-embedding-2`，1536 维 | `仅设计` |
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`fetch_url` | Serper、Parallel、EveryInfra，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
@@ -112,13 +111,13 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 因此，“每用户固定一个 Main Agent”表示用户与 Main 的逻辑关系，不能据此预设每用户拥有常驻进程、独立容器或独立服务。Main 由 `user_id` 确定，有消息要处理时才在某台后端上运行（见 [05 Main 运行时](05-main-runtime.md)）。
 
-### 任务是虚拟概念，实体是 Subagent
+### 任务是虚拟概念（Subagent 已于 2026-11-02 删除）
 
 用户原话：
 
 > 在我的设想里，没有任务这个实体概念（只是说有这个虚拟概念）。
 
-因此，“任务”只是 Main 交给 Subagent 的说明，不单独建模；实体是 Subagent 本身。数据库表命名为 `subagents`，其 ID 在数据库、代码、工具接口和架构图中统一称为 `subagent_id`，不使用 `task_id`。
+该节记录原设计：当时“任务”只是 Main 交给 Subagent 的说明，不单独建模，实体是 Subagent 本身。2026-11-02 Subagent 已整体删除，系统不再有任务派发概念，见 [05 删除 Subagent](05-main-runtime.md#删除-subagent2026-11-02)。
 
 ### 架构图的修改记录
 
@@ -128,10 +127,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 - 消息保存后直接触发接收方。
 - Main 使用 `messageList` 上下文，按用户串行处理。
-- Main 保留消息与派发工具，并与 Subagent 共用执行工具；当前已实现 `search` 和 `fetch_url`。历史搜索和读取仍属于设计范围。
-- `assign_subagents` 记录 Subagent 后异步启动，立即返回 `subagent_id`。
-- Subagent 按任务创建，使用独立上下文，后台执行，限额并行。
-- Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知。
+- Main 直接使用执行工具；当前已实现 `search` 和 `fetch_url`。
 - 历史消息搜索和读取受用户权限及消息归属限制。
 - 保存消息、Run 状态及执行轨迹。
 - 浏览器和代码任务在隔离执行环境中执行。
@@ -141,7 +137,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 **后端无状态，状态都在 PostgreSQL。** 任何一台后端都能处理任何用户的请求；机器之间用 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，用咨询锁（advisory lock）保证同一用户的 Main 同一时间只在一台机器上运行。不引入 Redis。内存中只有 WebSocket 连接与进行中的模型调用，丢失后都能恢复。详见 [04 消息与实时通信](04-messaging.md#整体结构)。
 
-**一切通信都是消息。** 用户、Main、Subagent 之间只通过消息联系，每个 Agent 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）；`send_message` 只用于 Main 与 Subagent 之间。
+**一切通信都是消息。** 用户与 Main 只通过消息联系，Main 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）。
 
 ## 工程组织
 
@@ -176,12 +172,12 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | HTTP 层 | 标准库 `net/http` | 不引入 Web 框架 |
 | 日志 | `log/slog`；dev 输出文本，prod 输出 JSON | 标准库 |
 | 数据库访问 | pgx `v5.11.0` + sqlc `v1.31.1` | 手写 SQL，sqlc 生成带类型的 Go 调用代码，由 pgx 执行 |
-| 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`），主键 `uuidv7()` | 向量检索与业务数据放在同一个数据库 |
+| 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`），主键 `uuidv7()` | 业务数据与历史检索共用一个数据库 |
 | 迁移 | goose `v3.29.0`（`go tool goose`） | 见 [02 数据模型](02-data-model.md#迁移) |
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
-| 前端 | React + React DOM + TypeScript，Rsbuild 构建 | 纯 Web 应用，移动端安装 PWA |
+| 前端 | TanStack Start + React + TypeScript，Rsbuild 构建 | SPA 静态部署，移动端安装 PWA |
 
 ## 后端骨架 `已实现`
 
@@ -228,7 +224,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 ## 模型服务与费用
 
-项目以维护者自用为主、同时开源供其他人自行部署，因此模型、邮件和联网工具的 Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担。Main 与 Subagent 的模型见 [05 Main 运行时](05-main-runtime.md#模型)。
+项目以维护者自用为主、同时开源供其他人自行部署，因此模型、邮件和联网工具的 Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担。Main 的模型见 [05 Main 运行时](05-main-runtime.md#模型)。
 
 ## 本地开发
 

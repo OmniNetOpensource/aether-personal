@@ -1,8 +1,8 @@
 # 阿芒 · aether-personal
 
-以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 协作与外部工具，以及 dev/prod 环境。
+以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 与外部工具，以及 dev/prod 环境。
 
-当前开发版本包含邮箱验证码登录、Main 长期对话、后台 Subagent、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。执行工具目前只有搜索和网页读取。用户界面只显示与 Main 的消息流，Subagent 和工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
+当前开发版本包含邮箱验证码登录、Main 长期对话、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。执行工具目前只有搜索和网页读取。用户界面只显示与 Main 的消息流，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
 
 ## 已确认方向
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 项目名称 | `aether-personal` |
 | 产品名称 | 中文「阿芒」，英文 Aether |
-| 前端 | React + React DOM + TypeScript；纯 Web 应用，移动端使用 PWA |
+| 前端 | TanStack Start + React + TypeScript；SPA 静态部署，移动端使用 PWA |
 | 后端 | Go |
 | 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡；生产部署待完成 |
 | Go 版本 | `1.27.2` |
@@ -19,8 +19,8 @@
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1`：手写 SQL，生成带类型的 Go 调用代码 |
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
-| 数据库 | PostgreSQL 18 + pgvector（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter 与可选的 ikun Gemini；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，Subagent 默认跟随 Main，可分别配置 |
+| 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
+| 模型服务 | OpenRouter 与可选的 ikun Gemini；Main 默认 `deepseek/deepseek-v4.1-flash-1017` |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
@@ -38,11 +38,9 @@
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[数据模型](docs/wiki/02-data-model.md)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
-- Schedule：Main 与 Subagent 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
-- Main 可直接执行或委派任务，与 Subagent 共用联网执行工具；消息和派发权限按角色区分。
-- Main 在耗时任务中用正文汇报进度，完成后用正文给结果；连续 5 轮只有工具调用时，运行时插入一条用户看不见的提醒。历史检索 `search_message`、`read_message` 已实现：Main 可搜该用户全部消息记录，Subagent 只搜自己的记录。
-- 按任务创建 Subagent，独立上下文、后台执行、限额并行。
-- Subagent 与 Main 互相 `send_message`；Subagent 失败时由运行时代发通知。
+- Schedule：Main 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
+- Main 直接使用联网执行工具完成任务。
+- Main 在耗时任务中用正文汇报进度，完成后用正文给结果；连续 5 轮只有工具调用时，运行时插入一条用户看不见的提醒。历史检索 `search_message`、`read_message` 已实现：Main 可搜该用户全部消息记录。
 - 按用户权限搜索和读取历史消息。
 - 通过 OpenRouter 调用模型。
 - 搜索、HTTP API、MCP 等外部服务调用。
@@ -75,11 +73,11 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-前端工程位于 `frontend/`，React 直接渲染标准 DOM。Web 与移动 PWA 共用 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
+前端工程位于 `frontend/`，TanStack Start 管理文件路由与 HTML 外壳，React 渲染标准 DOM。Web 与移动 PWA 共用 SPA 静态产物 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
 
 ## 本地开发
 
-需要 Go `1.27.2`、Docker，以及 Node.js `^20.19.0 || >=22.12.0`（建议 Node 24）。前端依赖固定在 `frontend/package-lock.json`，不再需要 Flutter SDK。
+需要 Go `1.27.2`、Docker，以及 Node.js `>=22.12.0`（建议 Node 24）。前端依赖固定在 `frontend/package-lock.json`，不再需要 Flutter SDK。
 
 首次准备基础配置与管理员登录：
 
@@ -105,7 +103,7 @@ make check-integration
 
 `make check-live` 显式调用真实搜索和网页服务，会消耗相应供应商额度；未配置密钥的供应商显示为跳过，不能视为验证成功。
 
-当前全面采用 B：Main 与 Subagent 共用执行工具。`make check-research` 使用正式提示词和正常 Runner 重放真实研究任务，输出完整消息和执行证据供 review；该命令会调用真实服务并消耗额度。可通过 `RESEARCH_OUTPUT=/绝对路径` 指定结果目录。原 A/B 数据作为历史记录保留，见 [Main 职责与验证](docs/wiki/06-main-role-experiment.md)。
+`make check-research` 使用正式提示词和正常 Runner 重放真实研究任务，输出完整消息和执行证据供 review；该命令会调用真实服务并消耗额度。可通过 `RESEARCH_OUTPUT=/绝对路径` 指定结果目录。原 A/B 数据作为历史记录保留，见 [Main 职责与验证](docs/wiki/06-main-role-experiment.md)。
 
 仅运行后端时仍可使用：
 
@@ -124,11 +122,10 @@ make db-down   # 停止本地 PostgreSQL
 | `ADMIN_PASSWORD_HASH` | 管理看板密码哈希，用 `python3 scripts/set-admin-password.py` 设置；留空关闭管理入口。见 [08](docs/wiki/08-admin-observability.md) |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式（dev 文本，prod JSON） |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
-| `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 或 Subagent 占一条；另有一条独立 LISTEN 连接 |
+| `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 占一条；另有一条独立 LISTEN 连接 |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
 | `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
 | `MAX_OUTPUT_TOKENS` | 可选，单次请求输出 Token 上限，默认 `8192`，包含推理 Token；按保存时已知模型能力缩小 |
-| `SUBAGENT_MODEL` | 可选，Subagent 的初始默认模型，留空跟随 Main；可在管理看板切换 |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
@@ -149,4 +146,4 @@ make db-down   # 停止本地 PostgreSQL
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`，打开 [管理看板](http://127.0.0.1:5174)。无第三方依赖或构建步骤，需要 Node.js 22.9 或更新版本。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板包含运行概览、模型调用和模型配置。可按用户和 Main / Subagent 筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板包含运行概览、模型调用和模型配置。可按用户筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

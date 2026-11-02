@@ -1,6 +1,6 @@
 # aether-personal 架构 Wiki
 
-aether-personal 是以维护者自用为主的开源 personal agent：首先供维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。每位用户拥有一个 Main Agent，Main 可以按任务派出 Subagent 在后台工作。
+aether-personal 是以维护者自用为主的开源 personal agent：首先供维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。每位用户拥有一个 Main Agent。2026-11-02 起 Subagent 已整体删除，Main 直接使用工具完成工作。
 
 本 wiki 是架构与设计的完整说明：每一页既讲系统**怎么运转**，也讲每项选择**为什么这样做**，并保留用户确认时的原话。所有已确认选择的一览表与待确认问题见 [决策总览](../decisions.md)。
 
@@ -12,7 +12,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 | [02 数据模型](02-data-model.md) | 数据表、消息列表（`messageList`）的排序与待读规则、压缩与检索、外键、索引、迁移、sqlc |
 | [03 认证](03-auth.md) | 邮箱验证码登录、登录令牌、滑动过期、发信 |
 | [04 消息与实时通信](04-messaging.md) | 无状态多实例结构、WebSocket 协议、消息状态、推送、重发、写入顺序 |
-| [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理、Subagent 设计 |
+| [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理 |
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
 | [07 Linux 沙盒工作环境](07-sandbox.md) | 2026-10-29 起不在当前范围；已有实现已删除 |
 | [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、调用观测、模型选择、服务凭证管理和管理员权限 |
@@ -38,7 +38,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 2. 边生成边显示。`待确认`
 3. 更多工具：`read_message`、`search_message`。`已实现`
 4. 自动压缩。`开发中` 混合搜索仍为 `仅设计`。
-5. Subagent。`已实现`
+5. Subagent（已于 2026-11-02 删除）。
 
 此前已完成：后端骨架、数据库迁移、邮箱验证码登录。2026-10-22 按用户新顺序先实现 Subagent 联网工具和 Flutter Web，仅展示 Main 消息流。Go、Flutter 与真实数据库协议测试已通过；真实模型、Parallel 网页读取、微信公众号搜索与正文读取已经从 Flutter 页面跑通。2026-10-23 补齐 Serper 后，Google 搜索与网页读取也已通过 Flutter 页面完成真实联调，来源链接可点击并打开官方页面。原生平台未验收。
 

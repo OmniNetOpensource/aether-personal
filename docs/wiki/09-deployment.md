@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Web/PWA 静态资源与 Worker 代理 | Cloudflare Workers Static Assets | `aether.forkicks.fun` |
 | Go API、Agent Runtime | 阿里云新加坡的应用主机 | `origin-aether.forkicks.fun`，要求源站凭证 |
-| PostgreSQL 18 + pgvector | 应用主机的独立生产数据卷 | 不发布宿主机端口 |
+| PostgreSQL 18 | 应用主机的独立生产数据卷 | 不发布宿主机端口 |
 | 管理看板 | 应用主机的独立 Node 容器 | `admin-aether.forkicks.fun`，独立管理员密码 |
 
 源站和管理子域名由部署实现选定。2026-10-30 已在维护者个人阿里云账号的新加坡轻量服务器部署，并连接 Cloudflare；实际验收进度见下方记录。这些域名不作为其他 fork 的默认生产入口。
@@ -23,7 +23,7 @@
 make edge-dry-run
 ```
 
-`frontend/build/web` 是静态资源目录。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
+`frontend/build/web` 是 TanStack Start SPA 模式生成的静态资源目录，包含预渲染的 `index.html`。`frontend/build/server` 只供构建时预渲染使用，不上传到静态托管，也不作为生产 Node 服务启动。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
 `infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
 
@@ -153,3 +153,9 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 - [静态资源和 Worker 路由配置](https://developers.cloudflare.com/workers/static-assets/binding/)
 - [Workers WebSocket](https://developers.cloudflare.com/workers/runtime-apis/websockets/)
 - [Caddy 反向代理](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+
+### 聊天图片 OSS（2026-11-02）
+
+维护者账号已开通 OSS 按量付费服务，专用 Bucket 为 `aether-personal-images-20261102`，地域 `cn-hangzhou`，标准存储、本地冗余、私有访问，阻止公共访问已开启，使用 OSS 托管 AES256 加密。阿里云的服务开通订单金额为零，后续存储、请求和流量按实际使用计费。
+
+专用 RAM 用户 `aether-personal-images` 不开放控制台登录，只绑定 `AetherPersonalImageObjects` 自定义策略。策略仅允许此 Bucket 的 `aether-chat/*` 对象的 GetObject 与 PutObject，原文保存在 `infra/oss/ram-policy.json`。凭证已加密导入本地项目服务配置，临时明文导出文件已删除。本次未更新生产配置或执行部署。

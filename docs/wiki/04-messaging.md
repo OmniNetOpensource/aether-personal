@@ -14,7 +14,7 @@
 
 > 我想定义一下后端会传来的事件类型们，然后在一个文件里专门中转这些事件
 
-因此：访问主页时前端立刻与后端建立一条 WebSocket 双向通道，收到后端 `ready` 事件前只显示 loading 态；连接就绪后，登录、历史消息、发消息与实时推送全部走这条通道，前端不再为聊天调用 HTTP 接口。谁产生消息就写入 `messages` 表，谁需要就从表里查，PostgreSQL 的 `LISTEN/NOTIFY` 只负责“该去查了”的提醒。
+因此：访问主页时前端立刻与后端建立一条 WebSocket 双向通道，收到后端 `ready` 事件前只显示 loading 态；连接就绪后，登录、历史消息、发消息与实时推送全部走这条通道，登录、历史与消息收发不调用 HTTP；图片字节通过独立的 `POST /images` 上传到 OSS。谁产生消息就写入 `messages` 表，谁需要就从表里查，PostgreSQL 的 `LISTEN/NOTIFY` 只负责“该去查了”的提醒。
 
 服务器事件先集中定义、再由一个文件统一中转：后端事件结构只定义在 `backend/internal/httpapi/events.go`，该文件的 `eventRelay` 是聊天 WebSocket 唯一的写出口；前端在 `frontend/src/serverEvents.ts` 定义对应的校验结构，`frontend/src/ServerEventRelay.ts` 是前端唯一接触聊天 WebSocket 的文件，它把原始帧校验为事件后转交给 `ChatController`，其余前端代码不直接处理原始帧。
 
@@ -22,7 +22,7 @@
 
 参考业界做法后，采用“实例无状态、状态放在共享存储”的结构（与 [LangGraph Agent Server](https://docs.langchain.com/langsmith/agent-server)、[DBOS](https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution) 同一思路），不采用把请求路由到固定实例的 Actor 模型（如 Cloudflare Durable Objects、Restate Virtual Objects），因为后者依赖专门的平台。
 
-- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文、待读消息、Subagent 状态等都在 PostgreSQL 中。
+- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文、待读消息等都在 PostgreSQL 中。
 - 用户请求不需要路由到“正在运行 agent 的机器”：收到消息的机器只负责存入数据库；同一用户的 Main 由数据库锁保证同一时间只有一台机器运行，正在运行的机器在下一次模型调用前会取到新消息。
 - 机器之间通过 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，通知只带用户 ID，数据始终以表为准。不引入 Redis。
 - 内存中只有两样东西：WebSocket 连接（断开后 App 重连到任意机器即可）与进行中的模型调用（机器崩溃后由其他机器重新调用）。
@@ -49,7 +49,7 @@ sequenceDiagram
     Runner->>DB: 待读消息补号（变为已读），NOTIFY
     DB-->>WS: NOTIFY user_messages
     WS-->>App: messages {..., read_up_to}
-    Runner->>Model: 系统提示词 + messageList + 工具
+    Runner->>Model: 指令注入（不可见 user）+ 上个 compact 以来的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
     DB-->>WS: NOTIFY user_messages
@@ -59,7 +59,7 @@ sequenceDiagram
 ### 用户发消息
 
 1. App 发送 `send_message`，`client_message_id` 由 App 生成，App 显示 `sending`。
-2. 后端校验：`client_message_id` 为合法 UUID；只支持纯文本，`text` 非空且不超过 32,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。
+2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用和图片组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 32,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。
 3. 存入 `messages`，`id` 由数据库生成，`sequence` 为空；同一用户下 `client_message_id` 已存在时不重复保存。
 4. 在同一连接上回复 `delivered`；App 超时未收到则显示 `failed`，可点击重发。
 5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
@@ -72,7 +72,7 @@ sequenceDiagram
 - 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后前端立刻发送 `hello`，其中可携带已有登录令牌；5 秒内未收到 `hello` 即断开。不把令牌放在网址中，避免被写入访问日志。未带令牌或令牌已失效也能连上，后端回未登录的 `ready`，登录命令在同一条连接上继续进行。
 - 登录靠 `hello` 中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
 - 后端每 30 秒发送心跳 ping；连接断开时前端自动重连，重连时仍先发 `hello`。
-- 不合规则的 `send_message`（缺 `client_message_id`、文字为空或超过 32,000 字符）直接断开连接，原因 `invalid send_message`。正常使用的前端不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露。登录与历史翻页是用户可重试的请求，其失败通过 `request_failed` 事件按 `request_id` 回复，不关闭连接。
+- 不合规则的 `send_message`（缺 `client_message_id`、内容全空、正文与引用超过 32,000 字符，或图片引用不属于当前用户）直接断开连接，原因 `invalid send_message`。正常使用的前端不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露。登录与历史翻页是用户可重试的请求，其失败通过 `request_failed` 事件按 `request_id` 回复，不关闭连接。
 - 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。连接未登录时不注册唤醒，登录成功后才绑定用户。
 
 前端发往后端的命令：
@@ -85,7 +85,7 @@ sequenceDiagram
 | `{"type": "dev_login", "request_id": "..."}` | 未登录时请求开发测试登录，仅 dev 后端接受 |
 | `{"type": "load_history", "request_id": "...", "before": "..."}` | 已登录时向前翻一页历史，`before` 可省略取最新一页 |
 | `{"type": "logout", "request_id": "..."}` | 退出当前会话，连接保持未登录状态 |
-| `{"type": "send_message", "client_message_id": "...", "text": "..."}` | 发消息 |
+| `{"type": "send_message", "client_message_id": "...", "parts": [...]}` | 按顺序发送文字、引用与图片；旧纯文本客户端仍可只带 `text` |
 
 后端发往前端的事件只在 `events.go` 与 `serverEvents.ts` 两处对应定义，并分别由后端 `eventRelay` 与前端 `ServerEventRelay` 中转：
 
@@ -110,8 +110,31 @@ sequenceDiagram
 | `position` | 所在行的 ID，App 记下最后一条的值，重连时带上 |
 | `client_message_id` | 仅用户消息有；App 据此把本地 `failed` 的消息改为 `delivered` |
 | `sender` | `user` 或 `main` |
-| `text` | 文字内容 |
+| `text` | 正文文字，兼容旧客户端 |
+| `parts` | 用户消息的有序多模态内容；图片项的 `url` 是本次读取生成的临时预览地址 |
 | `created_at` | 写入时间 |
+
+## 引用、图片与多模态输入框
+
+2026-11-02，用户要求引用和图片上传对齐 Aether Start，并进一步要求多模态输入框、图片存入阿里云 OSS，由后端转为 base64 再发给模型。
+
+输入框使用与 Start 相同的 Tiptap 编辑器。文字、引用和图片是按光标顺序排列的内容，引用和图片是可选中、删除、撤销的行内节点。Enter 换行，Ctrl+Enter 发送，中文输入法确认候选字不发送。支持从文件选择、粘贴和拖放添加图片。上传尚未完成时不能发送，失败保留原有文字与引用。当前标签页的文字草稿保存在 sessionStorage；图片与引用草稿只保留在内存。
+
+同日按用户要求细调输入框内部元素：面板内边距 12px，内容区与工具栏相隔 8px，正文行高 32px，相邻段落相隔 4px。引用与图片节点统一为 44px 高、两侧各留 4px；缩略图为 36px 方形并完整显示，引用过长时单行省略、悬停可读全文。删除按钮在节点内居中，占用独立空间，不覆盖文字或图片。工具栏按钮在桌面为 40px，触屏为 44px；桌面展示 Ctrl+Enter 提示，焦点和悬停状态沿用当前主题。空态仅提示“发消息给阿芒”，避免窄屏折行侵入工具栏。这样文字与附件混排时有稳定的对齐和间距，也更容易点选与删除。 已在桌面与 320px 内容宽度下检查长引用和图片混排，无横向溢出，引用与图片的删除、撤销均可正常使用。
+
+用户进一步要求光标不要与节点重合。节点外壳在卡片两侧各保留 4px 内边距，让原生光标落在卡片边框之外；不向正文添加空格或零宽字符，避免改变发送内容和方向键的移动次数。已检查引用前、相邻节点之间、图片后的落点，以及节点之间的文字插入与撤销。
+
+选中同一条助手回复内的可见文字后显示“引用”按钮，点击后在输入框当前光标位置插入引用。引用保存文字快照、消息 ID 与可见正文中的起止位置。历史中的引用可以回到原文，必要时继续加载更早历史；浏览器支持 CSS Highlight 时高亮所选文字，否则提示整条消息。代码工具栏和公式隐藏 MathML 不计入正文位置。
+
+消息的 `parts` 有三种类型：`text` 保存正文，`quote` 保存引用快照与位置，`image` 保存文件名、OSS 对象引用、字节大小和 MIME 类型。发送、重发、历史展示与模型内容均保留这些项的先后顺序。允许只发引用或只发图片。每条最多 20 段引用、8 张图片，单张最多 4 MiB，每条图片合计最多 8 MiB，支持 PNG、JPEG、GIF 和 WebP。
+
+图片通过 `POST /images?name=...` 以原始字节上传，使用当前登录令牌的 Bearer 认证。后端校验真实格式与大小后写入私有 OSS Bucket 的 `aether-chat/<user_id>/<随机 UUID>.<扩展名>`。消息只保存 `oss://<bucket>/<object>` 持久引用，不保存临时签名链接。前端预览链接由后端签名，有效期一天；重新加载历史会重新签名。Bucket 保持私有与阻止公共访问，不需要浏览器跨域写入权限。
+
+后端在渠道适配前读取 OSS 图片并转为 base64 data URL，OpenRouter 与 ikun Gemini 共用这一步。普通上下文合并与压缩都保留图片段，避免把图片退化成 `[image]` 文本。模型调用日志仍按原有规则记录实际发出的请求，其中可包含图片 base64。OSS 凭证未配置时，文字与引用仍可使用，图片上传明确提示到看板配置。
+
+OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service_settings` 的加密载荷中，沿用 AES-GCM 与独立部署主密钥。看板只回显 Bucket、地域和 Secret 末尾四位；替换凭证时同时输入 ID 和 Secret。项目专用 RAM 身份仅需要指定 Bucket 的 `aether-chat/*` 对象的 `oss:GetObject`、`oss:PutObject` 权限，策略见 `infra/oss/ram-policy.json`。
+
+新增迁移 `00022` 修复多段内容搜索文本提取时的 SQL 运算顺序问题，`00023` 将 `aliyun_oss` 纳入服务目录。两项均在隔离数据库中验证执行、回滚、再执行。 已实际验证文字与引用混排、删除与撤销、上传失败保留草稿、Enter 换行与 Ctrl+Enter 发送。OSS 图片实际上传后，消息中为对象引用，模型调用存档中为 base64，OpenRouter 与 ikun Gemini 均正确识别了用于验收的红色正方形与蓝色圆形。粘贴图片、纯图片发送和刷新后恢复也已通过实际验收；未登录上传、不支持的格式、超大图片和跨用户图片引用均被入口拒绝。
 
 ## 消息状态
 
@@ -136,11 +159,15 @@ sequenceDiagram
 - 前端重连时在 `hello` 中带上最后收到的位置，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
 - 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。
 
+## 助手消息宽度
+
+2026-11-02，用户先要求 assistant message 的宽度变成 full，随后改为 `w-fit`、最大宽度不超过消息区域。助手消息列使用 `width: fit-content` 与 `max-width: 100%`，短回复按内容收缩，长回复可以使用消息区域的完整可用宽度，不再受 `84%` 与 `720px` 的单条消息上限约束。消息区域原有的居中最大宽度、左右留白和消息间距保持不变，用户消息宽度也保持不变。选择理由是让短回复紧凑，同时保留长回复的阅读宽度。
+
 ## Main 思考气泡 `开发中`
 
 2026-10-23，用户要求：“我希望main在thinking的时候，展示小气泡”。聊天列表底部显示一个与 Main 消息同色的小气泡，三个圆点依次浮动；完成、失败或断线后收起。不新增聊天消息，不展示思考内容，也不根据回复文本或固定计时猜测是否结束。
 
-WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 有待读消息或未完成步骤时为 true，覆盖排队、模型调用与工具执行；Main 已停下、只有 Subagent 在后台工作时为 false。状态依据数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Main 运行退出时通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
+WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 有待读消息或未完成步骤时为 true，覆盖排队、模型调用与工具执行；Main 已停下时为 false。状态依据数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Main 运行退出时通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
 
 前端尊重系统的减少动画设置；用户上翻历史时，不因气泡变化强制滚动。读屏标签为“Aether 正在思考”。选择理由是用户能确认 Main 仍在处理，同时保持只有消息列表和输入框的界面。
 
@@ -150,9 +177,7 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 当前实现中，用户只能看到两类消息内容：自己发的消息，以及 Main 模型生成的正文（2026-10-30 起取代旧的 `send_message(to=user)` 方式，详见 [05](05-main-runtime.md#main-如何回复用户)）。
 
-不加列，在 Go 代码中解析：查出 Main 列表中位置之后的用户消息与 `assistant` 行，用户消息直接取文字；`assistant` 行取其正文（`agent.AssistantTextToUser`），正文非空即一条 Main 消息，与所在行共用行 ID 作为显示 ID，推送位置仍用行 ID。一行中也可能一条都没有（Main 只调工具没写正文，或无正文结束）。
-
-- 不加 `user_visible_text` 列：表结构不变，文字只存一份。
+2026-11-02 起用 `messages.visible` 列显式记录（`00021`）：聊天查询只取 Main 列表中 `visible = true` 的行。真人消息写入时即为 true，Main 助手行落库时为 true，其正文仍在 Go 代码中提取（`agent.AssistantTextToUser`），正文非空才产生一条显示消息；指令、Agent 间投递、日程、运行时提醒、工具回执与摘要为 false。文字仍只存一份，不加 `user_visible_text` 列。
 - 后端等模型整条回复生成结束、助手消息落库后才经 NOTIFY 推送整条正文，不向前端逐段推送生成中的文字。
 
 ## 历史消息

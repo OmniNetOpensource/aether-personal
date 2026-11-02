@@ -10,7 +10,7 @@
 
 ## 可以观察什么
 
-从用户进入 Main / Subagent，再下钻到每次模型请求：请求及响应模型、结果、HTTP 状态、输入输出 Token、提供方返回的 USD 费用、请求耗时、工具名称和关联执行步骤。支持时间、用户、Agent、模型及结果筛选、游标分页和自动刷新。运行概览保留用户使用情况，用户与 Agent 筛选器仍可使用。列表提供元数据，调用详情可查看实际请求与响应 JSON。请求 JSON 包含发送给模型的消息上下文、工具定义和保留的截图；响应按提供方原文保存，包括错误 JSON。HTTP 认证头与供应商密钥不采集。
+从用户进入 Main，再下钻到每次模型请求：请求及响应模型、结果、HTTP 状态、输入输出 Token、提供方返回的 USD 费用、请求耗时、工具名称和关联执行步骤。支持时间、用户、模型及结果筛选、游标分页和自动刷新。运行概览保留用户使用情况，用户筛选器仍可使用。列表提供元数据，调用详情可查看实际请求与响应 JSON。请求 JSON 包含发送给模型的消息上下文、工具定义和保留的截图；响应按提供方原文保存，包括错误 JSON。HTTP 认证头与供应商密钥不采集。
 
 ## 为什么增加 model_calls
 
@@ -42,7 +42,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 
 用户要求：“可视化渲染每个agent的运行过程（reasoning、tool calling、 user message input）”。用户选择新增“运行过程”页，并保留“模型调用”列表。理由是模型调用按单次 HTTP 请求统计费用、耗时与失败，运行过程按单个 Agent 阅读它看到了什么、怎么想、做了什么，两种视角互不替代。
 
-数据直接来自已有表，不新增迁移，也不改运行时。每个 Agent 的 `messages` 按 `sequence` 排列，就是它实际读取的顺序：用户 / Main / Subagent 发来的输入、模型输出（原样保存的供应商 message，含推理与 `tool_calls`）、工具结果。模型输出通过 `step_id` 关联同一步骤的成功请求，节点显示模型、Token、费用与耗时，并可打开已有的请求与响应 JSON 详情。
+数据直接来自已有表，不新增迁移，也不改运行时。Main 的 `messages` 按 `sequence` 排列，就是它实际读取的顺序：用户发来的输入、日程等运行时投递、模型输出（原样保存的供应商 message，含推理与 `tool_calls`）、工具结果。模型输出通过 `step_id` 关联同一步骤的成功请求，节点显示模型、Token、费用与耗时，并可打开已有的请求与响应 JSON 详情。
 
 用户确认以下状态会出现，并按此处理：
 
@@ -50,11 +50,11 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 - 失败、中断和进行中的请求不产生消息，只在 `model_calls` 中。按开始时间插入时间线；别人发来的消息到达早、读取晚，合并位置使用不回退的消息时间。
 - 压缩摘要作为单独节点显示；原始历史不删除，压缩前后都能看到。
 - 工具结果、推理和参数超过 4000 字符时截断，截图只计数。节点上的“加载全文”按消息 ID 单独读取全文与图片。
-- 系统提示词不在消息表，取该 Agent 最近一次推理请求体中的系统提示词，置顶并注明来源；每次请求附带的当前时间不同。
+- 不可见指令在消息表，取该 Agent 最近一份 `name = instructions` 的落库原文，置顶并注明它在同一世代内不改动；指令行本身不重复出现在消息节点里。当前时间另以不可见 user 消息留在时间线中。
 
-用户确认不显示待读消息（尚未被 Agent 读取）和估算的工具执行时长。工具调用与它的结果合并成一张卡片；`assign_subagents` 结果和 Subagent 发来的消息可以直接跳到对应 Subagent 的时间线，Subagent 中来自 Main 的消息可以跳回。
+用户确认不显示待读消息（尚未被 Agent 读取）和估算的工具执行时长。工具调用与它的结果合并成一张卡片。
 
-用户随后要求“按照时间顺序降序排序”：时间线最新在上，系统提示词仍置顶（它来自最近一次请求），“加载更早的记录”放在底部，更早的页接在下方。理由是看板主要用来看 Agent 刚刚在做什么。
+用户随后要求“按照时间顺序降序排序”：时间线最新在上，不可见指令仍置顶（它来自该 Agent 落库的指令行），“加载更早的记录”放在底部，更早的页接在下方。理由是看板主要用来看 Agent 刚刚在做什么。
 
 每页 100 条消息，默认显示最新一页，自动刷新每 15 秒更新；展开状态与已加载的全文在刷新后保留。加载更早记录后暂停自动刷新，与模型调用列表的分页一致。时间线和全文可能超过管理端代理的 2 MiB 缓冲上限，与调用详情一样流式转发。
 
@@ -92,11 +92,11 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 | `GET /admin/snapshot` | 汇总、趋势、模型与工具分布、用户和选中用户的 Agent |
 | `GET /admin/calls` | 单次模型请求日志 |
 | `GET /admin/calls/{id}` | 按调用 ID 读取请求、响应 JSON，独立管理会话鉴权 |
-| `GET /admin/timeline` | `user_id` 与 `agent`（`main` 或 Subagent UUID）的一页运行时间线；`before` 游标翻到更早，首页附带系统提示词 |
+| `GET /admin/timeline` | `user_id` 的一页运行时间线；`before` 游标翻到更早，首页附带不可见指令 |
 | `GET /admin/timeline/messages/{id}` | 单条消息的全文与截图，供时间线展开截断内容 |
 | `GET /admin/quotas` | 六个服务的剩余额度，后端用已保存的 Key 并行向供应商实时查询，见下文额度面板 |
 
-时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。`agent` 需要同时指定 `user_id`，Main 用 `main`，Subagent 用 UUID。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
+时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
 
 管理端默认 `127.0.0.1:5174`，服务端 `API_UPSTREAM` 默认 `http://127.0.0.1:8080`。原生 ES modules 与 Node 内置 HTTP，无第三方依赖或构建。`/api` 仅代理固定管理路径到固定上游，浏览器不持有数据库或供应商密钥。生产通过 HTTPS 反向代理独立部署；sessionStorage 只保留当前标签页会话。配额、封禁、删除用户、账单对账和角色管理不在本轮实现范围。
 
@@ -112,7 +112,7 @@ In-App Browser 已验证密码错误提示、正确密码进入概览、退出�
 
 ## 一键切换模型（2026-10-23，开发中）
 
-用户要求：“我希望这里能添加一键切换模型的能力”。管理端增加“模型配置”页：Main 与 Subagent 分别选择模型，Subagent 也可跟随 Main，点击“应用模型配置”统一保存。选择作用于所有用户，从下一次请求读取配置时生效；已经发出的请求与已缓存回复继续完成。
+用户要求：“我希望这里能添加一键切换模型的能力”。管理端增加“模型配置”页：为 Main 选择模型，点击“应用模型配置”保存。选择作用于所有用户，从下一次请求读取配置时生效；已经发出的请求与已缓存回复继续完成。
 
 `00007` 的 `model_settings` 保存一份全局模型选择、版本、最后修改时间和修改者名称。未保存时使用 `MAIN_MODEL` / `SUBAGENT_MODEL` 环境默认值；`SUBAGENT_MODEL` 为空表示跟随 Main。管理员保存后，以数据库为准，重启仍保留；环境变量仍负责后端启动配置与模型初始默认值。旧记录中的邮箱保留为历史快照，新记录统一为“管理员”，均不表示配置所有者。
 
@@ -122,9 +122,9 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /admin/model-settings` | 当前选择、生效 Subagent 模型、版本、来源和最后修改者 |
+| `GET /admin/model-settings` | 当前选择、版本、来源和最后修改者 |
 | `GET /admin/models` | 已配置渠道的模型候选目录，以及渠道未配置或目录请求失败的提示 |
-| `PUT /admin/model-settings` | 原子保存 `main_model`、可空 `subagent_model` 与预期 `version`；冲突返回 409 |
+| `PUT /admin/model-settings` | 原子保存 `main_model` 与预期 `version`；冲突返回 409 |
 
 三个接口均使用独立管理会话与 no-store。管理端同源代理只允许上述固定路径和方法，模型服务密钥始终只在 Go 后端。页面不会自动刷新覆盖尚未保存的选择。
 
@@ -134,15 +134,15 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 
 ## ikun Gemini（2026-10-30）
 
-用户要求把 Aether 的 ikun 接入模型配置，随后明确选择 Gemini。实现采用 Aether 的 Gemini 原生协议与环境变量命名，保留 OpenRouter。选择理由是让 Main 与 Subagent 在同一个配置页选择渠道，无需把 Gemini 强行转换为 Chat Completions 服务。
+用户要求把 Aether 的 ikun 接入模型配置，随后明确选择 Gemini。实现采用 Aether 的 Gemini 原生协议与环境变量命名，保留 OpenRouter。选择理由是让 Main 在同一个配置页选择渠道，无需把 Gemini 强行转换为 Chat Completions 服务。
 
-2026-10-30，用户进一步指定“线上用 ikun 的 Gemini4argon”。维护者生产实例已通过管理 API 保存 `ikun:gemini-4-argon`，Subagent 跟随 Main，配置持久化到生产数据库并从下一次请求生效。选择依据是用户明确指定线上渠道与型号；这项生产配置不修改其他 fork 的初始默认模型。真实生产聊天已收到“线上 Gemini 连接成功”的回复，工具续接与断线恢复的验收记录见 [09](09-deployment.md)。
+2026-10-30，用户进一步指定“线上用 ikun 的 Gemini4argon”。维护者生产实例已通过管理 API 保存 `ikun:gemini-4-argon`，配置持久化到生产数据库并从下一次请求生效。选择依据是用户明确指定线上渠道与型号；这项生产配置不修改其他 fork 的初始默认模型。真实生产聊天已收到“线上 Gemini 连接成功”的回复，工具续接与断线恢复的验收记录见 [09](09-deployment.md)。
 
 在“服务配置”页只需保存 ikun Gemini 的 Key，无需重启。2026-10-30 用户指定默认地址为 `https://api.ikuncode.cc`，页面不再要求输入接口地址。密钥只进入供应商请求头，不进入模型请求正文；管理端提交新 Key 后不回显原值。此前环境变量配置由下述一次性导入命令迁移。
 
 目录读取 `{baseURL}/v1beta/models`，处理分页，提供 `ikun:gemini-*` 候选。排除图片、语音、embedding、robotics 和 computer-use 专用模型，以及目录明确不支持 `generateContent` 的模型。Gemini 目录不提供工具能力证明，候选的实际能力以调用结果为准。容量元数据缺失时显示未知，不猜测容量；价格与实际费用未返回时也显示未知，不套用 OpenRouter 价格或记为零。已知的 `inputTokenLimit` 是独立输入上限，不再扣除输出预算；`outputTokenLimit` 与全局输出上限取较小值。
 
-每次请求使用 `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`（2026-10-30 起改为流式，见 [05](05-main-runtime.md#模型调用)）。`ikun:` 仅保存在配置与日志，原生请求路径使用真实模型名。Main、Subagent 和压缩共用路由与请求日志。Gemini 的工具声明、调用、结果及 Subagent 强制交付的指定 `send_message` 工具转换在供应商边界完成。原生 `content.parts` 连同 `thoughtSignature` 存入已有消息 JSON，重启及工具续接时传回同一模型；其中只有签名、没有数据的空段会在回传前并入前一段（流式分片与存量内容都适用），否则供应商会以缺少 data 拒绝请求。迁入其他模型的工具历史使用 [Google 官方支持的签名占位值](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)；切回 OpenRouter 时移除 Gemini 专属元数据。
+每次请求使用 `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`（2026-10-30 起改为流式，见 [05](05-main-runtime.md#模型调用)）。`ikun:` 仅保存在配置与日志，原生请求路径使用真实模型名。Main 和压缩共用路由与请求日志。Gemini 的工具声明、调用与结果转换在供应商边界完成。原生 `content.parts` 连同 `thoughtSignature` 存入已有消息 JSON，重启及工具续接时传回同一模型；其中只有签名、没有数据的空段会在回传前并入前一段（流式分片与存量内容都适用），否则供应商会以缺少 data 拒绝请求。迁入其他模型的工具历史使用 [Google 官方支持的签名占位值](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)；切回 OpenRouter 时移除 Gemini 专属元数据。
 
 Gemini 3、4 的正常请求沿用 Aether 的高推理强度，压缩使用低强度。Gemini 2.5 正常请求使用动态推理预算，压缩使用 128 Token 的推理预算。响应只把非 thought 正文和工具调用交给运行时。输入用量使用 `promptTokenCount`，输出用量合并 `candidatesTokenCount` 与 `thoughtsTokenCount`；原始响应仍单独保存。
 
@@ -173,7 +173,7 @@ Gemini 3、4 的正常请求沿用 Aether 的高推理强度，压缩使用低�
 
 两个接口使用已有独立管理会话并返回 no-store。管理端代理仅开放固定六个服务路径。更改日志只记录服务名称、操作及管理会话 ID，不记录提交正文。保存不发模型请求或测试邮件，供应商拒绝凭证时由实际请求返回错误并记录原有调用结果。
 
-模型目录、Main、Subagent、压缩、邮件和联网工具均在准备供应商请求时读取数据库，没有凭证缓存。已取到凭证的进行中请求继续完成，随后准备的请求读取新值。数据库读写失败或解密失败时返回错误，不使用旧环境变量兜底。清除操作保留空记录，后续使用该服务时报未配置。
+模型目录、Main、压缩、邮件和联网工具均在准备供应商请求时读取数据库，没有凭证缓存。已取到凭证的进行中请求继续完成，随后准备的请求读取新值。数据库读写失败或解密失败时返回错误，不使用旧环境变量兜底。清除操作保留空记录，后续使用该服务时报未配置。
 
 已有本地部署先保留原 `.env` 中的服务变量，补充 `SERVICE_ENCRYPTION_KEY`，执行迁移与一次性导入：
 
@@ -217,3 +217,16 @@ In-App Browser 验证默认值、修改与保存，以及刷新和服务重启�
 未配置、无法解密、查询失败与无法查询是分开的状态；供应商响应正文不进入看板与日志，错误只显示 HTTP 状态类别。额度数字以供应商返回为准，不与本地 `model_calls` 的费用统计互相推导。
 
 本地已用真实配置验证：OpenRouter 返回账户剩余（验收时约 $0.67／已购 $40）、Serper 返回 1,089 次、EveryInfra 返回 $9.02 并附近 24 小时消费、ikun 返回 Key 不限额、Resend 未配置、Parallel 无法查询，六种状态与页面展示一致；未登录访问返回 401。Go build、vet 与管理端语法检查通过，未新增测试文件。尚未提交或推送；正式部署仍在运行旧后端与旧看板代理，重启后才生效。
+
+### 阿里云 OSS 图片服务（2026-11-02）
+
+服务配置页新增阿里云 OSS，填写一组 AccessKey ID、AccessKey Secret、Bucket 与地域。凭证与配置整体按 AES-GCM 加密保存，管理接口只回显 Bucket、地域与 Secret 末尾四位。使用私有 Bucket 与项目专用 RAM 身份；仅授予图片路径的 GetObject 和 PutObject 权限。OSS 按实际存储、请求与流量计费，看板不把未查询到的账单记为零。
+
+管理员也可用 RAM 导出的单用户 CSV 显式导入。命令读取文件后只写加密配置，不打印凭证：
+
+```sh
+# backend 下先按原有方式加载 .env，再运行：
+go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-bucket <bucket> -oss-region cn-hangzhou
+```
+
+此模式只导入 OSS；未传 `-oss-csv` 时，仍按原有规则导入旧服务环境变量。OSS 密钥不从环境变量回退。
