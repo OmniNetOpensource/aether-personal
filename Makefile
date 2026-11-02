@@ -1,6 +1,12 @@
-.PHONY: dev frontend admin check check-integration check-live check-research edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup
+.PHONY: dev frontend admin check check-integration check-live check-research edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup publish publish-check
 
 PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
+
+publish:
+	python3 scripts/publish.py
+
+publish-check:
+	python3 scripts/publish.py --check
 
 edge-check:
 	cd infra/cloudflare && npm ci && npm run check

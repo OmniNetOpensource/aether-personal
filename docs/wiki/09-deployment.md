@@ -119,6 +119,62 @@ make edge-deploy
 
 ## 备份与更新
 
+### 一键更新现有部署
+
+2026-11-03，用户要求将维护者实例的发布流程整理为一键脚本。入口为 `make publish`。本机的 Python 标准库脚本负责冻结源码、构建、SSH 传输和 Cloudflare 发布，主机上的 Bash 脚本负责备份、迁移与 Compose 更新。选择现有 SSH 与 Wrangler 是为了复用已经部署的主机和 Worker，无需新增 CI、镜像仓库或公开推送流程。
+
+首次使用时，准备可无人值守登录生产主机的 SSH alias。该账号需要 `sudo -n` 执行 Docker 和安装命令。通过可信渠道核对主机公钥，保留 SSH 主机校验。密钥、连接代理与端口写在本机 SSH 配置中，脚本不创建服务器权限或修改防火墙。
+
+在仓库根目录创建本地配置：
+
+```sh
+mkdir -p .local
+cp infra/prod/publish.example.json .local/publish.json
+chmod 600 .local/publish.json
+```
+
+`ssh_host` 填 SSH alias 或 `user@host`，`ssh_config` 填本机 SSH 配置路径。示例使用被 Git 忽略的 `.local/publish.ssh`；使用默认 `~/.ssh/config` 时删除 `ssh_config` 字段。`public_url` 填与 Wrangler 配置一致的 HTTPS 聊天站点。其他 fork 需要同时修改自己的域名和 Wrangler 配置。
+
+本机需要 Python 3、Go、Docker、Node.js、npm、Git、OpenSSH、tar、gzip 和 curl。先在 `infra/cloudflare/` 使用 `npx wrangler login` 完成已有 Cloudflare 账号的登录。如果本机联网需要代理，在运行命令的环境中设置 `HTTPS_PROXY`、`HTTP_PROXY`；SSH 的代理单独在 SSH 配置中指定。
+
+配置完成后检查接入：
+
+```sh
+make publish-check
+```
+
+预检会读取主机的 Compose、Docker 和当前提交，并查询 Cloudflare 部署记录。首次服务器安装仍按本页前面的步骤完成；一键脚本要求已有 `aether-personal-prod` Compose 项目及生产 `.env`。当前应用主机镜像构建目标为 `linux/amd64`。
+
+提交准备发布的改动，在 `main` 分支运行：
+
+```sh
+make publish
+```
+
+脚本拒绝未提交改动，获取并快进合并 `origin/main`，允许发布尚未推送的本地提交。随后从固定提交建立独立源码快照，执行 Go 构建与 vet、前端构建与类型检查、看板及 Worker 检查，构建带完整提交标签的镜像。运行期间工作区的后续修改不会进入该快照。
+
+所有上传文件均有 SHA-256 摘要。主机先加载镜像和验证配置，停止 API 与管理看板写入后导出完整数据库备份，再执行 goose up 并等待新服务健康。生产 `.env` 只从当前服务器复制，Compose 项目名和数据卷沿用原值；模型、邮件与 OSS 服务配置继续使用生产数据库中的现有记录。
+
+主机安装成功后，脚本通过 SSH 下载并校验数据库备份，再发布该快照的静态资源与 Worker。最终检查 Worker 的 100% 流量版本、网页与 Service Worker 及清单的字节一致性、`/healthz` 与管理路径隔离。成功提示不代表真实邮件、模型回复或移动设备已验收，这些检查仍按需求单独进行。已有 PWA 标签页通过“更新应用”切换版本。
+
+发布编号包含提交前缀、UTC 时间与随机后缀。产物、日志、数据库备份和 `release.json` 保存在 `.local/publish/<发布编号>/`，目录仅当前用户可读写。数据库备份包含用户数据，不要公开上传。脚本只复制数据库备份到本机，生产主加密密钥仍需单独保管。
+
+只生成本地发布包、不连接生产时运行：
+
+```sh
+python3 scripts/publish.py --prepare-only
+```
+
+发布包生成后若失败，先查看日志并修正原因，然后复用同一份产物继续。构建阶段尚未生成完整发布包时，修正后重新运行 `make publish`。
+
+```sh
+python3 scripts/publish.py --resume <发布编号>
+```
+
+构建或上传失败不影响原服务。停服务后、迁移开始前失败，安装器尝试重启原版本。迁移一旦开始，部分迁移可能已经提交，安装器保留原备份和阶段记录，不自动运行 goose down、恢复数据库或启动旧镜像。相同发布编号重试会继续 goose up；已经健康安装的后端不会再次停机。新版本健康而备份下载或 Cloudflare 发布失败时，命令报告未完成，保留新后端供同一发布编号继续。
+
+本机文件锁覆盖主机与 Worker 发布，主机文件锁保护数据库迁移与服务切换。维护者从一台工作站执行发布；不要从不同工作站同时更新同一个 Worker。原有 `prod-*` 与 `edge-*` 命令继续用于首次安装和手工恢复。
+
 在修改现有数据库之前先备份：
 
 ```sh

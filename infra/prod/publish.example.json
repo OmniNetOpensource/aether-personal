@@ -1,0 +1,5 @@
+{
+  "ssh_host": "aether-prod",
+  "ssh_config": ".local/publish.ssh",
+  "public_url": "https://aether.forkicks.fun"
+}

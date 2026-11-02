@@ -12,7 +12,7 @@
 | 产品名称 | 中文「阿芒」，英文 Aether |
 | 前端 | TanStack Start + React + TypeScript；SPA 静态部署，移动端使用 PWA |
 | 后端 | Go |
-| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡；生产部署待完成 |
+| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡；已有主机通过 `make publish` 更新 |
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
@@ -136,7 +136,9 @@ make db-down   # 停止本地 PostgreSQL
 
 ## 项目资料
 
-生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，完整步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册。2026-10-30 确认首版无限额度开放；验证码防滥用与真实生产验收仍须完成。
+生产部署配置位于 `infra/prod/` 和 `infra/cloudflare/`，首次安装与更新步骤见 [Web 生产部署](docs/wiki/09-deployment.md)。维护者聊天域名为 `aether.forkicks.fun`，公众开放注册，首版无限额度开放。
+
+完成一次 SSH 与 Cloudflare 登录配置后，在干净的 `main` 工作区运行 `make publish`，即可构建、上传、备份、迁移并发布前后端。`make publish-check` 只检查接入与依赖，不修改生产。脚本保留服务器上的生产密钥，发布记录和异机数据库备份保存在被 Git 忽略的 `.local/publish/`。具体配置及失败恢复见 [一键更新现有部署](docs/wiki/09-deployment.md#一键更新现有部署)。
 
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。

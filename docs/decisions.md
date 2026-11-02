@@ -57,6 +57,7 @@
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
 | 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
 | 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡；2026-10-30 已部署并通过核心线上验收，定期异机备份尚未自动化 | [09](wiki/09-deployment.md) |
+| 一键发布 | 2026-11-03 用户要求以 `make publish` 更新已有实例；固定提交构建，经 SSH 先备份再迁移和切换主机，随后发布 Cloudflare 并校验；生产密钥留在服务器，失败保留恢复记录 | [09](wiki/09-deployment.md#一键更新现有部署) |
 | 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |
