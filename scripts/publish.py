@@ -165,7 +165,8 @@ def main():
                            (part.startswith(".env.") and part != ".env.example") for part in parts):
                         raise RuntimeError(f"源码提交包含禁止发布的本地配置：{member.name}")
             snapshot.mkdir()
-            run(["tar", "-xzf", release_dir / "source.tar.gz", "-C", snapshot])
+            # 保留 git 中的源文件权限；发布记录使用的私有 umask 不能进入非 root 运行镜像。
+            run(["tar", "-xpzf", release_dir / "source.tar.gz", "-C", snapshot])
             shutil.copyfile(snapshot / "scripts/install-release.sh", release_dir / "install-release.sh")
             run(["go", "build", "./..."], cwd=snapshot / "backend")
             run(["go", "vet", "./..."], cwd=snapshot / "backend")
