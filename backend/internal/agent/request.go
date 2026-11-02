@@ -1,41 +1,29 @@
-// 本文件负责共用模型请求流程：选择 OpenRouter 或 ikun Gemini，记录实际请求响应与用量，并按可重试规则处理失败。
+// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型自动选择渠道发送，记录实际请求响应与用量，并按可重试规则处理失败。
 
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
-type chatResponse struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Choices []struct {
-		Message      json.RawMessage `json:"message"`
-		FinishReason string          `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     *int32           `json:"prompt_tokens"`
-		CompletionTokens *int32           `json:"completion_tokens"`
-		Cost             *decimal.Decimal `json:"cost"`
-	} `json:"usage"`
-}
+// chatResponse 与 modelRequest 是 providers 统一响应与请求的别名：Agent 内部沿用这两个名字，渠道差异不进本包。
+type chatResponse = providers.Response
+
+// modelRequest 见 chatResponse 的说明。
+type modelRequest = providers.Request
 
 func (r *Runner) callModel(ctx context.Context, address agentAddress, contextMessages []json.RawMessage, stepIDs ...uuid.UUID) (response chatResponse, retryable bool, err error) {
 	model := r.model(address)
@@ -63,17 +51,7 @@ func (r *Runner) callModel(ctx context.Context, address agentAddress, contextMes
 	return r.requestModel(ctx, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"})
 }
 
-type modelRequest struct {
-	Reasoning     map[string]any    `json:"reasoning,omitempty"`
-	Model         string            `json:"model"`
-	Messages      []json.RawMessage `json:"messages"`
-	Tools         []json.RawMessage `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage   `json:"tool_choice,omitempty"`
-	MaxTokens     int32             `json:"max_tokens"`
-	Stream        bool              `json:"stream,omitempty"`
-	StreamOptions map[string]bool   `json:"stream_options,omitempty"`
-}
-
+// agentRequest 组装一次 Agent 请求：按身份选提示词与工具，注入当前时间，并把历史里的压缩摘要转成用户消息。
 func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMessage, model string, outputLimit int32) modelRequest {
 	prompt := mainPrompt
 	if address.subagentID != nil {
@@ -102,58 +80,19 @@ func (r *Runner) agentRequest(address agentAddress, contextMessages []json.RawMe
 	return modelRequest{Model: model, Messages: messages, Tools: tools, ToolChoice: toolChoice, MaxTokens: outputLimit}
 }
 
+// requestModel 发送一次模型请求并全程记账：渠道由 providers 按模型名自动选择，本函数只负责凭证、日志、传输与结果分类。
 func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
-	gemini := strings.HasPrefix(prepared.Model, "ikun:gemini-")
-	service := services.OpenRouter
-	if gemini {
-		service = services.IkunGemini
-	}
-	credentials, err := r.services.Load(ctx, service)
+	provider := providers.ForModel(prepared.Model)
+	credentials, err := r.services.Load(ctx, provider.Service())
 	if err != nil {
 		return response, false, err
 	}
-	endpoint, apiKey := "https://openrouter.ai/api/v1/chat/completions", credentials.APIKey
-	var body []byte
-	if gemini {
-		// 流式端点逐块返回 SSE 事件，后端拼完才落库与推送，前端仍一次性收到整条回复。
-		endpoint = credentials.BaseURL + "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(prepared.Model, "ikun:")) + ":streamGenerateContent?alt=sse"
-		body, err = geminiRequestBody(prepared)
-	} else {
-		// 要求流式返回，并在末尾分片带上用量；用量拿不到时记空，不阻断回复。
-		prepared.Stream = true
-		prepared.StreamOptions = map[string]bool{"include_usage": true}
-		// 从 Gemini 切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
-		messages := make([]json.RawMessage, len(prepared.Messages))
-		copy(messages, prepared.Messages)
-		for index, raw := range messages {
-			if !bytes.Contains(raw, []byte(`"gemini_content"`)) {
-				continue
-			}
-			var message map[string]json.RawMessage
-			_ = json.Unmarshal(raw, &message)
-			delete(message, "gemini_content")
-			delete(message, "gemini_model")
-			messages[index], _ = json.Marshal(message)
-		}
-		prepared.Messages = messages
-		body, err = json.Marshal(prepared)
-	}
+	outgoing, err := provider.PrepareRequest(ctx, credentials, prepared)
 	if err != nil {
 		return response, false, err
 	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return chatResponse{}, false, err
-	}
-	if gemini {
-		request.Header.Set("x-goog-api-key", apiKey)
-		request.Header.Set("User-Agent", "aether")
-	} else {
-		request.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	request.Header.Set("Content-Type", "application/json")
+	request, body := outgoing.Request, outgoing.Body
 
 	journal.RequestedModel, journal.RequestBody = prepared.Model, body
 	callID, err := database.New(r.databasePool).StartModelCall(ctx, journal)
@@ -220,7 +159,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 		}
 	}()
 	client := *r.modelClient
-	if gemini {
+	if outgoing.PreventRedirect {
 		// 自定义密钥头不跟随重定向，避免被 HTTP 客户端转发给其他主机。
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
@@ -233,11 +172,11 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 	status = &statusCode
 	// 出错时供应商返回的通常是普通 JSON 而非事件流，整段读回即可拿到错误信息。
 	if httpResponse.StatusCode != http.StatusOK {
-		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxModelResponseBytes+1))
+		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, providers.MaxResponseBytes+1))
 		capturedResponseBody = responseBody
-		responseTruncated = len(responseBody) > maxModelResponseBytes
+		responseTruncated = len(responseBody) > providers.MaxResponseBytes
 		if responseTruncated {
-			capturedResponseBody = responseBody[:maxModelResponseBytes]
+			capturedResponseBody = responseBody[:providers.MaxResponseBytes]
 		}
 		if err != nil {
 			return response, true, err
@@ -247,7 +186,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 		return response, retryable, fmt.Errorf("model provider returned %d: %.500s", httpResponse.StatusCode, responseBody)
 	}
 	// 逐块读取事件流并在内存里拼成完整回复；日志存档保留实际收到的原始分片。
-	payloads, captured, truncated, readErr := readSSEPayloads(httpResponse.Body)
+	payloads, captured, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body)
 	capturedResponseBody, responseTruncated = captured, truncated
 	if truncated {
 		outcome = "invalid_response"
@@ -261,11 +200,7 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 	outcome = "invalid_response"
 	var incomplete bool
 	var decodeErr error
-	if gemini {
-		response, incomplete, decodeErr = assembleGeminiStream(payloads, prepared)
-	} else {
-		response, incomplete, decodeErr = assembleOpenRouterStream(payloads)
-	}
+	response, incomplete, decodeErr = provider.DecodeStream(payloads, prepared)
 	if decodeErr != nil {
 		if incomplete {
 			outcome = "transport_error"
