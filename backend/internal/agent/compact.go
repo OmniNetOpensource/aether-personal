@@ -30,7 +30,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	if err != nil {
 		return modelRequest{}, err
 	}
-	model, outputLimit, capacity := settings.MainModel, settings.MainOutputLimit, settings.MainContextLength
+	model, outputLimit, capacity := settings.MainModel, settings.EffectiveOutputLimit, settings.MainContextLength
 	rows, err := queries.ListAgentContextRows(ctx, userID)
 	if err != nil {
 		return modelRequest{}, err
@@ -53,12 +53,8 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 			inputLimit = capacity - max(1024, capacity/20)
 		}
 	}
-	// ikun Gemini 的输入上限远大于看板通用阈值，固定到 400,000 才压缩（2026-10-30 用户确认），晚一点丢历史细节；其他渠道仍用看板阈值。
-	compactAt := int64(settings.CompactAtTokens)
-	if strings.HasPrefix(model, "ikun:gemini-") {
-		compactAt = 400000
-	}
-	threshold := min(compactAt, inputLimit)
+	// 所有模型共用看板阈值（2026-11-03 用户确认取消 ikun Gemini 固定 400,000 的例外）；容量上限仍可更早触发。
+	threshold := min(int64(settings.CompactAtTokens), inputLimit)
 	reason := ""
 	if before >= threshold {
 		reason = "tokens"

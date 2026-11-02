@@ -125,7 +125,7 @@ make db-down   # 停止本地 PostgreSQL
 | `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 占一条；另有一条独立 LISTEN 连接 |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
 | `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
-| `MAX_OUTPUT_TOKENS` | 可选，单次请求输出 Token 上限，默认 `8192`，包含推理 Token；按保存时已知模型能力缩小 |
+| `MAX_OUTPUT_TOKENS` | 可选，单次请求输出 Token 上限的初始默认值，默认 `8192`，包含推理 Token；管理员在看板保存后以数据库为准，实际请求再按已知模型能力缩小 |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |

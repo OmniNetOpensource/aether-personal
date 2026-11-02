@@ -98,6 +98,7 @@ type ModelSetting struct {
 	MainModelMaxTokens *int32
 	CompactAtTokens    int32
 	MainContextLength  *int64
+	MainOutputLimit    *int32
 }
 
 type Schedule struct {

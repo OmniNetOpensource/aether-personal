@@ -12,7 +12,7 @@ import (
 
 const getModelSettings = `-- name: GetModelSettings :one
 
-SELECT main_model, main_model_max_tokens, compact_at_tokens, main_context_length, version, updated_at, updated_by FROM model_settings WHERE singleton = true
+SELECT main_model, main_model_max_tokens, compact_at_tokens, main_context_length, main_output_limit, version, updated_at, updated_by FROM model_settings WHERE singleton = true
 `
 
 type GetModelSettingsRow struct {
@@ -20,6 +20,7 @@ type GetModelSettingsRow struct {
 	MainModelMaxTokens *int32
 	CompactAtTokens    int32
 	MainContextLength  *int64
+	MainOutputLimit    *int32
 	Version            int64
 	UpdatedAt          time.Time
 	UpdatedBy          string
@@ -34,6 +35,7 @@ func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, er
 		&i.MainModelMaxTokens,
 		&i.CompactAtTokens,
 		&i.MainContextLength,
+		&i.MainOutputLimit,
 		&i.Version,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
@@ -51,12 +53,13 @@ func (q *Queries) LockModelSettings(ctx context.Context) error {
 }
 
 const saveModelSettings = `-- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, main_model_max_tokens, compact_at_tokens, main_context_length, version, updated_by)
-VALUES ($1, $2, $3, $4, 1, $5)
+INSERT INTO model_settings (main_model, main_model_max_tokens, compact_at_tokens, main_context_length, main_output_limit, version, updated_by)
+VALUES ($1, $2, $3, $4, $5, 1, $6)
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_model_max_tokens = EXCLUDED.main_model_max_tokens,
     compact_at_tokens = EXCLUDED.compact_at_tokens,
-    main_context_length = EXCLUDED.main_context_length, version = model_settings.version + 1,
+    main_context_length = EXCLUDED.main_context_length,
+    main_output_limit = EXCLUDED.main_output_limit, version = model_settings.version + 1,
     updated_at = now(), updated_by = EXCLUDED.updated_by
 `
 
@@ -65,6 +68,7 @@ type SaveModelSettingsParams struct {
 	MainModelMaxTokens *int32
 	CompactAtTokens    int32
 	MainContextLength  *int64
+	MainOutputLimit    *int32
 	UpdatedBy          string
 }
 
@@ -74,6 +78,7 @@ func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsPa
 		arg.MainModelMaxTokens,
 		arg.CompactAtTokens,
 		arg.MainContextLength,
+		arg.MainOutputLimit,
 		arg.UpdatedBy,
 	)
 	return err

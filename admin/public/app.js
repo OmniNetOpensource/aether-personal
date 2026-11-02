@@ -505,7 +505,7 @@ async function refreshModelSettings() {
     ]);
     if (generation !== state.generation || !state.me) return;
     state.modelConfig = settings; state.catalog = catalog;
-    state.modelDraft = { main_model: settings.main_model, compact_at_tokens: settings.compact_at_tokens };
+    state.modelDraft = { main_model: settings.main_model, compact_at_tokens: settings.compact_at_tokens, main_output_limit: settings.main_output_limit };
     root.querySelector('#updated').textContent = `${time(catalog.fetched_at)} 已更新目录`;
     root.querySelector('#load-error').hidden = true;
     render();
@@ -523,7 +523,7 @@ function modelSettingsPage(content) {
   const settings = state.modelConfig;
   const intro = el('section', 'model-intro');
   intro.append(el('div', 'eyebrow teal', 'MODEL ROUTING'), el('h2', '', '选择 Main 的运行模型'), el('p', '', '应用于所有用户。配置保存后立即生效，服务重启后继续保留；正在执行的请求会正常完成。'));
-  if (settings.main_output_limit) intro.append(el('p', '', `当前请求输出上限：${number(settings.main_output_limit)} Token（包含推理 Token）。`));
+  if (settings.main_output_limit) intro.append(el('p', '', `当前实际请求输出上限：${number(settings.effective_output_limit ?? settings.main_output_limit)} Token（包含推理 Token）；在下方填写的上限更高时，按所选模型已知的最大输出发送。`));
   const meta = el('div', 'model-config-meta');
   meta.append(pill(settings.source === 'database' ? '已保存' : '部署默认'), el('span', '', settings.updated_at ? `最近修改 ${time(settings.updated_at)} · ${settings.updated_by}` : '当前使用部署时配置的默认模型'));
   intro.append(meta); content.append(intro);
@@ -571,8 +571,17 @@ function modelSettingsPage(content) {
     input.oninput = () => { state.modelDraft[key] = Number(input.value); updateModelSaveButton(); };
     label.append(input); fields.append(label);
   }
-  compaction.append(fields, el('p', 'muted', 'Token 取上一次同模型成功请求的官方输入用量，按各 Agent 的阈值和已知输入容量触发压缩，不再看距上次回答的时间。'));
+  compaction.append(fields, el('p', 'muted', 'Token 取上一次同模型成功请求的官方输入用量，所有模型共用这一阈值，并受已知输入容量上限约束；不再看距上次回答的时间。'));
   form.append(compaction);
+  const output = el('section', 'panel model-role-card compact-settings');
+  output.append(el('h3', '', '请求输出上限'), el('p', 'muted', '每次模型请求（包括压缩请求）最多生成的 Token 数，包含推理 Token 在内，不能当作可见回复长度。'));
+  const outputFields = el('div', 'model-role-grid');
+  const outputLabel = el('label', 'model-picker', '输出上限（Token）');
+  const outputInput = el('input'); outputInput.type = 'number'; outputInput.id = 'main_output_limit'; outputInput.min = 1; outputInput.max = 2000000; outputInput.step = 1; outputInput.required = true; outputInput.value = state.modelDraft.main_output_limit;
+  outputInput.oninput = () => { state.modelDraft.main_output_limit = Number(outputInput.value); updateModelSaveButton(); };
+  outputLabel.append(outputInput); outputFields.append(outputLabel);
+  output.append(outputFields, el('p', 'muted', '若所选模型已知的最大输出更小，实际请求按模型上限发送；模型上限未知时按这里填写的值发送。'));
+  form.append(output);
   const actions = el('div', 'model-save-bar');
   const note = el('div'); note.append(el('strong', '', '下一次模型请求使用新配置'), el('p', 'muted', '目录价格供估算，实际费用以请求日志为准。'));
   const save = button('应用模型配置', () => {} , 'button primary'); save.type = 'submit'; save.id = 'save-model-settings';
@@ -585,7 +594,7 @@ function modelSettingsPage(content) {
 }
 function updateModelSaveButton() {
   const target = root.querySelector('#save-model-settings'); if (!target) return;
-  const changed = state.modelDraft.main_model !== state.modelConfig.main_model || state.modelDraft.compact_at_tokens !== state.modelConfig.compact_at_tokens;
+  const changed = state.modelDraft.main_model !== state.modelConfig.main_model || state.modelDraft.compact_at_tokens !== state.modelConfig.compact_at_tokens || state.modelDraft.main_output_limit !== state.modelConfig.main_output_limit;
   target.disabled = !!state.modelSaving || !changed;
   target.textContent = state.modelSaving ? '正在应用…' : changed ? '应用模型配置 →' : '配置已生效';
 }
@@ -599,18 +608,21 @@ async function saveModelSettings() {
   if (!Number.isInteger(draft.compact_at_tokens) || draft.compact_at_tokens < 1000 || draft.compact_at_tokens > 2000000) {
     errorBox.textContent = '压缩阈值需为 1000–2000000 Token 的整数。'; return;
   }
+  if (!Number.isInteger(draft.main_output_limit) || draft.main_output_limit < 1 || draft.main_output_limit > 2000000) {
+    errorBox.textContent = '输出上限需为 1–2000000 Token 的整数。'; return;
+  }
   const generation = state.generation;
   state.modelSaving = true; updateModelSaveButton();
   for (const input of root.querySelectorAll('.model-config-form input')) input.disabled = true;
   try {
     const saved = await api('/admin/model-settings', { method: 'PUT', body: JSON.stringify(draft), signal: state.controller.signal });
     if (generation !== state.generation || !state.me) return;
-    state.modelConfig = saved; state.modelDraft = { main_model: saved.main_model, compact_at_tokens: saved.compact_at_tokens };
+    state.modelConfig = saved; state.modelDraft = { main_model: saved.main_model, compact_at_tokens: saved.compact_at_tokens, main_output_limit: saved.main_output_limit };
     render(); notify('模型配置已应用，下一次请求开始生效。');
   } catch (error) {
     if (error.name === 'AbortError' || generation !== state.generation) return;
     if (error.status === 401 || error.status === 403) { accessLost(error); return; }
-    errorBox.textContent = error.status === 409 ? '其他管理员已修改配置，请刷新后重新选择。' : error.status === 400 ? '配置无效，或模型已不可用，请检查压缩阈值与模型选择。' : '未能确认保存结果，请刷新查看当前生效配置后重试。';
+    errorBox.textContent = error.status === 409 ? '其他管理员已修改配置，请刷新后重新选择。' : error.status === 400 ? '配置无效，或模型已不可用，请检查输出上限、压缩阈值与模型选择。' : '未能确认保存结果，请刷新查看当前生效配置后重试。';
   } finally { state.modelSaving = false; if (state.me && state.tab === 'models') {
     for (const input of root.querySelectorAll('.model-config-form input')) input.disabled = false;
     updateModelSaveButton();

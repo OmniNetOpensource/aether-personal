@@ -123,7 +123,7 @@ erDiagram
 
 用户最初要求两个触发条件：距离上一次回答超过 6 小时，或当前上下文达到 200,000 tokens。两个阈值都在管理看板配置并持久化，满足任意一个即触发检查。用户随后选择“等下一次有任务、调用模型前再压缩”。选择理由是空闲期间不产生摘要请求，Agent 再次工作时先缩减上下文。
 
-2026-10-30，用户修正为只保留 token 条件：仍要等上下文达到阈值（看板 `compact_at_tokens`，默认 200,000）才压缩，不再等 6 小时；闲置时长触发取消，只为它服务的看板小时设置、`messages.compact_reply_sequence` 与 `model_settings.compact_after_hours` 由 `00018` 一并删除，历史调用里的 `idle` 原因只作旧记录展示。达到阈值且这一步恰好领到 Main 的用户新消息时，只压这条消息之前的全部历史并保留这条消息原文，原因记为 `user_message`（`00017` 扩了 `model_calls.compact_reason` 的取值）；没达到阈值就不压。这条消息之前只剩上一条摘要（同一轮重试时摘要已落库）时也不压，避免把刚生成的摘要连同这条消息再压一遍。理由与实现认定方式见 [05](05-main-runtime.md#运行循环-已实现)。
+2026-10-30，用户修正为只保留 token 条件：仍要等上下文达到阈值（看板 `compact_at_tokens`，默认 200,000）才压缩，不再等 6 小时；闲置时长触发取消，只为它服务的看板小时设置、`messages.compact_reply_sequence` 与 `model_settings.compact_after_hours` 由 `00018` 一并删除，历史调用里的 `idle` 原因只作旧记录展示。2026-11-03 起，所有模型共用这一看板阈值：取消 ikun Gemini 固定 400,000 的例外（2026-10-30 曾确认），阈值仍受已知输入容量上限封顶；同日 `00029` 给 `model_settings` 增加可空的 `main_output_limit` 保存看板填写的请求输出上限，为空表示还没在看板保存过、运行时回退部署默认值，实际请求再与所选模型已知的最大输出取较小。达到阈值且这一步恰好领到 Main 的用户新消息时，只压这条消息之前的全部历史并保留这条消息原文，原因记为 `user_message`（`00017` 扩了 `model_calls.compact_reason` 的取值）；没达到阈值就不压。这条消息之前只剩上一条摘要（同一轮重试时摘要已落库）时也不压，避免把刚生成的摘要连同这条消息再压一遍。理由与实现认定方式见 [05](05-main-runtime.md#运行循环-已实现)。
 
 容量指下一次模型请求的完整输入占用，包含系统提示词、工具定义、消息、工具结果与图片，不是历次请求用量之和。触发只看官方用量：以上一次同模型、同 Main 的成功请求由供应商返回并记录在 `model_calls` 的 `prompt_tokens` 与配置阈值和容量比较，本地不估算 token；没有上次用量或已切换模型时不因 token 或容量触发。因此触发会慢一拍——上次请求之后新增的内容要等再下一次请求的官方用量才反映出来，2026-10-28 用户经预期核对接受这一取舍。
 
@@ -181,6 +181,7 @@ erDiagram
 | `00024_drop_message_embedding.sql` | 删除 `messages.embedding` 列、HNSW 与待补算索引及 pgvector 扩展，向量检索整体移除 | `已实现` |
 | `00025_remove_subagents.sql` | 删除 `subagents` 表与各表 `subagent_id` 列，Subagent 整体移除（先清其历史行） | `已实现` |
 | `00026_derive_main_work_from_messages.sql` | 去掉待读：遗留待读行补号后 `sequence` 改为非空；删除落库的指令、当前时间与进度提醒行及 `steps.model_reply`；新增 `users.main_failed_through_sequence` 与视图 `main_work` | `已实现` |
+| `00029_add_main_output_limit.sql` | `model_settings.main_output_limit`：看板保存的请求输出上限，为空回退部署默认值 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。
