@@ -90,6 +90,7 @@ Subagent 另有可空的 `started_at`，记录本次激活开始时间。重启�
 | `is_summary` | boolean | 是否为压缩摘要，默认 false |
 | `summary_through_sequence` | bigint | 摘要覆盖到的原始消息位置；仅摘要非空 |
 | `embedding` | vector(1536) | 消息的向量；为空表示尚未计算 |
+| `search_text` | text | 从 `content` 提取的纯文本（`00020`，触发器维护），供关键词搜索、向量补算与 `read_message` 共用 |
 | `created_at` | timestamptz | 写入（到达）时间 |
 
 ### `steps`
@@ -155,16 +156,19 @@ stateDiagram-v2
 
 看板保存模型时一并保存目录中的上下文容量；已知容量减去输出预留和安全余量后，可能早于配置阈值触发压缩。摘要请求期间新到的消息在后续普通请求前补读。
 
-### 历史检索 `仅设计`
+### 历史检索 `已实现`
+
+2026-10-30，用户确认搜索范围为数据库 `message` 表里的所有内容，并定下身份范围：Main 可以搜索 Subagent 与 Main 的记录，Subagent 只能搜索自己的 Subagent 记录。据此实现为：范围不按消息类型过滤（摘要、工具结果、系统消息都在内），不跨用户；Main 搜当前用户的全部 `messages` 行，每个 Subagent 只搜 `subagent_id` 等于自己的行。范围由后端按调用者身份固定，`search_message` 的 `who` 参数只在范围内按说话人（`user` / `main` / `subagent` / `any`）筛选，不是权限开关。
 
 历史检索采用**混合搜索**：关键词搜索（精确词、编号、人名）与向量搜索（意思相近）结合。
 
+- 关键词一路先解决：`00020` 给 `messages` 增加 `search_text` 纯文本列，由触发器从 `content` 提取（正文字符串、多段文本块、工具调用参数），并建 pg_trgm 的 GIN 索引；中文不分词，靠子串与三元组匹配。读取原文的 `read_message` 也返回这份提取文本，极长消息截断并标明。
 - 向量由 OpenRouter 的 embedding 接口（`POST /api/v1/embeddings`）生成，与聊天模型共用同一个 Key。搜索方式封装在 `search_message` 内部；数据库侧均为增量改动（加列、加索引、加扩展），不修改已有字段。
 - embedding 模型固定为 `google/gemini-embedding-2`，请求时指定 `dimensions = 1536`，存为 `vector(1536)`，可使用 pgvector 的 HNSW 索引（普通向量上限 2000 维）。模型写死在代码中、不开放给部署者配置，因为列的维度与模型绑定。选择理由：多语言能力强，且文本与图片处于同一向量空间，便于将来检索图片。
-- 向量异步计算：消息保存时 `embedding` 为空，由后台补算；embedding 接口故障不影响消息保存与聊天。
+- 向量异步计算：消息保存时 `embedding` 为空，由后台补算；补算工人用一把全局咨询锁保证多实例时只有一个在跑，逐批取待算消息逐条补齐，单条失败跳过本轮；超长文本只向量化开头 16000 字，关键词仍覆盖全文。embedding 接口故障不影响消息保存与聊天。
 - 向量索引使用余弦距离（`vector_cosine_ops`），因为 Gemini 向量截短到 1536 维后长度不再统一；查询时使用 `<=>` 运算符。
-
-`待确认`：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；多实例部署下的后台向量计算。摘要保留用户要求、已确认决定、必要事实、任务进度与未解决事项。
+- 两路结果按排名合并（RRF）：关键词命中次数与向量距离单位不同不能直接相加，只用各自名次计分，两路都命中的自然靠前。向量不可用时降级为纯关键词结果并在工具回执中注明。
+- 查询向量不传 `input_type`；摘要保留用户要求、已确认决定、必要事实、任务进度与未解决事项。
 
 ## 外键
 
@@ -186,8 +190,9 @@ stateDiagram-v2
 | `messages` | `(user_id, client_message_id)` 唯一 | 识别重发 |
 | `messages` | `(id) WHERE embedding IS NULL` | 后台查找尚未计算向量的消息 |
 | `messages` | `embedding` HNSW | 向量搜索 |
+| `messages` | `search_text` GIN（pg_trgm） | 关键词子串搜索 |
 
-`steps` 暂不建索引，待费用统计或执行轨迹展示时再加。关键词搜索所需索引在实现 `search_message` 时再定。
+`steps` 暂不建索引，待费用统计或执行轨迹展示时再加。
 
 ## 迁移
 

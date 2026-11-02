@@ -36,7 +36,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 
 1. 最小对话：用户通过 WebSocket 发消息，Main 调用模型并以正文回复（整条生成结束后一次性推送）。`已实现`
 2. 边生成边显示。`待确认`
-3. 更多工具：`read_message`、`search_message`。`仅设计`
+3. 更多工具：`read_message`、`search_message`。`已实现`
 4. 自动压缩。`开发中` 混合搜索仍为 `仅设计`。
 5. Subagent。`已实现`
 

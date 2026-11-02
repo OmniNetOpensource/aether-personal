@@ -71,7 +71,7 @@
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
 | 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息 | [02](wiki/02-data-model.md#压缩与上下文检索) |
 | 自动压缩触发 | 上下文达到 200,000 tokens（看板可改）时，下一次调用模型前检查并压缩；ikun Gemini 例外，固定 400,000（2026-10-30）；开发中，本地已验证并启用。2026-10-30 取消闲置 6 小时触发（看板小时设置一并删除）；达到阈值且恰好是 Main 的用户新消息触发时只压其之前的历史、保留这条消息原文 | [02](wiki/02-data-model.md#自动压缩触发2026-10-26开发中) |
-| 历史检索 | 关键词 + 向量混合搜索 | [02](wiki/02-data-model.md#压缩与上下文检索) |
+| 历史检索 | 关键词 + 向量混合搜索；2026-10-30 确认范围为 `messages` 表全部内容（不按类型过滤、不跨用户），Main 搜该用户全部记录、Subagent 只搜自己；参数含 `keyword` 与 `who`，两路按排名（RRF）合并 | [02](wiki/02-data-model.md#历史检索-已实现) |
 | embedding | `google/gemini-embedding-2`，1536 维，写死在代码中，异步计算，余弦距离 HNSW | [02](wiki/02-data-model.md#压缩与上下文检索) |
 | 迁移 | goose `v3.29.0`（`go tool`），单独命令执行 | [02](wiki/02-data-model.md#迁移) |
 | sqlc | 单独安装；可空列用指针，UUID 用 `google/uuid`，`numeric` 用 `shopspring/decimal` | [02](wiki/02-data-model.md#代码生成sqlc) |
@@ -146,7 +146,6 @@
 - Schedule 的固定间隔安排与静默监控完成协议，见 [10](wiki/10-schedules.md#漏跑暂停和删除)。
 - 多实例部署下的后台向量计算。
 - 其他登录方式扩展（如 SSO）；项目已不以企业部署为首要目标，确有需要再单独讨论。
-- 混合搜索的细节：中文关键词搜索实现、两路结果的合并方式、哪些消息参与搜索、`input_type` 的使用；完整消息读取规则。
 - 边生成边显示的推送方式，以及各平台的 WebSocket 连接恢复行为。
 - 其余 HTTP 工具与 MCP 的接入方式和权限。
 - Android、iOS、macOS、Windows 原生宿主的发布和验收方式（Linux 已确认仅要求浏览器）。

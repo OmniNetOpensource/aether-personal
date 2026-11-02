@@ -82,7 +82,7 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 | 消息 API | WebSocket 登录、历史翻页、收发与推送；服务器事件定义与中转在 `events.go`，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
 | Main 运行时 | 按用户串行运行 Main，调用模型与工具，见 [05 Main 运行时](05-main-runtime.md) | `已实现` |
 | `send_message` | 仅 Agent 间：Main 发给 Subagent，Subagent 发给 Main；Main 回复用户走正文 | `已实现` |
-| `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `仅设计` |
+| `read_message` / `search_message` | 按 ID 读取、按关键词与语义搜索历史消息 | `已实现` |
 | `assign_subagents` | 派出 Subagent，异步启动并立即返回 `subagent_id` | `已实现` |
 | `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将保存的上下文交给 Main，见 [10](10-schedules.md) | `开发中` |
 | Subagent 运行时 | 独立上下文、后台执行、每用户 3 个并行、持久排队、15 分钟超时 | `已实现` |

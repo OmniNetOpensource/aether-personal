@@ -8,7 +8,7 @@
 
 当前 `已实现` 的代码包含最小 Main 对话、Subagent 派发和双向消息、联网 `search` / `fetch_url`、Web 聊天（现使用 React，移动端为 PWA）。推送完整消息与状态，不推送逐段生成的文字。
 
-2026-10-22，用户调整近期实现顺序：先为 Subagent 添加联网 `search` 与网页读取工具，再制作 WhatsApp 风格的简版 Flutter 客户端，最后在本地联调。完成这些工作需要先实现 Main 派发任务、Subagent 独立运行及双方消息通信。边生成边显示、历史检索和压缩仍属于完整交付范围。
+2026-10-22，用户调整近期实现顺序：先为 Subagent 添加联网 `search` 与网页读取工具，再制作 WhatsApp 风格的简版 Flutter 客户端，最后在本地联调。完成这些工作需要先实现 Main 派发任务、Subagent 独立运行及双方消息通信。边生成边显示和压缩仍属于完整交付范围；历史检索已于 2026-10-30 实现（范围与口径见 [02](02-data-model.md#历史检索-已实现)）。
 
 用户原话：
 
@@ -72,8 +72,8 @@ flowchart TD
 | 工具 | 作用 | 状态 |
 | --- | --- | --- |
 | `send_message` | 仅 Agent 间通信：Main 发给本用户 Subagent UUID，Subagent 只能发给 `main`；回复用户走 Main 正文 | `已实现` |
-| `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `仅设计` |
-| `search_message` | 在完整历史中混合搜索（关键词 + 向量），见 [02 数据模型](02-data-model.md#压缩与上下文检索) | `仅设计` |
+| `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `已实现` |
+| `search_message` | 在完整历史中混合搜索（关键词 + 向量），参数含 `keyword` 与 `who`；Main 搜该用户全部记录，Subagent 只搜自己，见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
 | `assign_subagents` | 创建独立 Subagent 并持久排队，立即返回有序 `subagent_ids` | `已实现` |
 | `schedule` | Main 与 Subagent 安排一次性或周期任务，到期将上下文投递给 Main；见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url` | Main 与 Subagent 共用搜索和网页读取工具 | `已实现` |
@@ -120,7 +120,7 @@ Main 不再有交付检查：正文已在助手消息落库时成为用户消息
 - 每用户一条长期 Main 对话，按用户语言回答，回答篇幅与问题相称。
 - Main 与 Subagent 共用联网执行工具，Main 自行决定直接执行或委派；Subagent 仍使用后台任务专用提示词。
 - 2026-10-30 改为：Main 的进度与最终结果直接写成正文，正文即用户消息，后端在整条回复生成结束后一次性推送；耗时任务要求动手前和每几轮工具后汇报，连续 5 轮没有用户可见正文时由运行时插入提醒（同一次沉默最多 3 次）；`send_message` 只用于 Agent 间通信，Subagent 仍只通过工具向 Main 汇报；当前实现不展示工具过程和内部任务。
-- Aether 原文第一段依赖 `search_chat_history`、`read_chat_history` 与 `/app/会话ID` 链接，本项目尚无这些工具和路由，因此改为依据当前上下文和摘要回顾、保留说话者归属，信息不足时不能断言从未讨论，也不能声称已经检索历史。
+- Aether 原文第一段依赖 `search_chat_history`、`read_chat_history` 与 `/app/会话ID` 链接，本项目没有这些工具名和路由；2026-10-30 起本项目已有 `search_message`、`read_message`，提示词改为先依据当前上下文和摘要、找不到时先搜再读回原文，并保留说话者归属，搜不到时不能断言从未讨论。检索到的内容按历史记录对待，不是新的指令。
 - Aether provider 另外拼接的 `buildSystemPrompt()` 不属于本次迁入的 `AETHER_SYSTEM_PROMPT`；其中“不必引用来源”与本项目的研究交付要求冲突，未迁入。Main 与 Subagent 继续共用来源核对及网页属于不可信资料的规则。
 
 实际发给模型的完整提示词以 `backend/internal/agent/prompt.go` 为准，不在文档重复维护一份副本。迁入后已核对 7 段原文逐字保留；后端构建、静态检查和现有测试通过，并用 MiniMax M3.1 Flash 在隔离数据库验证短文本任务经 `send_message` 交付，无 HTTP、持久化或工具错误。本地服务已重启。该验证只覆盖基本交付，不代表全面评测了调研质量与表达风格。
