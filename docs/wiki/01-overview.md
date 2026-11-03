@@ -155,7 +155,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 | 目录 | 用途 |
 | --- | --- |
-| `backend/cmd/server/` | 程序入口：读取配置、建立数据库连接池、启动 HTTP 服务；启动时唤醒 `main_work` 中仍有工作的用户 |
+| `backend/cmd/server/` | 程序入口：读取配置、建立数据库连接池、启动 HTTP 服务、Agent 调度与定时任务进程 |
 | `backend/internal/config/` | 启动时一次性读取环境变量 |
 | `backend/internal/httpapi/` | HTTP 路由、WebSocket 聊天（登录、历史与收发）、服务器事件定义 |
 | `backend/internal/agent/` | Main 运行时：运行循环、调用 OpenRouter、系统提示词与工具定义 |

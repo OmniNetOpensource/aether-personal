@@ -34,7 +34,7 @@ Main 使用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`
 
 ## 到期如何进入 Main
 
-当前 `Runner.Start` 在启动时和每秒扫描 `main_work`，最新消息需要处理的用户会被唤醒（2026-11-02 起，见 [05](05-main-runtime.md#运行循环-已实现)）。执行锁保证同一用户的 Main 串行工作。Schedule 可以复用这些能力，相关代码在 `backend/internal/agent/runner.go` 和 `backend/db/queries/messages.sql`。
+当前 `Runner.Start` 只被 PostgreSQL 通知唤醒后扫描 `main_work`（2026-11-03 起，见 [05](05-main-runtime.md#运行循环-已实现)）；投递事务发出的 NOTIFY 即触发来源，错过通知的日程触发消息要等下一次通知才被处理。执行锁保证同一用户的 Main 串行工作。Schedule 可以复用这些能力，相关代码在 `backend/internal/agent/runner.go` 和 `backend/db/queries/messages.sql`。
 
 调度器在启动时及之后每秒扫描，按以下流程投递：
 
@@ -42,7 +42,7 @@ Main 使用 `schedule` 工具，支持 `create`、`list`、`update` 和 `delete`
 2. 开启短事务，先取得该用户的消息写锁，再锁定计划行，重新检查状态、版本和到期时间。
 3. 使用数据库时间，写入本次触发记录和发给 Main 的触发消息。
 4. 周期计划计算下一次时间，一次性计划标记为已触发。
-5. 在同一事务发出通知并提交，随后唤醒现有 Runner。
+5. 在同一事务发出通知并提交，Runner 由该通知唤醒，本包不直接调用 Runner。
 
 触发消息包含计划 ID、本次触发 ID、原定时间、实际投递时间和上下文快照。沿用 `role=user`、`sender=system` 的内部消息形态（2026-11-02 起与其他消息一样入库即分配 `sequence`），并在内容中注明来源。组装请求时不在触发消息后插入当前时间，正文已带原定时间、实际投递时间和时区。`sender` 表示消息来源，模型消息的 `role` 表示输入形态，两者不能混为一谈。
 

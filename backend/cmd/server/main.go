@@ -56,7 +56,7 @@ func main() {
 	}
 	runner := agent.NewRunner(databasePool, appConfig, serviceSettings)
 	go runner.Start(ctx)
-	go scheduler.Run(ctx, databasePool, runner.Wake)
+	go scheduler.Run(ctx, databasePool)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

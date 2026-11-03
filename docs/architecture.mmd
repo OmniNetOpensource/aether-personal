@@ -5,7 +5,7 @@ flowchart TD
 
     subgraph L2["第二层：Go 后端"]
         API["API：认证 · 收发消息 · WebSocket · 只读管理"]
-        MESSAGES["消息服务：路由 · 保存消息 · 直接触发接收方"]
+        MESSAGES["消息服务：路由 · 保存消息 · 经 NOTIFY 触发接收方"]
         DB[("PostgreSQL：消息历史 · 步骤与模型请求日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
@@ -22,7 +22,7 @@ flowchart TD
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 对外消息与事件"| MESSAGES
         MESSAGES <-->|"保存与读取消息"| DB
-        MESSAGES -->|"消息保存后直接触发 main"| MAIN
+        MESSAGES -->|"消息保存后经 NOTIFY 触发 main"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
         SEARCH <-->|"按用户搜索历史"| DB

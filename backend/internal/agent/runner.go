@@ -1,4 +1,4 @@
-// 本文件是 Agent 的执行调度中心：用户消息或工具回执入库后唤醒对应用户的 Main，保证同一个用户的 Main 同一时间只跑一处；
+// 本文件是 Agent 的执行调度中心：只认数据库通知转发来的唤醒，保证同一个用户的 Main 同一时间只跑一处；
 // Main 被唤醒后只看消息表尾部决定下一步——补跑没有回执的工具、调用模型，或者已经回复完毕就结束。
 
 package agent
@@ -34,7 +34,7 @@ func runtimeLockKey(userID uuid.UUID) string {
 }
 
 // Runner 是进程内的执行调度器：它只持有连接池、配置和“谁正在跑”的临时登记，
-// 要不要运行只由消息表尾部决定（见 main_work 视图），所以进程重启后靠重新扫描就能恢复。
+// 要不要运行只由消息表尾部决定（见 main_work 视图）；唤醒只来自 PostgreSQL 通知，重启后遗留的工作等下一次通知触发扫描时恢复。
 type Runner struct {
 	databasePool *pgxpool.Pool
 	settings     config.Config
@@ -59,7 +59,7 @@ func NewRunner(pool *pgxpool.Pool, settings config.Config, serviceSettings *serv
 	}
 }
 
-// Wake 在用户消息、日程消息入库后敲一下调度循环，让它立刻重新扫描；通道已满说明循环已被叫醒，不必排队。
+// Wake 只由 PostgreSQL 通知的监听转发调用，敲一下调度循环让它重新扫描；通道已满说明循环已被叫醒，不必排队。
 func (r *Runner) Wake(_ uuid.UUID) {
 	select {
 	case r.wakeSignal <- struct{}{}:
@@ -86,18 +86,14 @@ func (r *Runner) NewInput(userID uuid.UUID, sequence int64) {
 	r.Wake(userID)
 }
 
-// Start 是常驻调度循环：被 Wake 叫醒或每秒定时醒来时，从数据库扫出消息尾部需要 Main 处理的用户并逐个派发。
-// 消息表是唯一的事实来源，所以这种扫描能补偿进程退出、跨实例或通知丢失。
+// Start 是常驻调度循环：只在 PostgreSQL 通知转发来的 Wake 时醒来，从数据库扫出消息尾部需要 Main 处理的用户并逐个派发。
+// 没有启动扫描与周期扫描：通知丢失时，遗留工作等下一次通知触发的全量扫描顺带恢复，不保证恢复时间。
 func (r *Runner) Start(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	r.Wake(uuid.Nil)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-r.wakeSignal:
-		case <-ticker.C:
 		}
 		userIDs, err := database.New(r.databasePool).ListRunnableAgents(ctx)
 		if err != nil {
@@ -123,31 +119,28 @@ func (r *Runner) Start(ctx context.Context) {
 			}
 			r.mutex.Unlock()
 			go func() {
-				ran := r.run(ctx, userID)
+				r.run(ctx, userID)
 				r.mutex.Lock()
 				delete(r.active, key)
 				r.mutex.Unlock()
 				<-r.activeSlots
-				if ran {
-					r.Wake(userID)
-				}
 			}()
 		}
 	}
 }
 
 // run 是单个 Main 的一次完整运行：独占连接并抢到咨询锁后，先收尾上次崩溃，再按消息尾部循环执行缺回执的工具或调用模型，直到已经回复完毕。
-// 返回值表示这次确实处理过工作；循环中的失败只在末尾分流，进程退出或连接已断不记失败，其余才落库。
-func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
+// 循环中的失败只在末尾分流，进程退出或连接已断不记失败，其余才落库。
+func (r *Runner) run(parent context.Context, userID uuid.UUID) {
 	connection, err := r.databasePool.Acquire(parent)
 	if err != nil {
-		return false
+		return
 	}
 	defer connection.Release()
 	queries := database.New(connection)
 	locked, err := queries.TryLockRuntime(parent, runtimeLockKey(userID))
 	if err != nil || !locked {
-		return false
+		return
 	}
 	// 收尾时释放咨询锁，并通知前端刷新消息与思考状态；释放失败就直接关连接，靠数据库会话结束兜底。
 	defer func() {
@@ -166,26 +159,26 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	// 它们只供看板查看，不影响下面按消息尾部接着运行。
 	if err := queries.InterruptModelCalls(parent, userID); err != nil {
 		slog.Error("recover model call journal failed", "error", err)
-		return false
+		return
 	}
 	// 执行锁保证上次进程已经退出，清掉其未完成且未向用户发布的占位。
 	if err := queries.DiscardGeneratingReply(parent, userID); err != nil {
 		slog.Error("recover incomplete reply", "error", err)
-		return false
+		return
 	}
 	interrupted := "interrupted before the step finished"
 	if err := queries.FailUnfinishedSteps(parent, database.FailUnfinishedStepsParams{UserID: userID, Error: &interrupted}); err != nil {
 		slog.Error("recover unfinished steps failed", "error", err)
-		return false
+		return
 	}
 	// 消息尾部已经回复完毕、或停在上次失败处，就直接结束，让调度循环把名额让给其他 Agent。
 	hasWork, err := queries.HasMainWork(parent, userID)
 	if err != nil {
 		slog.Error("check Main work failed", "error", err)
-		return false
+		return
 	}
 	if !hasWork {
-		return false
+		return
 	}
 	// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 	var through int64
@@ -221,7 +214,7 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	}
 	if loopErr != nil {
 		if parent.Err() != nil || connection.Conn().IsClosed() {
-			return true
+			return
 		}
 		slog.Error("agent run failed", "agent", runtimeLockKey(userID), "error", loopErr)
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -230,7 +223,6 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 			slog.Error("save agent failure failed", "error", err)
 		}
 	}
-	return true
 }
 
 // executeToolCalls 并行执行同一条模型回复里还没有回执的全部工具，不设并发上限，每个调用起一个协程。

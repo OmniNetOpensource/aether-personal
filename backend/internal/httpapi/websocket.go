@@ -426,8 +426,8 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接也能被唤醒推送；成功后唤醒 agent，
-// 先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
+// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接被唤醒推送、Runner 被通知唤醒；
+// 成功后先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
@@ -450,7 +450,6 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 		return false
 	}
 
-	s.runner.Wake(userID)
 	if s.pushChatMessages(ctx, relay, userID, changeCursor) != nil {
 		return false
 	}

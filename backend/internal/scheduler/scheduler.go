@@ -18,7 +18,8 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-func Run(ctx context.Context, pool *pgxpool.Pool, wake func(uuid.UUID)) {
+// Run 周期扫描到期安排并投递；投递事务发出的数据库通知负责唤醒 Runner，本包不直接调用它。
+func Run(ctx context.Context, pool *pgxpool.Pool) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -28,13 +29,10 @@ func Run(ctx context.Context, pool *pgxpool.Pool, wake func(uuid.UUID)) {
 		}
 		for _, candidate := range candidates {
 			deliveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			delivered, err := deliver(deliveryCtx, pool, candidate.UserID, candidate.ID)
+			err := deliver(deliveryCtx, pool, candidate.UserID, candidate.ID)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				slog.Error("deliver schedule failed", "schedule_id", candidate.ID, "error", err)
-			}
-			if delivered {
-				wake(candidate.UserID)
 			}
 		}
 		select {
@@ -45,9 +43,8 @@ func Run(ctx context.Context, pool *pgxpool.Pool, wake func(uuid.UUID)) {
 	}
 }
 
-func deliver(ctx context.Context, pool *pgxpool.Pool, userID, scheduleID uuid.UUID) (bool, error) {
-	delivered := false
-	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+func deliver(ctx context.Context, pool *pgxpool.Pool, userID, scheduleID uuid.UUID) error {
+	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		// Database tools already hold this lock before modifying schedules.
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
@@ -107,10 +104,8 @@ func deliver(ctx context.Context, pool *pgxpool.Pool, userID, scheduleID uuid.UU
 		if err := queries.NotifyUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		delivered = true
 		return nil
 	})
-	return delivered && err == nil, err
 }
 
 func nextCronTime(expression, timezone string, after time.Time) (time.Time, error) {

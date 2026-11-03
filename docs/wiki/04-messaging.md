@@ -45,7 +45,7 @@ sequenceDiagram
     WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
     WS-->>App: messages {这条用户消息, main_thinking}
     WS-->>App: delivered {client_message_id}
-    WS->>Runner: Wake(user_id)
+    DB-->>WS: NOTIFY user_messages（监听转发唤醒 Runner，Runner 只认此来源）
     Runner->>DB: 尝试获取该用户的 Main 锁，读取上个 compact 以来的消息
     Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
@@ -170,7 +170,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
 - 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
 - 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
-- 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。
+- 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。此补查只覆盖聊天连接：Runner 同在这一条监听上接收唤醒，但 2026-11-03 起只认通知、不在重连时补扫，断开期间错过的 Main 工作等下一次通知触发全量扫描时恢复（见 [05](05-main-runtime.md#运行循环-已实现)）。
 
 ## 助手消息宽度
 
