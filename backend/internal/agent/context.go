@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 )
@@ -105,6 +106,20 @@ func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage
 // buildRequestMessages 组装一次普通请求：第一条是固定指令，其后是按组装规则排好的当前世代消息。
 func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
 	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, MainInstructions)}, assembleMessages(rows)...)
+}
+
+// buildAgentRequest 组装一次普通 Agent 请求：组装好的消息发出前先过工具配对与尾巴检查，再附上工具定义与输出上限交给发送层。
+func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
+	messages := buildRequestMessages(rows)
+	if err := validateRequestMessages(messages); err != nil {
+		return modelRequest{}, err
+	}
+	// 只取实际组装的这批行的最大序号；摘要排在首位，其物理序号可能大于保留的原文。
+	var inputSequence int64
+	for _, row := range rows {
+		inputSequence = max(inputSequence, row.Sequence)
+	}
+	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
 // buildCompactRequestMessages 组装一次压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，末尾一条用户消息提出摘要要求。

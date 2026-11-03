@@ -63,7 +63,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 		reason = "capacity"
 	}
 	if reason == "" {
-		return r.agentRequest(rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit)
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
 	// 否则（工具续跑、日程唤醒）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
@@ -85,7 +85,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	rowsToCompact := rows[:keepFrom]
 	// 待压范围里没有原文、只剩上一条摘要（同一轮重试时摘要已落库）时，不把摘要再压一遍。
 	if len(rowsToCompact) == 0 || (len(rowsToCompact) == 1 && rowsToCompact[0].IsSummary) {
-		return r.agentRequest(rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit)
 	}
 	// 组装压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，摘要要求作为最后一条 user 消息；
 	// 压缩只许产出摘要正文：请求明确禁止调用任何工具，避免模型顺着历史里的工具轨迹继续干活而不是写摘要。
@@ -111,7 +111,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	// 真正调用压缩模型，等待期间同样靠 whileRequest 看住执行锁连接。
 	beforeValue := int32(min(before, math.MaxInt32))
 	result, err := whileRequest(ctx, connection, nil, func(requestContext context.Context, _ func() error) (chatResponse, error) {
-		response, _, requestErr := r.requestModel(requestContext, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through}, nil)
+		response, _, requestErr := r.sendModelRequest(requestContext, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through}, nil)
 		return response, requestErr
 	})
 	if err != nil {
@@ -144,5 +144,5 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return r.agentRequest(rows, model, outputLimit)
+	return buildAgentRequest(rows, model, outputLimit)
 }

@@ -420,7 +420,7 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, conn *pgxpool.Conn
 		})
 	}
 	result, err := whileRequest(modelCtx, conn, reserve, func(callCtx context.Context, onOutput func() error) (modelResult, error) {
-		response, retryable, err := r.requestModel(callCtx, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"}, onOutput)
+		response, retryable, err := r.sendModelRequest(callCtx, prepared, database.StartModelCallParams{StepID: stepID, Purpose: "agent"}, onOutput)
 		return modelResult{response, retryable}, err
 	})
 	if errors.Is(context.Cause(modelCtx), errNewInput) {

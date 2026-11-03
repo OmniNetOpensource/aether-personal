@@ -1,4 +1,4 @@
-// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型选择渠道发送，首段正文或工具调用交运行时占位；每次调用的终态日志由 model_call_journal.go 落库。
+// 本文件只负责发送已组装好的模型请求：经 providers 按模型选择渠道发送，首段正文或工具调用交运行时占位；上下文组装见 context.go，业务结果的保存由上层负责，每次调用的终态日志由 model_call_journal.go 落库。
 
 package agent
 
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 )
@@ -22,22 +21,8 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-// agentRequest 组装一次 Agent 请求：指令注入加按组装规则排好的当前世代消息，发出前先过工具配对与尾巴检查。
-func (r *Runner) agentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
-	messages := buildRequestMessages(rows)
-	if err := validateRequestMessages(messages); err != nil {
-		return modelRequest{}, err
-	}
-	// 只取实际组装的这批行的最大序号；摘要排在首位，其物理序号可能大于保留的原文。
-	var inputSequence int64
-	for _, row := range rows {
-		inputSequence = max(inputSequence, row.Sequence)
-	}
-	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
-}
-
-// requestModel 发送一次模型请求：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
-func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
+// sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
+func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
 	resolved, err := (images.Store{Services: r.services}).ResolveMessages(ctx, prepared.Messages)
 	if err != nil {
