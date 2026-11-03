@@ -17,7 +17,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 | [07 Linux 沙盒工作环境](07-sandbox.md) | 2026-10-29 起不在当前范围；已有实现已删除 |
 | [08 管理看板与调用观测](08-admin-observability.md) | 独立管理端、调用观测、模型选择、服务凭证管理和管理员权限 |
 | [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
-| [10 Schedule](10-schedules.md) | 一次性与周期安排、上下文投递、工具参数、持久化与漏跑恢复 |
+| [10 Schedule](10-schedules.md) | 2026-11-03 起不在当前范围；已有实现已删除 |
 
 ## 状态标注
 

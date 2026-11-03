@@ -66,7 +66,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 		return buildAgentRequest(rows, model, outputLimit)
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
-	// 否则（工具续跑、日程唤醒）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
+	// 否则（工具续跑）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
 	keepFrom := len(rows)
 	for keepFrom > 0 && !rows[keepFrom-1].IsSummary && parseContextMessage(rows[keepFrom-1].Content).Role == "user" {
 		keepFrom--

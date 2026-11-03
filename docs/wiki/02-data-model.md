@@ -8,7 +8,7 @@
 
 - 每个用户的 Main 拥有一份消息列表。用户没有独立列表，用户与 Main 的对话就是 Main 的列表，聊天界面读取 Main 的列表。
 - 不建 `agents` 表：Main 由 `user_id` 确定。
-- 消息与模型上下文存在同一张 `messages` 表中，用户发来的消息与运行时投递（如日程）都写入 Main 的列表并记录发送方。
+- 消息与模型上下文存在同一张 `messages` 表中，用户发来的消息写入 Main 的列表并记录发送方。
 
 设计时参考了 Letta（archive 分支）的 `messages` / `steps` 设计，以及 OpenAI Agents SDK、Google ADK 的会话消息表。
 
@@ -67,7 +67,7 @@ erDiagram
 | `user_id` | uuid | 所属用户 |
 | `sequence` | bigint | 全局递增序号，用于排序；插入时分配、不能为空（2026-11-02 起，原先为空表示待读） |
 | `role` | text | `user` / `assistant` / `tool`（2026-11-02 由 `00021` 去掉 `system`） |
-| `visible` | boolean | 是否显示在用户聊天中；真人发给 Main 的消息与 Main 助手消息为 true，指令、日程、运行时提醒、工具回执与摘要为 false（`00021`） |
+| `visible` | boolean | 是否显示在用户聊天中；真人发给 Main 的消息与 Main 助手消息为 true，指令、运行时提醒、工具回执与摘要为 false（`00021`） |
 | `content` | jsonb | 按 OpenRouter 格式保存的内容；普通请求组装时直接使用原文，只删前端展示字段，第一条由代码常量的不可见 user 指令注入、不落库 |
 | `sender` | text | 别人发来的消息填发送方：`user` / `main` / `system`；否则为空 |
 | `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |

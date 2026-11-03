@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配配置、数据库连接池、Agent 调度、定时任务与 HTTP 服务，并随退出信号优雅关闭，把各模块连成一个可运行的服务。
+// 本文件是后端进程入口：装配配置、数据库连接池、Agent 调度与 HTTP 服务，并随退出信号优雅关闭，把各模块连成一个可运行的服务。
 
 package main
 
@@ -15,7 +15,6 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/httpapi"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -56,7 +55,6 @@ func main() {
 	}
 	runner := agent.NewRunner(databasePool, appConfig, serviceSettings)
 	go runner.Start(ctx)
-	go scheduler.Run(ctx, databasePool)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

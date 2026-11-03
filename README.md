@@ -38,7 +38,6 @@
 - 消息服务：消息路由、持久化、保存后直接触发接收方。
 - PostgreSQL：agent 身份、消息历史、Run 状态和执行轨迹；表结构见[数据模型](docs/wiki/02-data-model.md)。
 - Main Runtime：`messageList` 上下文，按用户串行处理。
-- Schedule：Main 通过工具安排一次性或周期任务，到期将保存的上下文投递给 Main，见 [Schedule](docs/wiki/10-schedules.md)。
 - Main 直接使用联网执行工具完成任务。
 - Main 在耗时任务中用正文汇报进度，完成后用正文给结果；连续 5 轮只有工具调用时，运行时插入一条用户看不见的提醒。历史检索 `search_message`、`read_message` 已实现：Main 可搜该用户全部消息记录。
 - 按用户权限搜索和读取历史消息。

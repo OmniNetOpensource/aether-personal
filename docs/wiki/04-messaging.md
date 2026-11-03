@@ -190,7 +190,7 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 当前实现中，用户只能看到两类消息内容：自己发的消息，以及 Main 模型生成的正文（2026-10-30 起取代旧的 `send_message(to=user)` 方式，详见 [05](05-main-runtime.md#main-如何回复用户)）。
 
-2026-11-02 起用 `messages.visible` 列显式记录（`00021`）：聊天查询只取 Main 列表中 `visible = true` 的行。真人消息写入时即为 true，Main 助手行落库时为 true，其正文仍在 Go 代码中提取（`agent.AssistantTextToUser`），正文非空才产生一条显示消息；指令、Agent 间投递、日程、运行时提醒、工具回执与摘要为 false。文字仍只存一份，不加 `user_visible_text` 列。
+2026-11-02 起用 `messages.visible` 列显式记录（`00021`）：聊天查询只取 Main 列表中 `visible = true` 的行。真人消息写入时即为 true，Main 助手行落库时为 true，其正文仍在 Go 代码中提取（`agent.AssistantTextToUser`），正文非空才产生一条显示消息；指令、Agent 间投递、运行时提醒、工具回执与摘要为 false。文字仍只存一份，不加 `user_visible_text` 列。
 - 后端等模型整条回复生成结束、助手消息落库后才经 NOTIFY 推送整条正文，不向前端逐段推送生成中的文字。
 
 ## 历史消息
