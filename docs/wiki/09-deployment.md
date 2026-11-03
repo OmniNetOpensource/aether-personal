@@ -193,7 +193,7 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 
 2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。
 
-工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
+工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。Node 固定为 `24.22.1`，与现有 Docker 构建镜像一致，避免工具链随 runner 更新而变化。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
 
 发布顺序为检查与构建、上传、停写备份、迁移与启动后端、下载并校验备份、发布 Cloudflare、核对公网文件和健康状态。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
 
