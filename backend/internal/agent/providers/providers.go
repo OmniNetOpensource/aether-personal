@@ -20,7 +20,7 @@ type Request struct {
 	Messages      []json.RawMessage `json:"messages"`
 	Tools         []json.RawMessage `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage   `json:"tool_choice,omitempty"`
-	MaxTokens     int32             `json:"max_tokens"`
+	MaxTokens     int32             `json:"max_tokens,omitempty"`
 	Stream        bool              `json:"stream,omitempty"`
 	StreamOptions map[string]bool   `json:"stream_options,omitempty"`
 }

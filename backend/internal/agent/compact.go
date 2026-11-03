@@ -44,7 +44,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	if err == nil && usage.RequestedModel == model {
 		before = int64(usage.InputTokens)
 	}
-	// 算出输入能用多少：总容量先扣掉给模型输出预留的部分和一成余量，剩下的才是历史能占的上限；再看是撞到压缩阈值还是已经超容量。
+	// 算出输入能用多少：总容量先扣掉模型最大输出预算和 5% 余量，剩下的才是历史能占的上限；再看是撞到压缩阈值还是已经超容量。
 	inputLimit := int64(math.MaxInt32)
 	if capacity > 0 {
 		inputLimit = capacity - int64(outputLimit) - max(1024, capacity/20)

@@ -10,10 +10,7 @@ import (
 	"strings"
 )
 
-const DefaultMaxOutputTokens = 8192
-
 type Config struct {
-	MaxOutputTokens      int32
 	AdminPasswordSalt    []byte
 	AdminPasswordKey     []byte
 	ServiceEncryptionKey []byte
@@ -64,14 +61,6 @@ func Load() (Config, error) {
 	if mainModel == "" {
 		mainModel = "deepseek/deepseek-v4.1-flash-1017"
 	}
-	maxOutputTokens := int32(DefaultMaxOutputTokens)
-	if value := os.Getenv("MAX_OUTPUT_TOKENS"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 32)
-		if err != nil || parsed < 1 {
-			return Config{}, fmt.Errorf("MAX_OUTPUT_TOKENS must be a positive integer")
-		}
-		maxOutputTokens = int32(parsed)
-	}
 	var adminPasswordSalt, adminPasswordKey []byte
 	if value := os.Getenv("ADMIN_PASSWORD_HASH"); value != "" {
 		parts := strings.Split(value, "$")
@@ -91,7 +80,6 @@ func Load() (Config, error) {
 
 	return Config{
 		AppEnv:               appEnv,
-		MaxOutputTokens:      maxOutputTokens,
 		AdminPasswordSalt:    adminPasswordSalt,
 		AdminPasswordKey:     adminPasswordKey,
 		ServiceEncryptionKey: serviceEncryptionKey,

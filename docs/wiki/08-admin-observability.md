@@ -124,11 +124,11 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 | --- | --- |
 | `GET /admin/model-settings` | 当前选择、版本、来源和最后修改者 |
 | `GET /admin/models` | 已配置渠道的模型候选目录，以及渠道未配置或目录请求失败的提示 |
-| `PUT /admin/model-settings` | 原子保存 `main_model`、`compact_at_tokens`、`main_output_limit` 与预期 `version`；冲突返回 409 |
+| `PUT /admin/model-settings` | 原子保存 `main_model`、`compact_at_tokens` 与预期 `version`；冲突返回 409 |
 
 三个接口均使用独立管理会话与 no-store。管理端同源代理只允许上述固定路径和方法，模型服务密钥始终只在 Go 后端。页面不会自动刷新覆盖尚未保存的选择。
 
-每次请求显式设置输出上限 `max_tokens`。2026-11-03 起，这个上限改在看板「模型配置」页填写并持久化到 `model_settings.main_output_limit`（`00029`，接受 1–2000000 的整数）；启动环境变量 `MAX_OUTPUT_TOKENS`（默认 8192）只在还没在看板保存过时提供初始值，看板保存后以数据库为准。保存模型时同时记录目录中已知的最大输出能力（`00008`）；实际请求取看板上限与模型能力的较小值，看板接口以 `effective_output_limit` 返回这个实际值。该上限包含供应商计入的推理 Token，不能视为可见回复长度。这样不会因模型默认预留过大的输出空间触发不必要的余额预检失败；实际余额和上下文费用仍可能导致请求失败。参数语义见 [OpenRouter 官方参数说明](https://openrouter.ai/docs/api_reference/parameters#max-tokens)。
+2026-11-03，用户要求移除应用自行设置的输出额度，所有模型都使用自身最大能力。因此删除看板输出额度输入框、`MAX_OUTPUT_TOKENS` 环境变量和 `model_settings.main_output_limit`（`00031`）；先前 `00029` 增加的手动设置不再生效。普通回复与压缩请求共用这一规则：保存模型时目录提供了最大输出 Token 数，就直接用于 OpenRouter 的 `max_tokens` 或 Gemini 的 `maxOutputTokens`；目录未提供时省略参数，由供应商使用模型默认额度，不猜一个数字。`effective_output_limit` 返回已知的模型最大值，0 表示未知且不发送限制。模型固有上限、总上下文容量与供应商默认行为仍然适用；移除应用额度不代表供应商支持无限输出。选择理由是避免应用自己的 8192 或 16384 Token 额度限制模型思考与回答空间。思考 Token 也可能计入输出预算，详见 [OpenRouter 参数说明](https://openrouter.ai/docs/api_reference/parameters#max-tokens)；Gemini 的默认值与模型能力见 [GenerationConfig](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)。这项改动不改变合法沉默的判定，也不能据此认定先前返回 `STOP` 的空正文由 Token 额度导致。
 
 本轮已验证 `00007` / `00008` 的迁移、回滚与再执行；管理员版本冲突409、未知模型400、普通账号403；Main 与 Subagent 的真实独立模型请求，以及 Main 从 Minimax 切换到 DeepSeek 后后续请求使用新模型。Gemini 的真实请求已验证输出上限、结果发送与私有结束标记后回到空闲。较小模型目录上限4096已验证自动缩小。配置已验证后端重启后保留，页面已完成应用操作验收。未新增测试文件，未提交或推送。
 
@@ -140,7 +140,7 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 
 在“服务配置”页只需保存 ikun Gemini 的 Key，无需重启。2026-10-30 用户指定默认地址为 `https://api.ikuncode.cc`，页面不再要求输入接口地址。密钥只进入供应商请求头，不进入模型请求正文；管理端提交新 Key 后不回显原值。此前环境变量配置由下述一次性导入命令迁移。
 
-目录读取 `{baseURL}/v1beta/models`，处理分页，提供 `ikun:gemini-*` 候选。排除图片、语音、embedding、robotics 和 computer-use 专用模型，以及目录明确不支持 `generateContent` 的模型。Gemini 目录不提供工具能力证明，候选的实际能力以调用结果为准。容量元数据缺失时显示未知，不猜测容量；价格与实际费用未返回时也显示未知，不套用 OpenRouter 价格或记为零。已知的 `inputTokenLimit` 是独立输入上限，不再扣除输出预算；`outputTokenLimit` 与看板填写的输出上限取较小值。
+目录读取 `{baseURL}/v1beta/models`，处理分页，提供 `ikun:gemini-*` 候选。排除图片、语音、embedding、robotics 和 computer-use 专用模型，以及目录明确不支持 `generateContent` 的模型。Gemini 目录不提供工具能力证明，候选的实际能力以调用结果为准。容量元数据缺失时显示未知，不猜测容量；价格与实际费用未返回时也显示未知，不套用 OpenRouter 价格或记为零。已知的 `inputTokenLimit` 是独立输入上限，不再扣除输出预算；`outputTokenLimit` 已知时直接作为请求的最大输出额度，未知时不发送 `maxOutputTokens`。
 
 每次请求使用 `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`（2026-10-30 起改为流式，见 [05](05-main-runtime.md#模型调用)）。`ikun:` 仅保存在配置与日志，原生请求路径使用真实模型名。Main 和压缩共用路由与请求日志。Gemini 的工具声明、调用与结果转换在供应商边界完成。原生 `content.parts` 连同 `thoughtSignature` 存入已有消息 JSON，重启及工具续接时传回同一模型；其中只有签名、没有数据的空段会在回传前并入前一段（流式分片与存量内容都适用），否则供应商会以缺少 data 拒绝请求。迁入其他模型的工具历史使用 [Google 官方支持的签名占位值](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)；切回 OpenRouter 时移除 Gemini 专属元数据。
 

@@ -176,7 +176,6 @@ export interface QuotaItem {
 
 export interface ModelSettings {
   compact_at_tokens: number;
-  main_output_limit: number;
   effective_output_limit: number;
   main_model: string;
   version: number;

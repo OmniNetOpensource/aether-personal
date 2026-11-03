@@ -1,4 +1,4 @@
-// 本文件是管理看板的模型配置页：选择 Main 模型并填写压缩阈值与输出上限，保存后从下一次请求生效。
+// 本文件是管理看板的模型配置页：选择 Main 模型并填写压缩阈值，输出额度由模型能力决定，保存后从下一次请求生效。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,7 +27,7 @@ export function ModelSettingsPage({
 }) {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [draft, setDraft] = useState<{ main_model: string; compact_at_tokens: number; main_output_limit: number } | null>(null);
+  const [draft, setDraft] = useState<{ main_model: string; compact_at_tokens: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loadError, setLoadError] = useState(false);
@@ -48,7 +48,6 @@ export function ModelSettingsPage({
       setDraft({
         main_model: loadedSettings.main_model,
         compact_at_tokens: loadedSettings.compact_at_tokens,
-        main_output_limit: loadedSettings.main_output_limit,
       });
       setLoadError(false);
       onUpdated(`${formatTime(loadedCatalog.fetched_at)} 已更新目录`);
@@ -76,8 +75,7 @@ export function ModelSettingsPage({
   const selected = catalog.items.find((model) => model.id === draft.main_model);
   const changed =
     draft.main_model !== settings.main_model ||
-    draft.compact_at_tokens !== settings.compact_at_tokens ||
-    draft.main_output_limit !== settings.main_output_limit;
+    draft.compact_at_tokens !== settings.compact_at_tokens;
   const perMillion = (value: string) =>
     value !== '' && Number.isFinite(Number(value)) ? `$${Number(value) * 1000000}` : '未知';
 
@@ -94,10 +92,6 @@ export function ModelSettingsPage({
       setSaveError('压缩阈值需为 1000–2000000 Token 的整数。');
       return;
     }
-    if (!Number.isInteger(draft.main_output_limit) || draft.main_output_limit < 1 || draft.main_output_limit > 2000000) {
-      setSaveError('输出上限需为 1–2000000 Token 的整数。');
-      return;
-    }
     const current = generation.current;
     setSaving(true);
     try {
@@ -110,7 +104,6 @@ export function ModelSettingsPage({
       setDraft({
         main_model: saved.main_model,
         compact_at_tokens: saved.compact_at_tokens,
-        main_output_limit: saved.main_output_limit,
       });
       notify('模型配置已应用，下一次请求开始生效。');
     } catch (error) {
@@ -123,7 +116,7 @@ export function ModelSettingsPage({
         error instanceof ApiError && error.status === 409
           ? '其他管理员已修改配置，请刷新后重新选择。'
           : error instanceof ApiError && error.status === 400
-            ? '配置无效，或模型已不可用，请检查输出上限、压缩阈值与模型选择。'
+            ? '配置无效，或模型已不可用，请检查压缩阈值与模型选择。'
             : '未能确认保存结果，请刷新查看当前生效配置后重试。',
       );
     } finally {
@@ -142,11 +135,11 @@ export function ModelSettingsPage({
         <div className="eyebrow teal">MODEL ROUTING</div>
         <h2>选择 Main 的运行模型</h2>
         <p>应用于所有用户。配置保存后立即生效，服务重启后继续保留；正在执行的请求会正常完成。</p>
-        {settings.main_output_limit ? (
-          <p>
-            {`当前实际请求输出上限：${formatNumber(settings.effective_output_limit ?? settings.main_output_limit)} Token（包含推理 Token）；在下方填写的上限更高时，按所选模型已知的最大输出发送。`}
-          </p>
-        ) : null}
+        <p>
+          {settings.effective_output_limit > 0
+            ? `输出使用模型最大额度：${formatNumber(settings.effective_output_limit)} Token（包含推理 Token）。`
+            : '输出额度由供应商决定，应用不发送输出限制参数。'}
+        </p>
         <div className="model-config-meta">
           <span className="pill">{settings.source === 'database' ? '已保存' : '部署默认'}</span>
           <span>
@@ -231,26 +224,6 @@ export function ModelSettingsPage({
           <p className="muted">
             Token 取上一次同模型成功请求的官方输入用量，所有模型共用这一阈值，并受已知输入容量上限约束；不再看距上次回答的时间。
           </p>
-        </section>
-        <section className="panel model-role-card compact-settings">
-          <h3>请求输出上限</h3>
-          <p className="muted">每次模型请求（包括压缩请求）最多生成的 Token 数，包含推理 Token 在内，不能当作可见回复长度。</p>
-          <div className="model-role-grid">
-            <label className="model-picker">
-              输出上限（Token）
-              <input
-                type="number"
-                min={1}
-                max={2000000}
-                step={1}
-                required
-                value={draft.main_output_limit}
-                disabled={saving}
-                onChange={(event) => setDraft({ ...draft, main_output_limit: Number(event.target.value) })}
-              />
-            </label>
-          </div>
-          <p className="muted">若所选模型已知的最大输出更小，实际请求按模型上限发送；模型上限未知时按这里填写的值发送。</p>
         </section>
         <div className="model-save-bar">
           <div>
