@@ -1,5 +1,6 @@
-/* 本文件集中定义前端配色变量：森林绿主题的颜色与阴影统一在此声明，供全局样式引用。 */
+/* 本文件集中定义前端配色变量：森林绿主题的深浅色与阴影统一在此声明，随系统外观切换，供全局样式引用。 */
 :root {
+  color-scheme: light;
   --forest: #204b32;
   --forest-deep: #173b29;
   --forest-hover: #2f5b3d;
@@ -22,4 +23,39 @@
   --error-chart: #c8775e;
   --warning: #806020;
   --shadow: #173b2920;
+  --accent-text: #204b32;
+  --on-gold: #173b29;
+  --user-bubble: #f6cf83;
+  --quote-surface: #0001;
+}
+
+/* 系统外观改变时直接切换变量，首屏和已打开的页面共用同一套深色规则。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --forest: #11251c;
+    --forest-deep: #0b1912;
+    --forest-hover: #284535;
+    --forest-border: #6d8e76;
+    --on-forest: #f1efdf;
+    --on-forest-muted: #b4c7b6;
+    --gold-soft: #393323;
+    --canvas: #101913;
+    --surface: #202e24;
+    --surface-muted: #2b3b2e;
+    --text: #ececde;
+    --text-secondary: #c5d0bf;
+    --text-muted: #a7b79e;
+    --line: #3c4d3e;
+    --line-strong: #63765d;
+    --error: #ffb49d;
+    --on-forest-error: #ffb49d;
+    --error-soft: #452a23;
+    --error-chart: #e49a82;
+    --warning: #edce8b;
+    --shadow: #0006;
+    --accent-text: #acd5ac;
+    --user-bubble: #514329;
+    --quote-surface: #ffffff0d;
+  }
 }

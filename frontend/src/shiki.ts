@@ -60,6 +60,7 @@ const bundledLanguages = { ...bundledLanguagesBase, ...bundledLanguagesAlias };
 
 const bundledThemes = {
   'github-light': () => import('@shikijs/themes/github-light'),
+  'github-dark': () => import('@shikijs/themes/github-dark'),
 };
 
 // JavaScript 正则引擎无需额外 WASM 文件，也可随 PWA 静态资源离线使用。

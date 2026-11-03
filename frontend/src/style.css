@@ -91,7 +91,7 @@ body {
   border-bottom-left-radius: 6px;
 }
 .user-bubble {
-  background: var(--gold);
+  background: var(--user-bubble);
 }
 .user-bubble.join-top {
   border-top-left-radius: 21px;
@@ -156,7 +156,7 @@ body {
   width: 24px;
   height: 24px;
   display: block;
-  color: var(--forest-deep);
+  color: var(--on-gold);
 }
 .attach-button,
 .send-button {
@@ -174,7 +174,7 @@ body {
 }
 .attach-button:hover {
   background: var(--surface-muted);
-  color: var(--forest);
+  color: var(--accent-text);
 }
 .attach-button svg {
   width: 24px;
@@ -228,7 +228,7 @@ body {
   }
 }
 .link {
-  color: var(--forest);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 .login-page {
@@ -387,7 +387,7 @@ textarea:focus-visible,
   outline-offset: 3px;
 }
 .login-input:focus-visible {
-  outline-color: var(--forest);
+  outline-color: var(--accent-text);
 }
 button.link {
   background: transparent;
@@ -456,7 +456,7 @@ button.link {
   overflow-y: auto;
 }
 .login-button {
-  color: var(--gold-soft);
+  color: var(--on-forest);
   font-size: 17px;
   font-weight: 600;
 }
@@ -528,7 +528,7 @@ button.link {
   display: block;
   width: 100%;
   text-align: left;
-  background: #0001;
+  background: var(--quote-surface);
   color: inherit;
   padding: 10px;
   border-radius: 8px;
@@ -646,7 +646,7 @@ button.link {
   flex-shrink: 0;
   border-radius: 50%;
   border: 2.5px solid rgb(23 59 41 / 25%);
-  border-top-color: var(--forest-deep);
+  border-top-color: var(--on-gold);
   animation: send-spin 0.7s linear infinite;
 }
 @keyframes send-spin {
@@ -772,7 +772,7 @@ button.link {
 }
 .chip-remove:hover {
   background: var(--line);
-  color: var(--forest-deep);
+  color: var(--text);
 }
 .composer-chip button:focus-visible,
 .composer-tools button:focus-visible {

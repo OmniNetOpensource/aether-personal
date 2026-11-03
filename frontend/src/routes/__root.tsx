@@ -13,7 +13,7 @@ export const Route = createRootRoute({
         content:
           'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content',
       },
-      { name: 'theme-color', content: '#204b32' },
+      { name: 'color-scheme', content: 'light dark' },
       { name: 'apple-mobile-web-app-capable', content: 'yes' },
       { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
       { name: 'apple-mobile-web-app-title', content: '阿芒' },
@@ -33,6 +33,9 @@ function RootDocument() {
   return (
     <html lang="zh-CN">
       <head>
+        {/* Router 按 name 去重 meta，这两条按系统外观匹配的主题色直接放进外壳。 */}
+        <meta name="theme-color" content="#204b32" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#11251c" media="(prefers-color-scheme: dark)" />
         <HeadContent />
       </head>
       <body>

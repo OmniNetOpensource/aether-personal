@@ -41,6 +41,7 @@
 | 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 产品图标 | 2026-10-26 用户提供的深绿背景黄色毛绒角色原图；用于客户端登录、Web 图标和管理看板品牌标识 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 基础配色 | 2026-10-26 随产品图标统一为森林绿、奶油白与柔黄；覆盖聊天客户端及管理看板 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 暗色模式 | 2026-11-04 用户要求添加；实现默认跟随系统，聊天端与管理看板同步适配深色表面、文字、代码高亮及浏览器主题色，保留森林绿与柔黄品牌配色 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | Markdown 渲染 | 2026-11-02 对齐 Aether Start：unified / remark、中文与 GFM、KaTeX、Shiki 高亮和代码复制，沿用当前主题；整条消息解析，不引入流式动画 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端字号 | 2026-10-28 整体放大一档：正文与输入框 18px，辅助文字同步增加 2px，行高相应增加 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 助手消息宽度 | 2026-11-02 改为 `width: fit-content`、`max-width: 100%`，短回复按内容收缩，长回复不超出消息区域，保留外层 margin、留白和消息间距 | [04](wiki/04-messaging.md#助手消息宽度) |

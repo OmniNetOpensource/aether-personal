@@ -53,7 +53,7 @@
 }
 .markdown .task-list-item > input {
   margin-right: 0.5em;
-  accent-color: var(--forest);
+  accent-color: var(--accent-text);
 }
 .markdown blockquote {
   margin: 1em 0;
@@ -62,7 +62,7 @@
   color: var(--text-muted);
 }
 .markdown a {
-  color: var(--forest);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
@@ -181,4 +181,22 @@
 .markdown > :last-child,
 .markdown blockquote > :last-child {
   margin-bottom: 0;
+}
+
+/* 高亮 token 同时携带两套颜色，和页面一样随系统外观立即切换。 */
+.markdown-code-line > span {
+  color: var(--shiki-light, inherit);
+  background-color: var(--shiki-light-bg, transparent);
+  font-style: var(--shiki-light-font-style, normal);
+  font-weight: var(--shiki-light-font-weight, normal);
+  text-decoration: var(--shiki-light-text-decoration, none);
+}
+@media (prefers-color-scheme: dark) {
+  .markdown-code-line > span {
+    color: var(--shiki-dark, inherit);
+    background-color: var(--shiki-dark-bg, transparent);
+    font-style: var(--shiki-dark-font-style, normal);
+    font-weight: var(--shiki-dark-font-weight, normal);
+    text-decoration: var(--shiki-dark-text-decoration, none);
+  }
 }

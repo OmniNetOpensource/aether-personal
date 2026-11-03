@@ -14,7 +14,8 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
   const key = `${language}\0${code}`;
   const result = highlight?.key === key ? highlight.result : undefined;
 
-  // 动态导入高亮器及所需语言，加载失败或未知语言仍保留可读、可复制的代码原文。
+  // 一次生成深浅两套高亮变量，系统切换外观时由 CSS 即时切换，无需重新解析代码。
+  // 加载失败或未知语言仍保留可读、可复制的代码原文。
   useEffect(() => {
     let active = true;
     void import('./shiki.js')
@@ -22,7 +23,8 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
         if (language && !Object.hasOwn(bundledLanguages, language)) return;
         const tokens = await codeToTokens(code, {
           lang: language || 'text',
-          theme: 'github-light',
+          themes: { light: 'github-light', dark: 'github-dark' },
+          defaultColor: false,
         });
         if (active) setHighlight({ key, result: tokens });
       })
@@ -70,17 +72,7 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
             ? result.tokens.map((line, lineIndex) => (
                 <span className="markdown-code-line" key={lineIndex}>
                   {line.map((token, tokenIndex) => (
-                    <span
-                      key={tokenIndex}
-                      style={{
-                        color: token.color,
-                        backgroundColor: token.bgColor,
-                        fontStyle: token.fontStyle && token.fontStyle & 1 ? 'italic' : undefined,
-                        fontWeight: token.fontStyle && token.fontStyle & 2 ? 'bold' : undefined,
-                        textDecoration:
-                          token.fontStyle && token.fontStyle & 4 ? 'underline' : undefined,
-                      }}
-                    >
+                    <span key={tokenIndex} style={token.htmlStyle}>
                       {token.content}
                     </span>
                   ))}

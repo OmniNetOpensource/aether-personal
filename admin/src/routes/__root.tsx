@@ -9,8 +9,7 @@ export const Route = createRootRoute({
       { charSet: 'UTF-8' },
       { title: '阿芒 · 管理看板' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { name: 'color-scheme', content: 'light' },
-      { name: 'theme-color', content: '#204b32' },
+      { name: 'color-scheme', content: 'light dark' },
       { name: 'description', content: '阿芒 用户与 Agent 调用观察看板' },
     ],
     links: [
@@ -26,6 +25,9 @@ function RootDocument() {
   return (
     <html lang="zh-CN">
       <head>
+        {/* Router 按 name 去重 meta，这两条按系统外观匹配的主题色直接放进外壳。 */}
+        <meta name="theme-color" content="#204b32" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#11251c" media="(prefers-color-scheme: dark)" />
         <HeadContent />
       </head>
       <body>

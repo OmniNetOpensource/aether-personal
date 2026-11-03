@@ -80,7 +80,7 @@ function TrendChart({ snapshot, hours }: { snapshot: Snapshot; hours: number }) 
               width={Math.max(2, width - 7)}
               height={Math.max(0, 170 - y(item.attempts))}
               rx={3}
-              fill="var(--forest)"
+              fill="var(--accent-text)"
             >
               <title>{`${formatTime(item.at)} · ${item.attempts} 次调用`}</title>
             </rect>

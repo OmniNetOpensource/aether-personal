@@ -1,5 +1,6 @@
 /* 本文件是管理看板的全局样式：定义看板布局、调用观测、模型选择与服务凭证配置的界面外观。 */
 :root {
+  color-scheme: light;
   --forest: #204b32;
   --forest-deep: #173b29;
   --forest-hover: #2f5b3d;
@@ -22,11 +23,13 @@
   --error-chart: #c8775e;
   --warning: #806020;
   --shadow: #173b2920;
+  --accent-text: #204b32;
+  --on-gold: #173b29;
   font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
   color:var(--text);
   background:var(--canvas);
   font-synthesis:none;
-  --accent:var(--forest);
+  --accent:var(--accent-text);
   --dark:var(--forest-deep);
   --muted:var(--text-muted);
 }
@@ -92,9 +95,9 @@ h1,h2,h3,p {
   border-color:var(--line-strong);
 }
 .primary {
-  background:var(--accent);
-  border-color:var(--accent);
-  color:var(--gold-soft);
+  background:var(--forest);
+  border-color:var(--forest);
+  color:var(--on-forest);
 }
 .primary:hover {
   background:var(--forest-deep);
@@ -108,7 +111,7 @@ h1,h2,h3,p {
   white-space:nowrap;
 }
 .text-button:hover {
-  color:var(--forest);
+  color:var(--accent-text);
 }
 .muted {
   color:var(--muted);
@@ -186,11 +189,11 @@ h1,h2,h3,p {
 }
 .nav-item:hover {
   background:var(--forest-hover);
-  color:var(--surface);
+  color:var(--on-forest);
 }
 .nav-item.selected {
   background:var(--gold);
-  color:var(--forest-deep);
+  color:var(--on-gold);
 }
 .nav-icon {
   font-size:20px;
@@ -200,7 +203,7 @@ h1,h2,h3,p {
   color:var(--gold);
 }
 .selected .nav-icon {
-  color:var(--forest-deep);
+  color:var(--on-gold);
 }
 .sidebar-note {
   font-size:10px;
@@ -421,7 +424,7 @@ h1,h2,h3,p {
   border-color:var(--line);
 }
 .cost-card .metric-value {
-  color:var(--forest);
+  color:var(--accent-text);
 }
 .coverage {
   display:flex;
@@ -478,7 +481,7 @@ h1,h2,h3,p {
   display:inline-block;
   width:6px;
   height:6px;
-  background:var(--forest);
+  background:var(--accent-text);
   border-radius:2px;
   margin-right:5px;
 }
@@ -612,11 +615,11 @@ tbody tr:hover {
   opacity:.65;
 }
 .pill.succeeded,.pill.idle {
-  color:var(--forest);
+  color:var(--accent-text);
   background:var(--gold-soft);
 }
 .pill.in_flight,.pill.processing {
-  color:var(--forest);
+  color:var(--accent-text);
   background:var(--gold-soft);
 }
 .pill.failed,.pill.http_error,.pill.transport_error,.pill.invalid_response {
@@ -653,14 +656,14 @@ tbody tr:hover {
 }
 .copy-id-value {
   font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color:var(--forest);
+  color:var(--accent-text);
   user-select:all;
 }
 .copy-id-button {
   flex:none;
   border:1px solid var(--line);
   background:var(--surface);
-  color:var(--forest);
+  color:var(--accent-text);
   border-radius:4px;
   padding:2px 8px;
   font-size:10px;
@@ -993,7 +996,7 @@ dialog::backdrop {
   font-size:11px;
   line-height:1.8;
   overflow-wrap:anywhere;
-  color:var(--forest);
+  color:var(--accent-text);
 }
 .details-grid .pill {
   margin:0;
@@ -1382,7 +1385,7 @@ dialog::backdrop {
 .model-role-card { padding:28px; }
 .model-role-heading { display:flex; align-items:center; gap:12px; }
 .model-role-heading h3 { margin:0; font-size:18px; font-weight:550; }
-.model-role-icon { color:var(--forest); font-size:26px; }
+.model-role-icon { color:var(--accent-text); font-size:26px; }
 .model-role-card > p { font-size:12px; line-height:1.8; margin:12px 0 24px; }
 .model-active { background:var(--surface-muted); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:8px; margin-bottom:24px; }
 .model-active span,.model-active small { font-size:10px; color:var(--text-muted); }
@@ -1392,7 +1395,7 @@ dialog::backdrop {
 .model-picker input:focus { outline:2px solid var(--forest-border); outline-offset:2px; }
 .model-picker input:disabled { background:var(--surface-muted); color:var(--text-muted); }
 .model-follow { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-secondary); margin-top:14px; cursor:pointer; }
-.model-follow input { accent-color:var(--forest); }
+.model-follow input { accent-color:var(--accent-text); }
 .model-price { display:flex; flex-direction:column; gap:6px; color:var(--text-muted); font-size:10px; line-height:1.7; min-height:42px; margin-top:18px; }
 .model-save-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:18px; margin-top:24px; padding:22px 26px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
 .model-save-bar strong { font-size:12px; font-weight:500; }
@@ -1422,7 +1425,7 @@ dialog::backdrop {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-muted);
-  color: var(--forest);
+  color: var(--accent-text);
   font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
   tab-size: 2;
 }
@@ -1441,7 +1444,7 @@ dialog::backdrop {
 .service-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .service-heading h3 { font-size:18px; font-weight:550; }
 .service-status { padding:5px 9px; border-radius:5px; font-size:11px; color:var(--text-muted); background:var(--surface-muted); }
-.service-status.saved { color:var(--forest); background:var(--surface-muted); }
+.service-status.saved { color:var(--accent-text); background:var(--surface-muted); }
 .service-status.unreadable { color:var(--error); background:var(--error-soft); }
 .service-card > .service-current { margin:0 0 6px; color:var(--text-secondary); }
 .service-card > .service-updated { margin:0 0 6px; color:var(--text-muted); font-size:11px; }
@@ -1463,7 +1466,7 @@ dialog::backdrop {
 .timeline-node { position:relative; padding:12px 0 14px; border-bottom:1px solid var(--surface-muted); }
 .timeline-node:before { content:""; position:absolute; left:-20px; top:17px; width:9px; height:9px; border-radius:50%; background:var(--line-strong); box-shadow:0 0 0 3px var(--surface); }
 .timeline-node.input:before { background:var(--gold); }
-.timeline-node.assistant:before { background:var(--forest); }
+.timeline-node.assistant:before { background:var(--accent-text); }
 .timeline-node.summary:before { background:var(--forest-border); }
 .timeline-node.call:before { background:var(--error-chart); }
 .timeline-node.call.in_flight:before { background:var(--gold); }
@@ -1487,9 +1490,41 @@ dialog::backdrop {
 .tool-card .timeline-fold { background:var(--surface); }
 .tool-card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .tool-card > .copy-id, .timeline-node > .copy-id { margin-top:8px; }
-.tool-card-head strong { font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--forest); }
+.tool-card-head strong { font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent-text); }
 .tool-links { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; }
 .timeline-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
 .timeline-images img { max-width:min(100%,520px); border:1px solid var(--line); border-radius:8px; }
 .timeline-load { display:inline-block; margin-top:6px; }
 .timeline-more,.timeline-empty { padding:12px 0; color:var(--text-muted); font-size:12px; }
+
+/* 系统外观改变时直接切换变量，首屏和已打开的页面共用同一套深色规则。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --forest: #11251c;
+    --forest-deep: #0b1912;
+    --forest-hover: #284535;
+    --forest-border: #6d8e76;
+    --on-forest: #f1efdf;
+    --on-forest-muted: #b4c7b6;
+    --gold-soft: #393323;
+    --canvas: #101913;
+    --surface: #202e24;
+    --surface-muted: #2b3b2e;
+    --text: #ececde;
+    --text-secondary: #c5d0bf;
+    --text-muted: #a7b79e;
+    --line: #3c4d3e;
+    --line-strong: #63765d;
+    --error: #ffb49d;
+    --on-forest-error: #ffb49d;
+    --error-soft: #452a23;
+    --error-chart: #e49a82;
+    --warning: #edce8b;
+    --shadow: #0006;
+    --accent-text: #acd5ac;
+  }
+  .avatar {
+    background: var(--forest-hover);
+  }
+}
