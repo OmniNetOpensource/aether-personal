@@ -1,22 +1,19 @@
-// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型选择渠道，首段正文或工具调用交运行时占位，并记录完整请求响应与用量。
+// 本文件负责 Agent 的模型请求流程：组装提示词与上下文，经 providers 按模型选择渠道发送，首段正文或工具调用交运行时占位；每次调用的终态日志由 model_call_journal.go 落库。
 
 package agent
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
-	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
-	"github.com/google/uuid"
 )
 
 // chatResponse 与 modelRequest 是 providers 统一响应与请求的别名：Agent 内部沿用这两个名字，渠道差异不进本包。
@@ -39,7 +36,7 @@ func (r *Runner) agentRequest(rows []database.ListAgentContextRowsRow, model str
 	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
-// requestModel 发送一次模型请求并全程记账：渠道由 providers 按模型名自动选择，本函数只负责凭证、日志、传输与结果分类。
+// requestModel 发送一次模型请求：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
 func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
 	resolved, err := (images.Store{Services: r.services}).ResolveMessages(ctx, prepared.Messages)
@@ -69,57 +66,8 @@ func (r *Runner) requestModel(ctx context.Context, prepared modelRequest, journa
 	var capturedResponseBody []byte
 	var responseTruncated bool
 	defer func() {
-		if response.Usage.PromptTokens != nil && *response.Usage.PromptTokens < 0 {
-			response.Usage.PromptTokens = nil
-		}
-		if response.Usage.CompletionTokens != nil && *response.Usage.CompletionTokens < 0 {
-			response.Usage.CompletionTokens = nil
-		}
-		if response.Usage.Cost != nil && response.Usage.Cost.IsNegative() {
-			response.Usage.Cost = nil
-		}
-		if callID == uuid.Nil {
-			return
-		}
-		duration := time.Since(startedAt).Milliseconds()
-		var durationMS *int64 = &duration
-		// 模型预算耗尽按传输超时保留耗时；进程退出或执行权丢失仍按外部中断记录。
-		if ctx.Err() != nil && !errors.Is(context.Cause(ctx), errModelRetryTimeout) {
-			outcome, durationMS = "interrupted", nil
-		}
-		var failure *string
-		if outcome != "succeeded" {
-			failure = &outcome
-		}
-		toolNames := []string{}
-		if len(response.Choices) > 0 {
-			var message assistantMessage
-			if json.Unmarshal(response.Choices[0].Message, &message) == nil {
-				for _, call := range message.ToolCalls {
-					toolNames = append(toolNames, tools.RecordedName(call.Function.Name))
-				}
-			}
-		}
-		var responseModel, generationID *string
-		if response.Model != "" && utf8.RuneCountInString(response.Model) <= 256 {
-			responseModel = &response.Model
-		}
-		if response.ID != "" && utf8.RuneCountInString(response.ID) <= 256 {
-			generationID = &response.ID
-		}
-		persistCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		rows, finishErr := database.New(r.databasePool).FinishModelCall(persistCtx, database.FinishModelCallParams{
-			ID: callID, Outcome: outcome, HttpStatus: status, DurationMs: durationMS,
-			ResponseModel: responseModel, ProviderGenerationID: generationID,
-			InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens,
-			Cost: response.Usage.Cost, ToolNames: toolNames, FailureKind: failure,
-			ResponseBody: capturedResponseBody, ResponseTruncated: responseTruncated,
-		})
-		if finishErr != nil {
-			err, retryable = fmt.Errorf("finish model call journal: %w", finishErr), false
-		} else if rows != 1 {
-			err, retryable = fmt.Errorf("model call execution ownership was recovered"), false
+		if finishErr := r.finishModelCall(ctx, callID, startedAt, outcome, status, capturedResponseBody, responseTruncated, &response); finishErr != nil {
+			err, retryable = finishErr, false
 		}
 	}()
 	client := *r.modelClient
