@@ -64,6 +64,7 @@ type messagesEvent struct {
 	ChangeCursor int64  `json:"change_cursor,string"`
 	Type         string `json:"type"`
 	MainThinking bool   `json:"main_thinking"`
+	MainFailed   bool   `json:"main_failed"`
 	chatMessages
 }
 

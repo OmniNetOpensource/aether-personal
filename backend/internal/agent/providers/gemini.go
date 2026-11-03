@@ -311,13 +311,11 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 	texts := []string{}
 	calls := []map[string]any{}
 	ids := map[string]bool{}
-	onlyThoughts := len(candidate.Content.Parts) > 0
 	for _, raw := range candidate.Content.Parts {
 		var part geminiOutputPart
 		if err := json.Unmarshal(raw, &part); err != nil {
 			return response, fmt.Errorf("decode Gemini content part: %w", err)
 		}
-		onlyThoughts = onlyThoughts && part.Thought
 		if !part.Thought && part.Text != "" {
 			texts = append(texts, part.Text)
 		}
@@ -337,13 +335,16 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 			calls = append(calls, map[string]any{"id": id, "type": "function", "function": map[string]string{"name": part.Call.Name, "arguments": string(part.Call.Args)}})
 		}
 	}
-	// 普通 Main 可在思考后安静结束；压缩仍需要有效的摘要响应。
-	silentReply := onlyThoughts && len(prepared.ToolChoice) == 0
-	if len(texts) == 0 && len(calls) == 0 && !silentReply {
+	// 空格与换行不算正文；Main 是否能安静结束由共用请求层判断，压缩始终需要摘要。
+	text := strings.Join(texts, "")
+	if strings.TrimSpace(text) == "" {
+		text = ""
+	}
+	if text == "" && len(calls) == 0 && len(prepared.ToolChoice) > 0 {
 		return response, fmt.Errorf("Gemini returned no text or function calls")
 	}
 	message, _ := json.Marshal(map[string]any{
-		"role": "assistant", "content": strings.Join(texts, ""), "tool_calls": calls,
+		"role": "assistant", "content": text, "tool_calls": calls,
 		"gemini_content": candidate.Content, "gemini_model": prepared.Model,
 	})
 	finish := "stop"

@@ -125,6 +125,25 @@ func (q *Queries) GetLegacyChatCursor(ctx context.Context, arg GetLegacyChatCurs
 	return column_1, err
 }
 
+const getMainStatus = `-- name: GetMainStatus :one
+SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid) AS thinking,
+    EXISTS (SELECT 1 FROM users WHERE id = $1::uuid
+        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = $1::uuid)) AS failed
+`
+
+type GetMainStatusRow struct {
+	Thinking bool
+	Failed   bool
+}
+
+// 失败位置覆盖最新消息时保持失败提示；新输入推进序号后自然清除，重连也能还原。
+func (q *Queries) GetMainStatus(ctx context.Context, userID uuid.UUID) (GetMainStatusRow, error) {
+	row := q.db.QueryRow(ctx, getMainStatus, userID)
+	var i GetMainStatusRow
+	err := row.Scan(&i.Thinking, &i.Failed)
+	return i, err
+}
+
 const hasMainWork = `-- name: HasMainWork :one
 SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
 `

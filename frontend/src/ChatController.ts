@@ -60,6 +60,7 @@ export class ChatController {
   initializing = true;
   connected = false;
   mainThinking = false;
+  mainFailed = false;
   loadingHistory = false;
   hasMoreHistory = true;
   email = '';
@@ -234,6 +235,7 @@ export class ChatController {
         this.lastChangeCursor = event.change_cursor;
         this.connected = true;
         this.mainThinking = event.main_thinking === true;
+        this.mainFailed = event.main_failed === true;
         this.error = null;
         this.merge(event);
         break;
@@ -259,6 +261,7 @@ export class ChatController {
   private clearLocalSession() {
     this.token = null;
     this.mainThinking = false;
+    this.mainFailed = false;
     this.historyLoaded = false;
     this.loadingHistory = false;
     this.lastChangeCursor = undefined;

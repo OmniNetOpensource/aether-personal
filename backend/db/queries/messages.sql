@@ -52,6 +52,12 @@ SELECT user_id FROM main_work ORDER BY user_id;
 -- 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
 SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid);
 
+-- name: GetMainStatus :one
+-- 失败位置覆盖最新消息时保持失败提示；新输入推进序号后自然清除，重连也能还原。
+SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid) AS thinking,
+    EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id)::uuid
+        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = sqlc.arg(user_id)::uuid)) AS failed;
+
 -- name: MarkMainFailed :exec
 -- 记下失败时最后一条消息的序号，之后有新消息才再次运行。
 UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = sqlc.arg(user_id)::uuid)

@@ -475,13 +475,13 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		}
 	}
 
-	mainThinking, err := s.queries.HasMainWork(ctx, userID)
+	status, err := s.queries.GetMainStatus(ctx, userID)
 	if err != nil {
 		slog.Error("get Main activity failed", "user_id", userID, "error", err)
 		return err
 	}
 	return relay.send(ctx, messagesEvent{
-		Type: "messages", MainThinking: mainThinking, ChangeCursor: *changeCursor,
+		Type: "messages", MainThinking: status.Thinking, MainFailed: status.Failed, ChangeCursor: *changeCursor,
 		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows)},
 	})
 }

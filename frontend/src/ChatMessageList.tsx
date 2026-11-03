@@ -1,4 +1,4 @@
-// 本文件是聊天消息列表：用虚拟滚动只挂载视口附近的消息，并保持贴底、上翻加载和引用回看。
+// 本文件是聊天消息列表：用虚拟滚动只挂载视口附近的消息，保持阅读位置与引用回看，并显示 Main 的处理与失败状态。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject, UIEvent } from 'react';
@@ -11,7 +11,7 @@ import type { MessageQuote } from './messageAttachments.js';
 import { UserMessageBubble } from './UserMessageBubble.js';
 
 // 没量过的行先占这么高；短消息会在第一次出现时改成真实高度。
-const estimatedRowHeight = { status: 64, message: 96, thinking: 48 };
+const estimatedRowHeight = { status: 64, message: 96, thinking: 48, failed: 48 };
 // 视口外多挂一段，快滚时新行来得及在画出来之前量高。
 const overscan = 1000;
 // 距底部小于这段就继续贴底；距顶部小于这段就加载更早的消息。
@@ -20,6 +20,7 @@ const edgeDistance = 160;
 type VirtualRow =
   | { key: string; kind: 'status' }
   | { key: string; kind: 'thinking' }
+  | { key: string; kind: 'failed' }
   | { key: string; kind: 'message'; messageIndex: number };
 
 // 视口顶边附近那条消息，以及视口顶边离它行顶的距离。行顶在视口上方时为正。
@@ -104,7 +105,8 @@ export function ChatMessageList({
   const showStatus = Boolean(
     quoteError || controller.error || (controller.hasMoreHistory && messages.length > 0),
   );
-  const rows = buildRows(messages, showStatus, thinking);
+  const failed = controller.mainFailed && !thinking;
+  const rows = buildRows(messages, showStatus, thinking, failed);
   const { starts, total } = rowOffsets(rows, heights.current);
   rowsRef.current = rows;
   startsRef.current = starts;
@@ -203,7 +205,7 @@ export function ChatMessageList({
     const distanceFromBottom =
       viewportElement.scrollHeight - viewportElement.scrollTop - viewportElement.clientHeight;
     // 人已经贴底且内容变了才跟着走。发送不把人拉回底部；滑到接近底部只记下贴底，不立刻拽下去。
-    const contentKey = `${messages.length}\0${messages[0]?.id ?? ''}\0${messages.at(-1)?.id ?? ''}\0${thinking}\0${Math.round(total)}`;
+    const contentKey = `${messages.length}\0${messages[0]?.id ?? ''}\0${messages.at(-1)?.id ?? ''}\0${thinking}\0${failed}\0${Math.round(total)}`;
     const followBottom =
       stickToBottom.current &&
       !loadingOlder.current &&
@@ -397,6 +399,10 @@ export function ChatMessageList({
                   </>
                 ) : row.kind === 'thinking' ? (
                   <AssistantWorkingStatus />
+                ) : row.kind === 'failed' ? (
+                  <p className="error" role="alert">
+                    回复失败，请再发一条消息重试。
+                  </p>
                 ) : (
                   <MessageEntry
                     messages={messages}
@@ -461,14 +467,20 @@ function sameGroup(a: ChatMessage, b: ChatMessage) {
   );
 }
 
-// buildRows 把顶部状态、每条消息和底部思考动画排成可滚动的行。
-function buildRows(messages: ChatMessage[], showStatus: boolean, thinking: boolean) {
+// buildRows 把顶部状态、每条消息和底部思考或失败提示排成可滚动的行。
+function buildRows(
+  messages: ChatMessage[],
+  showStatus: boolean,
+  thinking: boolean,
+  failed: boolean,
+) {
   const rows: VirtualRow[] = [];
   if (showStatus) rows.push({ key: 'status', kind: 'status' });
   for (let index = 0; index < messages.length; index += 1) {
     rows.push({ key: messages[index].id, kind: 'message', messageIndex: index });
   }
   if (thinking) rows.push({ key: 'thinking', kind: 'thinking' });
+  if (failed) rows.push({ key: 'failed', kind: 'failed' });
   return rows;
 }
 

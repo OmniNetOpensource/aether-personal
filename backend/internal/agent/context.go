@@ -119,7 +119,20 @@ func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, ou
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
 	}
-	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
+	// 最近一次用户输入之后还没有可见正文时，工具续接也不能用沉默结束；已经说过话才允许安静收尾。
+	requireOutput := true
+	for index := len(rows) - 1; index >= 0; index-- {
+		row := rows[index]
+		role := parseContextMessage(row.Content).Role
+		if role == "user" {
+			break
+		}
+		if role == "assistant" && AssistantTextToUser(row.Content) != "" {
+			requireOutput = false
+			break
+		}
+	}
+	return modelRequest{InputSequence: inputSequence, RequireOutput: requireOutput, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
 // buildCompactRequestMessages 组装一次压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，末尾一条用户消息提出摘要要求。

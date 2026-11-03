@@ -14,7 +14,9 @@ import (
 // Request 是 Agent 发给任意渠道的统一请求：消息与工具保留原始 JSON，各渠道在自己的文件里翻成自家协议。
 type Request struct {
 	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
-	InputSequence int64             `json:"-"`
+	InputSequence int64 `json:"-"`
+	// RequireOutput 表示用户还没收到正文，不能把无正文、无工具调用的响应当成完成。
+	RequireOutput bool              `json:"-"`
 	Reasoning     map[string]any    `json:"reasoning,omitempty"`
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`

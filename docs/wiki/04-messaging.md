@@ -96,7 +96,7 @@ sequenceDiagram
 | `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
 | `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
 | `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
-| `{"type": "messages", "messages": [...], "main_thinking": false, "change_cursor": "123"}` | 新消息与 Main 处理状态 |
+| `{"type": "messages", "messages": [...], "main_thinking": false, "main_failed": false, "change_cursor": "123"}` | 新消息与 Main 处理、失败状态；失败时列表底部显示重试提示，新输入清除，重连从数据库恢复 |
 
 2026-11-03，助手开始输出时先占住行位置，整条回复完成后才对用户可见。一条旧行可能晚于后来的用户消息推送，因此聊天按 `position` 排序，实时同步单独用 `change_cursor`。新可见消息用写入时的序号，隐藏行转为可见时分配一个新的变更序号。首屏先读取推送游标再取历史，期间提交的消息可以按 ID 去重。历史翻页只推进历史断点。兼容旧客户端传 `last_position`，服务端用对应的原始写入序号补发后续变更。
 

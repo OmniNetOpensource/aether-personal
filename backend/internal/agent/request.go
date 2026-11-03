@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,9 @@ type chatResponse = providers.Response
 
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
+
+// errEmptyReply 区分没有回答的有效响应与传输故障，让运行时只为前者补试一次。
+var errEmptyReply = errors.New("model provider returned no reply text or tool calls")
 
 // sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
 func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
@@ -119,10 +123,14 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, jo
 		return response, false, fmt.Errorf("model provider returned no choices")
 	}
 	var message struct {
-		Role string `json:"role"`
+		Role      string     `json:"role"`
+		ToolCalls []toolCall `json:"tool_calls"`
 	}
 	if json.Unmarshal(response.Choices[0].Message, &message) != nil || message.Role != "assistant" {
 		return response, false, fmt.Errorf("model provider returned invalid assistant message")
+	}
+	if prepared.RequireOutput && AssistantTextToUser(response.Choices[0].Message) == "" && len(message.ToolCalls) == 0 {
+		return response, false, errEmptyReply
 	}
 	outcome = "succeeded"
 	return response, false, nil

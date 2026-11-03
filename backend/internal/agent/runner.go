@@ -346,12 +346,13 @@ type modelResult struct {
 }
 
 // reply 调用模型并把回复存成 assistant 消息。每次尝试是一个步骤：上下文准备（含可能的压缩）、请求和退避共用十分钟预算，
-// 可重试的失败最多再试 3 次，失败的尝试以错误收尾，方便事后按步骤排查。每次尝试都重新组装上下文，期间新到的消息会一并带上。
+// 传输等临时故障最多再试 3 次，空回复单独最多补试一次；失败尝试以错误收尾。每次尝试都重新组装上下文，期间新到的消息会一并带上。
 func (r *Runner) reply(ctx context.Context, connection *pgxpool.Conn, through *int64) error {
 	queries := database.New(connection)
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
 	defer cancel()
+	transientRetries, emptyRetries := 0, 0
 	for attempt := 0; ; attempt++ {
 		stepID, err := queries.StartStep(ctx, database.StartStepParams{UserID: r.userID, Model: r.settings.MainModel})
 		if err != nil {
@@ -387,13 +388,27 @@ func (r *Runner) reply(ctx context.Context, connection *pgxpool.Conn, through *i
 			return err
 		}
 		slog.Error("model request failed", "agent", runtimeLockKey(r.userID), "attempt", attempt+1, "error", callErr)
-		if !retryable || attempt >= 3 || retryContext.Err() != nil {
+		if retryContext.Err() != nil {
 			return callErr
+		}
+		// 空回复与网络重试分开计数，避免把模型反复沉默扩大成四次付费生成。
+		delay := time.Second
+		if errors.Is(callErr, errEmptyReply) {
+			if emptyRetries >= 1 {
+				return callErr
+			}
+			emptyRetries++
+		} else {
+			if !retryable || transientRetries >= 3 {
+				return callErr
+			}
+			delay <<= transientRetries
+			transientRetries++
 		}
 		select {
 		case <-retryContext.Done():
 			return context.Cause(retryContext)
-		case <-time.After(time.Second << attempt):
+		case <-time.After(delay):
 		}
 	}
 }

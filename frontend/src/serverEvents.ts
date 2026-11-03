@@ -59,6 +59,7 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     type: z.literal('messages'),
     change_cursor: z.string().regex(/^\d+$/).optional(),
     main_thinking: z.boolean().optional(),
+    main_failed: z.boolean().optional(),
   }),
   z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),
   z.object({ type: z.literal('logged_out'), request_id: z.uuid() }),
