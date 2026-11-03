@@ -1,4 +1,4 @@
-// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，展示发送中与发送失败，发送成功后清空并通知消息列表贴底。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，展示发送中与发送失败，发送成功后清空输入。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -16,11 +16,9 @@ export interface MessageComposerHandle {
 // MessageComposer 以结构化内容作为草稿，编辑器负责光标、混排和撤销，控制器负责可靠发送。
 export function MessageComposer({
   controller,
-  onMessageSent,
   composerRef,
 }: {
   controller: ChatController;
-  onMessageSent: () => void;
   composerRef: RefObject<MessageComposerHandle | null>;
 }) {
   const draftKey = `aether_draft:${controller.email}`;
@@ -116,7 +114,6 @@ export function MessageComposer({
         input.current?.clear();
         setParts([]);
         clientMessageID.current = crypto.randomUUID();
-        onMessageSent();
       }
     } catch (error) {
       setError(`发送失败：${error instanceof Error ? error.message : '请稍后重试'}`);

@@ -31,13 +31,11 @@ interface TopMessage {
 export function ChatMessageList({
   controller,
   stickToBottom,
-  bottomPin,
   onQuote,
 }: {
   controller: ChatController;
   onQuote: (quote: MessageQuote) => void;
   stickToBottom: RefObject<boolean>;
-  bottomPin: number;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -57,7 +55,6 @@ export function ChatMessageList({
   const rowObserver = useRef<ResizeObserver | null>(null);
   const rowRefCallbacks = useRef(new Map<string, (element: HTMLElement | null) => void>());
   const scrollFrame = useRef(0);
-  const seenBottomPin = useRef(0);
   const seenContent = useRef('');
   const pendingShift = useRef(0);
   const measureRowsRef = useRef<() => boolean>(() => false);
@@ -205,23 +202,21 @@ export function ChatMessageList({
       prefix !== rowsBeforeTopMessage.current;
     const distanceFromBottom =
       viewportElement.scrollHeight - viewportElement.scrollTop - viewportElement.clientHeight;
-    // 只在内容变了或刚发送时贴底。滑进底部附近只标记贴底，不把人立刻拽下去。
+    // 人已经贴底且内容变了才跟着走。发送不把人拉回底部；滑到接近底部只记下贴底，不立刻拽下去。
     const contentKey = `${messages.length}\0${messages[0]?.id ?? ''}\0${messages.at(-1)?.id ?? ''}\0${thinking}\0${Math.round(total)}`;
     const followBottom =
       stickToBottom.current &&
       !loadingOlder.current &&
       !quoteTarget &&
-      (bottomPin !== seenBottomPin.current || contentKey !== seenContent.current);
+      contentKey !== seenContent.current;
     if (followBottom && distanceFromBottom > 1) {
       pendingShift.current = 0;
       viewportElement.scrollTop = viewportElement.scrollHeight;
-      seenBottomPin.current = bottomPin;
       seenContent.current = contentKey;
       rememberTopMessage();
       publishScroll();
       return;
     }
-    seenBottomPin.current = bottomPin;
     seenContent.current = contentKey;
     // 顶边那条消息前面多了行（更早的历史或顶部状态）时，按新增高度下移，画面仍停在那条消息。
     if (prefixChanged && anchor && anchorIndex >= 0 && !stickToBottom.current && !quoteTarget) {
