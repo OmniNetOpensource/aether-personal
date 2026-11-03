@@ -136,8 +136,8 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 }
 
-// run 是单个 Main 的一次完整运行：独占一条连接、抢到该用户的咨询锁才继续，
-// 返回值表示“这次确实处理过工作”，调度循环据此决定要不要马上再唤醒一次。
+// run 是单个 Main 的一次完整运行：独占连接并抢到咨询锁后，先收尾上次崩溃，再按消息尾部循环执行缺回执的工具或调用模型，直到已经回复完毕。
+// 返回值表示这次确实处理过工作；循环中的失败只在末尾分流，进程退出或连接已断不记失败，其余才落库。
 func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	connection, err := r.databasePool.Acquire(parent)
 	if err != nil {
@@ -187,55 +187,50 @@ func (r *Runner) run(parent context.Context, userID uuid.UUID) bool {
 	if !hasWork {
 		return false
 	}
-	// 真正干活的主循环在 runLoop；这里只分流它的结果：进程退出或连接已断不记失败，下次按消息尾部接着跑，其余才落库为失败。
+	// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 	var through int64
-	if err := r.runLoop(parent, connection, userID, &through); err != nil {
-		if parent.Err() != nil || connection.Conn().IsClosed() {
-			return true
-		}
-		slog.Error("agent run failed", "agent", runtimeLockKey(userID), "error", err)
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := r.failAgent(cleanup, connection, userID, through, err); err != nil {
-			slog.Error("save agent failure failed", "error", err)
-		}
-	}
-	return true
-}
-
-// runLoop 每一轮重读当前世代的消息，只按尾部决定下一步：最后一条 assistant 还有没回执的工具调用就并行执行它们，
-// 尾部是用户消息、摘要或齐全的工具回执就调用模型并保存回复，尾部是已结束的 assistant 就说明处理完毕。
-// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
-func (r *Runner) runLoop(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, through *int64) error {
-	queries := database.New(connection)
+	var loopErr error
 	for {
-		rows, err := queries.ListAgentContextRows(ctx, userID)
+		rows, err := queries.ListAgentContextRows(parent, userID)
 		if err != nil {
-			return err
+			loopErr = err
+			break
 		}
 		// 失败只停住本次读到的工作；工具批次以发起它的助手消息为界。
 		for _, row := range rows {
-			*through = max(*through, row.Sequence)
+			through = max(through, row.Sequence)
 		}
 		if calls, stepID := pendingToolCalls(rows); len(calls) > 0 {
 			for _, row := range rows {
 				if row.StepID != nil && *row.StepID == stepID && parseContextMessage(row.Content).Role == "assistant" {
-					*through = row.Sequence
+					through = row.Sequence
 					break
 				}
 			}
-			if err := r.executeToolCalls(ctx, connection, userID, stepID, calls); err != nil {
-				return err
+			if loopErr = r.executeToolCalls(parent, connection, userID, stepID, calls); loopErr != nil {
+				break
 			}
 			continue
 		}
 		if !needsReply(rows) {
-			return nil
+			break
 		}
-		if err := r.reply(ctx, connection, userID, through); err != nil {
-			return err
+		if loopErr = r.reply(parent, connection, userID, &through); loopErr != nil {
+			break
 		}
 	}
+	if loopErr != nil {
+		if parent.Err() != nil || connection.Conn().IsClosed() {
+			return true
+		}
+		slog.Error("agent run failed", "agent", runtimeLockKey(userID), "error", loopErr)
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.failAgent(cleanup, connection, userID, through, loopErr); err != nil {
+			slog.Error("save agent failure failed", "error", err)
+		}
+	}
+	return true
 }
 
 // executeToolCalls 并行执行同一条模型回复里还没有回执的全部工具，不设并发上限，每个调用起一个协程。
@@ -507,7 +502,7 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, onOutput
 }
 
 // saveReply 在一个事务里保存模型回复：写入 assistant 消息并给这一步记上用量。
-// 工具调用从此成为历史的一部分，下一轮 runLoop 按消息尾部看到它们没有回执，就去执行。
+// 工具调用从此成为历史的一部分，下一轮按消息尾部看到它们没有回执，就去执行。
 func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID, stepID, replyID uuid.UUID, response chatResponse) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
