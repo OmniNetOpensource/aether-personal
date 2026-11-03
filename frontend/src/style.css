@@ -142,9 +142,6 @@ body {
   padding: 10px 14px;
   background: transparent;
 }
-.message-input::placeholder {
-  color: var(--text-muted);
-}
 .send-button {
   width: 42px;
   height: 42px;
@@ -663,14 +660,6 @@ button.link {
 }
 .rich-message-input p + p {
   margin-top: 4px;
-}
-.rich-message-input:has(> p:only-child > br:only-child)::before {
-  content: attr(data-placeholder);
-  position: absolute;
-  inset-block-start: 2px;
-  inset-inline: 4px;
-  color: var(--text-muted);
-  pointer-events: none;
 }
 .composer-tools {
   display: flex;

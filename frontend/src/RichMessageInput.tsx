@@ -203,7 +203,6 @@ export function RichMessageInput(props: {
           role: 'textbox',
           'aria-label': '消息',
           'aria-multiline': 'true',
-          'data-placeholder': '发消息给阿芒',
           enterkeyhint: 'enter',
           'aria-keyshortcuts': 'Control+Enter',
         },
