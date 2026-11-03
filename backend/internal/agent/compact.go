@@ -89,7 +89,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	}
 	// 组装压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，摘要要求作为最后一条 user 消息；
 	// 压缩只许产出摘要正文：请求明确禁止调用任何工具，避免模型顺着历史里的工具轨迹继续干活而不是写摘要。
-	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt+fmt.Sprintf(compactSummaryLengthPrompt, max(128, min(2048, threshold/8))))
+	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
 	summaryRequest := modelRequest{Model: model, Messages: compactMessages, MaxTokens: outputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
 	// 摘要覆盖位置停在待压缩历史里最后一条原文上；待压范围按序号排列，最后一条就是序号最大的原文。
 	through := rowsToCompact[len(rowsToCompact)-1].Sequence
