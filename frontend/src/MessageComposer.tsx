@@ -133,7 +133,7 @@ export function MessageComposer({
         </p>
       )}
       <form
-        className="composer multimodal-composer"
+        className={`composer multimodal-composer${sending ? ' is-sending' : ''}`}
         onSubmit={(event) => {
           event.preventDefault();
           void send();
@@ -174,9 +174,9 @@ export function MessageComposer({
           onFiles={(files) => void addImages(files)}
           onSubmit={() => void send()}
         />
-        {(reading || sending) && (
+        {reading && (
           <span className="upload-status" role="status">
-            {reading ? '正在上传图片…' : '发送中…'}
+            正在上传图片…
           </span>
         )}
         <div className="composer-tools">
@@ -206,25 +206,30 @@ export function MessageComposer({
           </span>
           <button
             type="submit"
-            className="send-button"
-            aria-label="发送消息"
+            className={`send-button${sending ? ' is-sending' : ''}`}
+            aria-label={sending ? '发送中' : '发送消息'}
+            aria-busy={sending}
             title="发送（Ctrl+Enter）"
             disabled={
               reading || sending || !parts.some((part) => part.type !== 'text' || part.text.trim())
             }
           >
-            <svg
-              className="send-arrow"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 19V5m-6 6 6-6 6 6" />
-            </svg>
+            {sending ? (
+              <span className="send-spinner" aria-hidden="true" />
+            ) : (
+              <svg
+                className="send-arrow"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 19V5m-6 6 6-6 6 6" />
+              </svg>
+            )}
           </button>
         </div>
       </form>

@@ -618,6 +618,30 @@ button.link {
   line-height: 32px;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
+  transition: opacity 140ms ease;
+}
+/* 发送中文本框整体变淡，进度只由发送按钮的转圈表达，不再另占一行文字。 */
+.multimodal-composer.is-sending .rich-message-input {
+  opacity: 0.45;
+}
+.send-button.is-sending:disabled {
+  background: var(--gold);
+  opacity: 1;
+  cursor: progress;
+}
+.send-spinner {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2.5px solid rgb(23 59 41 / 25%);
+  border-top-color: var(--forest-deep);
+  animation: send-spin 0.7s linear infinite;
+}
+@keyframes send-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .rich-message-input p {
   min-height: 32px;
@@ -791,7 +815,11 @@ button.link {
 }
 @media (prefers-reduced-motion: reduce) {
   .multimodal-composer,
-  .chip-remove {
+  .chip-remove,
+  .rich-message-input {
     transition: none;
+  }
+  .send-spinner {
+    animation: none;
   }
 }
