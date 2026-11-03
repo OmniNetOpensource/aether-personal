@@ -209,8 +209,7 @@ export function MessageComposer({
             className={`send-button${sending ? ' is-sending' : ''}`}
             aria-label={sending ? '发送中' : '发送消息'}
             aria-busy={sending}
-            title="发送（Ctrl+Enter）"
-            disabled={
+          disabled={
               reading || sending || !parts.some((part) => part.type !== 'text' || part.text.trim())
             }
           >

@@ -36,6 +36,7 @@
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏、菜单或外层卡片；2026-10-28 删除整个顶部栏；先验收 Web | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 消息列表滚动 | 2026-11-03 改为虚拟滚动：只挂载视口附近的消息，高度按消息记住；贴底、上翻停留、加载历史保持位置和引用回看不变 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 前端构建 | Node.js >=22.12.0 + npm 锁文件，TanStack Start 的 Rsbuild 插件预渲染 SPA 外壳，Web/PWA 部署产物仍为 frontend/build/web；build/server 仅供构建使用 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 产品图标 | 2026-10-26 用户提供的深绿背景黄色毛绒角色原图；用于客户端登录、Web 图标和管理看板品牌标识 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |

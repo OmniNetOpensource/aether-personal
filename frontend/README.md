@@ -59,7 +59,7 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 | `src/ChatController.ts` | 界面状态：登录、历史、消息回执、思考动态、重连与幂等重发，只处理已校验的服务器事件 |
 | `src/serverEvents.ts` | 后端发来的全部事件类型定义与校验结构，与后端 `events.go` 一一对应 |
 | `src/ServerEventRelay.ts` | 前端唯一接触聊天 WebSocket 的文件：连接、发 `hello` 与命令、校验并中转服务器事件 |
-| `src/ChatPage.tsx`、`src/ChatMessageList.tsx`、`src/MessageComposer.tsx` | 聊天布局、消息列表滚动与输入发送 |
+| `src/ChatPage.tsx`、`src/ChatMessageList.tsx`、`src/MessageComposer.tsx` | 聊天布局、消息列表虚拟滚动与输入发送 |
 | `src/RichMessageInput.tsx`、`src/messageAttachments.ts` | Tiptap 多模态混排、内容类型与 OSS 上传校验 |
 | `src/QuoteSelection.tsx`、`src/ImagePreview.tsx` | 助手选区引用、原文回看与原图预览 |
 | `src/LoginPage.tsx` | 邮箱验证码与开发测试登录表单 |

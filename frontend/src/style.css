@@ -406,6 +406,18 @@ button.link {
   max-width: 1040px;
   margin: 0 auto;
 }
+/* 行绝对定位后仍要包住气泡和日期的外边距，后面的行才不会叠上来。 */
+.message-virtual {
+  position: relative;
+  width: 100%;
+}
+.message-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flow-root;
+}
 .user-text,
 .markdown {
   overflow-wrap: anywhere;
