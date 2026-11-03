@@ -147,7 +147,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | --- | --- | --- |
 | `backend/` | Go 后端 | 有代码 |
 | `frontend/` | React Web/PWA、TypeScript 连接管理与静态构建 | 本地实现，移动真机待验收 |
-| `admin/` | 管理看板页面与 Node 同源代理，独立运行和部署 | 有代码 |
+| `admin/` | TanStack Start 管理看板与 Node 同源代理，独立运行和部署 | 有代码 |
 | `infra/` | dev/prod 环境与部署配置 | 生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
 
@@ -178,6 +178,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
 | 前端 | TanStack Start + React + TypeScript，Rsbuild 构建 | SPA 静态部署，移动端安装 PWA |
+| 管理看板 | TanStack Start + React + TypeScript，Rsbuild 构建；Node 内置 HTTP 托管与代理 | 与聊天端同款 SPA，独立服务与域名部署，见 [08](08-admin-observability.md#看板改用-tanstack-start2026-11-03) |
 
 ## 后端骨架 `已实现`
 

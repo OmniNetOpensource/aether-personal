@@ -1,8 +1,9 @@
-// 本文件是管理看板的独立服务入口：托管看板静态页面，并把管理 API 请求代理到后端。
+// 本文件是管理看板的独立服务入口：托管 TanStack Start 构建出的静态页面，并把管理 API 请求按白名单代理到后端。
 
 import http from 'node:http';
 import https from 'node:https';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 5174);
@@ -11,11 +12,20 @@ if (!['http:', 'https:'].includes(upstream.protocol) || upstream.username || ups
   throw new Error('API_UPSTREAM must be an HTTP(S) origin without credentials, path, query or fragment');
 }
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
-const staticFiles = new Map([
-  ['/', ['index.html', 'text/html; charset=utf-8']],
-  ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
-  ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-  ['/app-icon.png', ['app-icon.png', 'image/png']],
+// 静态产物来自 `npm run build` 的 build/web；带哈希的资源文件名由 Rsbuild 生成，这里按扩展名给类型。
+const staticRoot = new URL('./build/web/', import.meta.url);
+const contentTypes = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.svg', 'image/svg+xml'],
+  ['.ico', 'image/x-icon'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.webmanifest', 'application/manifest+json; charset=utf-8'],
+  ['.txt', 'text/plain; charset=utf-8'],
+  ['.woff2', 'font/woff2'],
 ]);
 const apiMethods = new Map([
   ['/admin/login', 'POST'], ['/admin/logout', 'POST'],
@@ -31,7 +41,7 @@ function fail(response, status, message) {
 async function proxy(request, response, url) {
   const path = url.pathname.slice(4);
   const callDetail = /^\/admin\/(calls|timeline\/messages)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
-  const serviceConfig = /^\/admin\/services\/(openrouter|ikun_gemini|resend|serper|parallel|everyinfra)$/.test(path);
+  const serviceConfig = /^\/admin\/services\/(openrouter|ikun_gemini|resend|serper|parallel|everyinfra|aliyun_oss)$/.test(path);
   const methods = apiMethods.get(path) || (callDetail ? new Set(['GET']) : serviceConfig ? new Set(['PUT']) : null);
   // 请求详情、时间线与消息全文可能超过缓冲上限，直接流式转发。
   const streamed = callDetail || path === '/admin/timeline';
@@ -75,20 +85,33 @@ async function proxy(request, response, url) {
   response.on('close', () => { if (!response.writableEnded) forwarded.destroy(); });
   forwarded.end(Buffer.concat(chunks));
 }
+// serveStatic 从 build/web 读取真实文件；不存在的无扩展名路径回退到预渲染的 index.html，让前端路由刷新也能打开。
+async function serveStatic(request, response, url) {
+  const relative = path.posix.normalize(`.${decodeURIComponent(url.pathname)}`);
+  if (relative.startsWith('..')) return fail(response, 404, 'Not found');
+  let fileURL = new URL(relative === '.' ? './index.html' : `.${relative.startsWith('/') ? '' : '/'}${relative}`, staticRoot);
+  try {
+    const info = await stat(fileURL);
+    if (!info.isFile()) throw new Error('not a file');
+  } catch {
+    if (path.posix.extname(relative)) return fail(response, 404, 'Not found');
+    fileURL = new URL('./index.html', staticRoot);
+  }
+  const data = await readFile(fileURL);
+  response.writeHead(200, { 'Content-Type': contentTypes.get(path.posix.extname(fileURL.pathname)) || 'application/octet-stream' });
+  response.end(request.method === 'HEAD' ? undefined : data);
+}
 const server = http.createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
-  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  // Start 预渲染外壳含内联脚本数据，script-src 需放行 'unsafe-inline'；其余资源仍只允许同源。
+  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   try {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) return await proxy(request, response, url);
     if (request.method !== 'GET' && request.method !== 'HEAD') return fail(response, 405, 'Method not allowed');
-    const file = staticFiles.get(url.pathname);
-    if (!file) return fail(response, 404, 'Not found');
-    const data = await readFile(new URL(`./public/${file[0]}`, import.meta.url));
-    response.writeHead(200, { 'Content-Type': file[1] });
-    response.end(request.method === 'HEAD' ? undefined : data);
+    await serveStatic(request, response, url);
   } catch { fail(response, 502, 'Request failed'); }
 });
 server.requestTimeout = 20_000;

@@ -51,7 +51,7 @@ dev: frontend
 	$(MAKE) -C backend run
 
 admin:
-	cd admin && npm start
+	cd admin && npm ci && npm run build && npm start
 
 check:
 	cd backend && go build ./... && go vet ./... && go test -race ./...

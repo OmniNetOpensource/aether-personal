@@ -56,7 +56,7 @@
 | --- | --- |
 | `backend/` | Go 后端 |
 | `frontend/` | React Web/PWA 工程 |
-| `admin/` | 管理看板静态页面与 Node 同源代理，独立运行 |
+| `admin/` | TanStack Start 管理看板与 Node 同源代理，独立运行 |
 | `infra/` | dev/prod 环境和部署配置 |
 | `docs/` | 架构图、架构 Wiki 与决策总览 |
 
@@ -146,6 +146,6 @@ make db-down   # 停止本地 PostgreSQL
 
 ## 管理看板（开发中）
 
-看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`，打开 [管理看板](http://127.0.0.1:5174)。无第三方依赖或构建步骤，需要 Node.js 22.9 或更新版本。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
+看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
 看板包含运行概览、模型调用和模型配置。可按用户筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

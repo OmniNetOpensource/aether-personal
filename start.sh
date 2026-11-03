@@ -116,15 +116,17 @@ wait_ready() {
 }
 
 cd "$project_dir"
-printf '\n[1/4] 安装依赖并构建聊天前端……\n'
+printf '\n[1/5] 安装依赖并构建聊天前端……\n'
 make frontend
-printf '\n[2/4] 启动数据库并执行迁移……\n'
+printf '\n[2/5] 安装依赖并构建管理看板……\n'
+(cd "$admin_dir" && npm ci && npm run build)
+printf '\n[3/5] 启动数据库并执行迁移……\n'
 make -C backend db-up
 make -C backend migrate
-printf '\n[3/4] 构建后端……\n'
+printf '\n[4/5] 构建后端……\n'
 (cd backend && go build -o "$log_dir/server" ./cmd/server)
 
-printf '\n[4/4] 启动后端与管理看板……\n'
+printf '\n[5/5] 启动后端与管理看板……\n'
 (
   cd "$project_dir/backend"
   set -a

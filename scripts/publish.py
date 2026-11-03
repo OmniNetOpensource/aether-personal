@@ -171,6 +171,7 @@ def main():
             run(["go", "build", "./..."], cwd=snapshot / "backend")
             run(["go", "vet", "./..."], cwd=snapshot / "backend")
             run(["make", "edge-dry-run"], cwd=snapshot)
+            run(["npm", "ci"], cwd=snapshot / "admin")
             run(["npm", "run", "check"], cwd=snapshot / "admin")
             for service in ("backend", "admin"):
                 run(["docker", "build", "--platform", "linux/amd64", "-f", f"infra/prod/Dockerfile.{service}",

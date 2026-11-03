@@ -98,7 +98,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 
 时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
 
-管理端默认 `127.0.0.1:5174`，服务端 `API_UPSTREAM` 默认 `http://127.0.0.1:8080`。原生 ES modules 与 Node 内置 HTTP，无第三方依赖或构建。`/api` 仅代理固定管理路径到固定上游，浏览器不持有数据库或供应商密钥。生产通过 HTTPS 反向代理独立部署；sessionStorage 只保留当前标签页会话。配额、封禁、删除用户、账单对账和角色管理不在本轮实现范围。
+管理端默认 `127.0.0.1:5174`，服务端 `API_UPSTREAM` 默认 `http://127.0.0.1:8080`。页面自 2026-11-03 起为 TanStack Start SPA（见文末「看板改用 TanStack Start」），构建产物由 Node 内置 HTTP 服务托管，运行时无第三方依赖。`/api` 仅代理固定管理路径到固定上游，浏览器不持有数据库或供应商密钥。生产通过 HTTPS 反向代理独立部署；sessionStorage 只保留当前标签页会话。配额、封禁、删除用户、账单对账和角色管理不在本轮实现范围。
 
 ## 密码登录验证（2026-10-26）
 
@@ -232,3 +232,13 @@ go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-b
 ```
 
 此模式只导入 OSS；未传 `-oss-csv` 时，仍按原有规则导入旧服务环境变量。OSS 密钥不从环境变量回退。
+
+## 看板改用 TanStack Start（2026-11-03）
+
+用户要求「看板也用 TanStack Start」，随后澄清范围：只把 `admin/` 改造成 TanStack Start，其他不变。据此：
+
+- `admin/` 从零依赖的原生三件套（`public/app.js` 命令式 DOM + CSS + HTML）改为与聊天端同款的 TanStack Start + React + TypeScript：文件路由与 SPA 模式，构建时预渲染 HTML 外壳，管理员登录与数据都在浏览器中恢复。依赖版本与 `frontend/` 对齐并固定在 `admin/package-lock.json`，Node.js 最低版本随之升到 22.12.0。
+- 五个页面（运行概览、模型调用、运行过程、模型配置、服务配置）、管理员密码登录与独立管理会话、筛选与 15 秒自动刷新、调用详情的请求／响应 JSON、时间线展开状态与全文保留、ID 复制等行为逐项对齐改造前；样式沿用原 CSS（移入 `src/style.css`），配色与布局不变。页面按职责拆成 `AdminApp` 与各页组件，接口类型集中在 `src/api.ts`，替代原先无类型的裸 JSON 拼 DOM。
+- 运行与部署形态不变：仍是独立目录、独立 Node 服务与独立域名。`server.mjs` 继续用 Node 内置 HTTP 托管静态产物并按固定白名单代理 `/api`（含大响应流式转发与安全响应头），只是静态目录从 `public/` 换成构建产物 `build/web/`，未知无扩展名路径回退预渲染的 `index.html`。Start 外壳含内联脚本数据，CSP 的 `script-src` 因此放行 `'unsafe-inline'`，其余指令不变。顺带补上代理白名单遗漏的 `aliyun_oss` 服务保存路径（页面早有 OSS 卡片，此前经代理保存会 404）。
+- 生产镜像 `infra/prod/Dockerfile.admin` 改为多阶段构建：构建阶段 `npm ci && npm run build`，运行阶段只带 `server.mjs` 与 `build/web`，仍以非 root 的 node 用户运行。根目录 `make admin` 与 `start.sh` 增加看板构建步骤，发布脚本在快照中先 `npm ci` 再做看板类型检查。
+- 不采用 SSR、也不并入 `frontend/`：看板数据都在管理员登录后经 `/admin/*` 读取，无服务端直出需求；并入聊天应用会打破管理员入口与聊天入口的隔离。曾一度误按「并入 frontend 改成用户看板」动手（新增 `/me/*` 接口与 `/dashboard` 页、删除 `admin/`），已在本次改造开始前全部撤销，后端 `/admin/*` 接口与管理员能力未受影响。
