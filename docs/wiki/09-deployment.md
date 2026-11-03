@@ -189,6 +189,53 @@ make prod-backup
 
 Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部署回退功能恢复旧 Web 版本。后端和 Web 发布必须保持接口兼容。
 
+### Push 后自动发布
+
+2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。
+
+工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
+
+发布顺序为检查与构建、上传、停写备份、迁移与启动后端、下载并校验备份、发布 Cloudflare、核对公网文件和健康状态。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
+
+#### 配置 GitHub production 环境
+
+在仓库 Settings → Environments 创建 `production`，将允许部署的分支限制为 `main`，不设置人工审批，保证 push 后自动运行。为该环境配置以下 Secrets：
+
+| Secret | 内容 |
+| --- | --- |
+| `PROD_SSH_HOST` | 已有生产主机的地址 |
+| `PROD_SSH_USER` | 已有可无人值守 sudo 的部署用户 |
+| `PROD_SSH_PRIVATE_KEY` | 专供 Actions 使用的 SSH 私钥；对应公钥在服务器使用 `restrict` 授权 |
+| `PROD_SSH_KNOWN_HOSTS` | 经可信渠道核对的主机公钥记录；不在发布时自动信任 keyscan |
+| `CLOUDFLARE_API_TOKEN` | 限定维护者账号与目标 Zone 的部署 Token，具备 Workers Scripts Edit、Account Settings Read、Zone Read、Workers Routes Edit 权限 |
+
+为同一环境配置以下 Variables：
+
+| Variable | 内容 |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Worker 所属账号 ID |
+| `PROD_BACKUP_RECIPIENT` | age 备份加密公钥，格式为 `age1...` |
+
+这些凭证在发布步骤运行前检查。SSH 严格核对主机公钥，Cloudflare 使用专用 API Token，不复制本机 Wrangler 的 OAuth 登录或刷新令牌。其他 fork 需修改工作流中的域名，以及自身的 Wrangler 路由和生产地址。
+
+#### 保存与恢复 Actions 备份
+
+GitHub 托管 runner 是临时机器，不能作为备份保存位置。每次运行将已下载并通过 SHA-256 核对的 `database.dump` 用 age 公钥加密，再将密文与不含 SSH 连接信息的 `release.json` 上传为 `production-<run_id>-<run_attempt>` 产物，保留 90 天。服务器仍保留原备份；这不是定期备份任务。
+
+公开仓库的 Actions 产物可被其他人下载，所以只上传 `database.dump.age` 和经过筛选的发布摘要，禁止上传 `.local/`、发布目录、完整日志或明文数据库。解密私钥不放入 GitHub Secrets，维护者本机保存在 `.local/github-actions/backup.agekey`，必须单独保管和备份。生产 `SERVICE_ENCRYPTION_KEY` 仍需要另外备份。
+
+从 Actions 页面下载并解压对应产物后，在保存私钥的本机解密：
+
+```sh
+umask 077
+age --decrypt --identity .local/github-actions/backup.agekey \
+  --output database.dump database.dump.age
+```
+
+随后按本页的独立空库恢复流程验证，不直接覆盖运行中的生产数据库。产物在保留期内删除或到期后不能用作长期归档，应另行保管需要长期保留的备份。
+
+发布失败时查看 Actions 日志中的发布编号和主机阶段记录。开始迁移后不自动回滚数据库。已有健康后端而 Worker 未完成时，先处理失败步骤并使用原主机发布记录恢复，不根据 Actions 红色状态推断后端仍为旧版本。
+
 ## 本地验证记录
 
 2026-10-26，在独立 Compose 项目与数据库中完成以下验证，没有发布 Cloudflare，也没有使用生产供应商凭证：

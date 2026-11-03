@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 本文件编排一次完整发布：从固定提交构建、通过 SSH 更新主机、保存备份，再发布并核对 Cloudflare。
+# 本文件编排本机与 GitHub Actions 发布：从固定提交构建、通过 SSH 更新主机、保存备份，再发布并核对 Cloudflare。
 
 import argparse
 import fcntl
@@ -67,8 +67,25 @@ def main():
     mode.add_argument("--check", action="store_true", help="只检查依赖、SSH/sudo 与 Cloudflare 登录")
     mode.add_argument("--prepare-only", action="store_true", help="只构建发布包，不连接或修改生产")
     mode.add_argument("--resume", metavar="RELEASE_ID", help="从已有发布目录继续，不重新构建")
+    mode.add_argument("--ci", action="store_true", help="发布 GitHub Actions main 事件的准确提交，不拉取后续提交")
     args = parser.parse_args()
     os.umask(0o077)
+    # CI 只信任 main 的受支持事件；先核对 checkout 的提交，禁止发布运行期间新出现的 main。
+    if args.ci:
+        if (os.environ.get("GITHUB_ACTIONS") != "true" or
+                os.environ.get("GITHUB_REF") != "refs/heads/main" or
+                os.environ.get("GITHUB_EVENT_NAME") not in ("push", "workflow_dispatch")):
+            raise RuntimeError("CI 发布只接受 GitHub Actions 的 main push 或手动运行事件")
+        revision = os.environ.get("GITHUB_SHA", "")
+        if not re.fullmatch(r"[a-f0-9]{40}", revision) or run(["git", "rev-parse", "HEAD"], quiet=True) != revision:
+            raise RuntimeError("CI checkout 与触发事件的提交不一致")
+        # Actions 不保证排队顺序；过时任务直接结束，避免把已经推进的 main 发布回旧提交。
+        current_main = run(["git", "ls-remote", "origin", "refs/heads/main"], quiet=True).split()
+        if not current_main:
+            raise RuntimeError("无法读取远端 main")
+        if current_main[0] != revision:
+            print("main 已推进到后续提交，跳过本次过时发布。")
+            return
     for command in ("git", "docker", "npm", "npx", "go", "make", "tar", "gzip", "curl", "ssh", "scp"):
         if not shutil.which(command):
             raise RuntimeError(f"缺少命令：{command}")
@@ -120,8 +137,9 @@ def main():
             remote(ssh, ["sudo", "-n", "bash", "-s", "--", "--check"], stdin=installer)
             edge = ROOT / "infra/cloudflare"
             run(["npm", "ci"], cwd=edge)
-            run(["npx", "--no-install", "wrangler", "whoami"], cwd=edge)
-            # whoami 的文本并非认证成功契约，实际读取部署记录可确认账号有 Worker 访问权限。
+            if not args.ci:
+                run(["npx", "--no-install", "wrangler", "whoami"], cwd=edge)
+            # 直接读取部署记录验证发布权限；CI 无需额外授予 Token 读取用户资料的权限。
             run(["npx", "--no-install", "wrangler", "deployments", "list", "--json"], cwd=edge, quiet=True)
             if args.check:
                 print("发布预检通过；未构建或修改生产。")
@@ -137,13 +155,14 @@ def main():
             manifest["target"] = config
             (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         else:
-            # 发布仅接受已提交的 main；fetch 与 fast-forward 不推送公开仓库。
-            if run(["git", "branch", "--show-current"], quiet=True) != "main":
+            # 本机同步 main；CI 保留事件快照，允许 Actions checkout 使用 detached HEAD。
+            if not args.ci and run(["git", "branch", "--show-current"], quiet=True) != "main":
                 raise RuntimeError("请在 main 分支发布")
             if run(["git", "status", "--porcelain"], quiet=True):
                 raise RuntimeError("请先提交工作区改动，再发布，避免未提交内容被漏掉")
-            run(["git", "fetch", "origin", "main"])
-            run(["git", "merge", "--ff-only", "origin/main"])
+            if not args.ci:
+                run(["git", "fetch", "origin", "main"])
+                run(["git", "merge", "--ff-only", "origin/main"])
             revision = run(["git", "rev-parse", "HEAD"], quiet=True)
             release_id = revision[:12] + "-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
             release_dir = ROOT / ".local/publish" / release_id
@@ -151,6 +170,10 @@ def main():
             manifest = {"release_id": release_id, "revision": revision, "target": config}
 
         print(f"发布记录：{release_dir}", flush=True)
+        # 即使后续发布失败，Actions 仍可定位已经下载的备份并加密保存。
+        if args.ci:
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                output.write(f"release_dir={release_dir}\nrelease_id={manifest['release_id']}\n")
         LOG = (release_dir / "publish.log").open("a", buffering=1)
         snapshot = release_dir / "source"
         release_id = manifest["release_id"]

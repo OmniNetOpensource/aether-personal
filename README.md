@@ -140,6 +140,8 @@ make db-down   # 停止本地 PostgreSQL
 
 完成一次 SSH 与 Cloudflare 登录配置后，在干净的 `main` 工作区运行 `make publish`，即可构建、上传、备份、迁移并发布前后端。`make publish-check` 只检查接入与依赖，不修改生产。脚本保留服务器上的生产密钥，发布记录和异机数据库备份保存在被 Git 忽略的 `.local/publish/`。具体配置及失败恢复见 [一键更新现有部署](docs/wiki/09-deployment.md#一键更新现有部署)。
 
+仓库还提供 GitHub Actions 自动发布工作流：配置 `production` 环境的部署凭证后，push 到 `main` 自动构建并更新前后端。数据库备份先用 age 加密再保存为 Actions 产物，解密私钥保留在维护者本机。配置与恢复步骤见 [Push 后自动发布](docs/wiki/09-deployment.md#push-后自动发布)。
+
 - [架构 Wiki](docs/wiki/README.md)：按主题完整说明架构与设计，包括每项决定的理由和各部分的实现状态。
 - [架构图](docs/architecture.mmd)：Mermaid 格式的三层架构图。
 - [决策总览](docs/decisions.md)：已确认选择的一览表及待确认问题。

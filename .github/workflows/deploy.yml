@@ -1,0 +1,145 @@
+# 本工作流在 main push 后发布同一提交；迁移串行执行，数据库备份加密后才允许上传产物。
+name: Deploy production
+run-name: Deploy ${{ github.sha }}
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 发布不能因后续 push 被取消，避免中断数据库迁移或留下前后端版本不一致。
+concurrency:
+  group: aether-personal-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://aether.forkicks.fun
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            admin/package-lock.json
+            infra/cloudflare/package-lock.json
+
+      - name: Install backup encryption
+        run: sudo apt-get update && sudo apt-get install -y age
+
+      # 凭证只写入 runner 的私有目录；主机公钥来自已核对的 Secrets，不现场信任 keyscan。
+      - name: Configure deployment access
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+          BACKUP_RECIPIENT: ${{ vars.PROD_BACKUP_RECIPIENT }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          umask 077
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          required = ('SSH_HOST', 'SSH_USER', 'SSH_PRIVATE_KEY', 'SSH_KNOWN_HOSTS',
+                      'BACKUP_RECIPIENT', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID')
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit('Missing deployment configuration: ' + ', '.join(missing))
+          host, user = os.environ['SSH_HOST'], os.environ['SSH_USER']
+          if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]*', host) or not re.fullmatch(r'[a-z_][a-z0-9_-]*', user):
+              raise SystemExit('Invalid deployment SSH host or user')
+          root = Path('.local').resolve()
+          root.mkdir(mode=0o700, exist_ok=True)
+          (root / 'ci-key').write_text(os.environ['SSH_PRIVATE_KEY'].rstrip() + '\n')
+          (root / 'ci-known-hosts').write_text(os.environ['SSH_KNOWN_HOSTS'].rstrip() + '\n')
+          (root / 'ci.ssh').write_text(
+              f'Host aether-prod\n  HostName {host}\n  User {user}\n'
+              f'  IdentityFile "{root}/ci-key"\n  IdentitiesOnly yes\n'
+              f'  UserKnownHostsFile "{root}/ci-known-hosts"\n')
+          (root / 'publish.json').write_text(json.dumps({
+              'ssh_host': 'aether-prod', 'ssh_config': '.local/ci.ssh',
+              'public_url': 'https://aether.forkicks.fun',
+          }) + '\n')
+          PY
+          # 先验证加密公钥，避免更新生产后才发现备份无法加密。
+          age --encrypt --recipient "$BACKUP_RECIPIENT" </dev/null >/dev/null
+
+      - name: Build, back up, and deploy
+        id: publish
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: python3 scripts/publish.py --ci
+
+      # 公开仓库的产物可被下载，产物目录只包含 age 密文和不含连接信息的发布摘要。
+      - name: Encrypt the verified database backup
+        if: ${{ !cancelled() && steps.publish.outputs.release_dir != '' }}
+        env:
+          RELEASE_DIR: ${{ steps.publish.outputs.release_dir }}
+          BACKUP_RECIPIENT: ${{ vars.PROD_BACKUP_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p .local/publish-artifacts
+          if [[ -f "$RELEASE_DIR/database.dump" ]]; then
+            age --encrypt --recipient "$BACKUP_RECIPIENT" \
+              --output .local/publish-artifacts/database.dump.age "$RELEASE_DIR/database.dump"
+            rm "$RELEASE_DIR/database.dump"
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release = Path(os.environ['RELEASE_DIR'])
+          manifest = json.loads((release / 'release.json').read_text()) if (release / 'release.json').is_file() else {}
+          summary = {key: manifest[key] for key in ('release_id', 'revision', 'status', 'worker_version') if key in manifest}
+          summary['database_version'] = manifest.get('server', {}).get('database_version')
+          Path('.local/publish-artifacts/release.json').write_text(json.dumps(summary, indent=2) + '\n')
+          PY
+
+      - name: Save encrypted backup and release summary
+        if: ${{ !cancelled() && steps.publish.outputs.release_dir != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/publish-artifacts/
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true
+
+      - name: Remove runner credentials and plaintext backups
+        if: ${{ always() }}
+        run: |
+          rm -f .local/ci-key .local/ci-known-hosts .local/ci.ssh .local/publish.json
+          find .local/publish -maxdepth 2 -type f \( -name database.dump -o -name database.dump.partial \) -delete 2>/dev/null || true
