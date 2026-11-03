@@ -104,6 +104,7 @@
 | --- | --- | --- |
 | 整体结构 | 实例无状态、状态在 PostgreSQL；`LISTEN/NOTIFY` 互相唤醒，不引入 Redis | [04](wiki/04-messaging.md#整体结构) |
 | 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
+| 后台连接 | 2026-11-03：页面隐藏时保留 WebSocket 与自动重连，网络恢复时允许后台重连，返回前台时确保连接存在；离线或离开页面仍关闭。理由是普通页面切换不应中断消息接收或使发送中的请求失败；系统冻结或回收网页后靠重连与游标补齐恢复 | [04](wiki/04-messaging.md#websocket) |
 | 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
 | Main 思考提示 | 聊天底部三点小气泡，按真实处理状态显示，结束、失败或断线后收起；开发中 | [04](wiki/04-messaging.md#main-思考气泡-开发中) |
 | 空白回复与失败提示 | 2026-11-03 用户确认：未给用户正文时，无正文且无工具调用的结果最多补试一次，耗尽后聊天底部显示失败；失败状态可在重连后恢复，新输入清除。已有正文的工具流程仍可静默收尾 | [05](wiki/05-main-runtime.md#模型调用失败) |

@@ -27,16 +27,18 @@ export function App() {
     window.addEventListener('resize', resize);
     resize();
 
-    // 登录与前后台生命周期继续交给聊天控制器，不依赖 Start 服务端。
+    // 页面隐藏时保留连接与自动重连；恢复网络或返回页面时确保连接存在。
     const unsubscribe = controller.subscribe(() => refresh((value) => value + 1));
     void controller.initialize();
     const resume = () => {
-      if (navigator.onLine && !document.hidden) controller.reconnect();
+      if (navigator.onLine) controller.reconnect();
     };
     const suspend = () => {
       controller.suspend();
     };
-    const visibility = () => (document.hidden ? suspend() : resume());
+    const visibility = () => {
+      if (!document.hidden) resume();
+    };
     const sessionChanged = (event: StorageEvent) => {
       if (event.key === 'aether_session' && event.newValue !== controller.token) location.reload();
     };
