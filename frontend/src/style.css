@@ -498,10 +498,12 @@ button.link {
 .quote-toolbar {
   position: fixed;
   z-index: 20;
+  transform: translate(-50%, calc(-100% - 28px));
   padding: 8px 16px;
   border-radius: 10px;
   background: var(--surface);
   color: var(--text);
+  white-space: nowrap;
   box-shadow: 0 2px 12px #0004;
 }
 .sent-quote blockquote {

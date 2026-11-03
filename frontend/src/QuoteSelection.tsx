@@ -20,7 +20,7 @@ function quoteTextNodes(root: Element): Text[] {
   return nodes;
 }
 
-// QuoteSelection 只允许同一条助手回复内的选择；固定定位的按钮不会挤动消息布局。
+// QuoteSelection 只允许同一条助手回复内的选择；按钮固定在选区上边中点，不挤动消息布局。
 export function QuoteSelection({
   container,
   onQuote,
@@ -76,22 +76,38 @@ export function QuoteSelection({
         .join('')
         .slice(from, to);
       if (!text.trim()) return setSelection(null);
+      // 锚点是选区外接矩形的上边中点；样式再把按钮水平居中并抬到选区上方。
       const rect = range.getBoundingClientRect();
-      setSelection({
-        quote: { text, message_id: messageId, start: from, end: to },
-        left: Math.max(8, Math.min(window.innerWidth - 88, rect.left)),
-        top: Math.max(8, rect.top - 44),
-      });
+      const center = rect.left + rect.width / 2;
+      const left = Math.round(Math.min(window.innerWidth - 48, Math.max(48, center)));
+      const top = Math.round(Math.max(80, rect.top));
+      setSelection((current) =>
+        current &&
+        current.left === left &&
+        current.top === top &&
+        current.quote.message_id === messageId &&
+        current.quote.start === from &&
+        current.quote.end === to &&
+        current.quote.text === text
+          ? current
+          : { quote: { text, message_id: messageId, start: from, end: to }, left, top },
+      );
     };
-    const clear = () => setSelection(null);
+    // 滚动和窗口尺寸变化时重算锚点，按钮跟着选区移动，不因滚动收起。
+    let frame = 0;
+    const reposition = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    };
     document.addEventListener('selectionchange', update);
-    window.addEventListener('resize', clear);
-    container.current?.addEventListener('scroll', clear);
+    window.addEventListener('resize', reposition);
     const element = container.current;
+    element?.addEventListener('scroll', reposition, { passive: true });
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener('selectionchange', update);
-      window.removeEventListener('resize', clear);
-      element?.removeEventListener('scroll', clear);
+      window.removeEventListener('resize', reposition);
+      element?.removeEventListener('scroll', reposition);
     };
   }, [container]);
   if (!selection) return null;
