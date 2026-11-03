@@ -51,9 +51,12 @@ Main 直接使用执行工具完成任务，当前包括 `search`、`fetch_url`�
 
 2026-11-03，用户决定 Runner 只认 PostgreSQL 通知：删掉每秒扫描与启动时的自发唤醒，也删掉 WebSocket 保存消息后与 Runner 跑完一轮后的进程内直接唤醒；一切唤醒只能由 LISTEN 收到的 `user_messages` 与 `main_input` 通知转发，Main 写回仍靠事务里的 `NOTIFY`。Runner 被唤醒后照旧全量扫描 `main_work`，所以任何一条通知都会顺带捡起此前遗漏的工作。用户接受随之而来的语义变化：消息与运行状态不会丢，但触发可以丢——进程重启或 LISTEN 断线间隙里错过的通知不重放，遗留工作要等下一次通知才恢复、不保证恢复时间，本节此前「通知只减少等待，漏通知不会使任务永久无人处理」的说法就此作废。选择理由是调度只保留一条事件路径，不再让周期轮询与多处直接唤醒并存。
 
+2026-11-03，用户进一步要求「一个实例可以跑多个 runner，每个用户对应一个 runner」。据此原全局 Runner 拆为进程内唯一的 `Manager` 与每用户一个的 `Runner`：Manager 持有连接池、模型客户端、工具与服务配置等共享依赖和全局并发名额，被通知唤醒后全量扫描 `main_work`，为每个还没有 Runner 的用户创建一个 Runner 并登记；Runner 只服务自己这一个用户（用户 ID 与思考中请求的取消句柄都存在它自己身上，不再用全局 map 按用户存），抢该用户的 Main 咨询锁后按消息尾部运行，结束时先由 Manager 注销、再释放并发名额。Runner 只在有活时存在，不为无活用户常驻协程，共享依赖也不按用户复制；同一用户在本实例只有一个 Runner，跨实例仍靠 PostgreSQL 咨询锁保证只跑一处。运行语义（只认通知、失败停住位置、连接预算）与拆分前完全一致。选择理由是每用户的状态与执行归到各自对象上，调度与执行的职责分开，后续单用户能力有明确落点；消息表仍是唯一事实来源，Runner 对象只是临时执行者。
+
 ```mermaid
 flowchart TD
-    WAKE["用户消息入库 / 一批工具回执齐全<br/>只由 NOTIFY 唤醒，醒后全量扫描 main_work"] --> LOCK{"取得该用户的 Main 锁"}
+    WAKE["用户消息入库 / 一批工具回执齐全<br/>只由 NOTIFY 唤醒 Manager，醒后全量扫描 main_work"] --> CREATE["Manager 为每个没有 Runner 的用户<br/>创建一个 Runner 并登记"]
+    CREATE --> LOCK{"Runner 取得该用户的 Main 锁"}
     LOCK -->|未取得| WAIT["已有机器在运行，到此为止"]
     LOCK -->|取得| RECOVER["收尾上次崩溃留下的模型调用与未完成 step"]
     RECOVER --> LOAD["读取上个 compact 以来的消息"]

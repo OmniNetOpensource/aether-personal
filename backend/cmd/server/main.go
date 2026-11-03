@@ -53,12 +53,12 @@ func main() {
 		slog.Error("initialize service encryption failed")
 		os.Exit(1)
 	}
-	runner := agent.NewRunner(databasePool, appConfig, serviceSettings)
-	go runner.Start(ctx)
+	manager := agent.NewManager(databasePool, appConfig, serviceSettings)
+	go manager.Start(ctx)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, runner, serviceSettings), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, manager, serviceSettings), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

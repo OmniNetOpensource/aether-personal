@@ -139,11 +139,11 @@ func (s *server) listenOnce(ctx context.Context) error {
 				slog.Error("invalid main input notification", "error", err)
 				continue
 			}
-			s.runner.NewInput(input.UserID, input.Sequence)
+			s.manager.NewInput(input.UserID, input.Sequence)
 			continue
 		}
 		s.connections.wake(uuid.MustParse(notification.Payload))
-		s.runner.Wake(uuid.MustParse(notification.Payload))
+		s.manager.Wake(uuid.MustParse(notification.Payload))
 	}
 }
 
@@ -426,7 +426,7 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接被唤醒推送、Runner 被通知唤醒；
+// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接被唤醒推送、Manager 被通知唤醒；
 // 成功后先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {

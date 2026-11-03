@@ -19,18 +19,18 @@ type server struct {
 	queries      *database.Queries
 	appConfig    config.Config
 	httpClient   *http.Client
-	runner       *agent.Runner
+	manager      *agent.Manager
 	connections  *chatConnections
 	services     *services.Store
 }
 
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, runner *agent.Runner, serviceSettings *services.Store) http.Handler {
+func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, manager *agent.Manager, serviceSettings *services.Store) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
 		appConfig:    appConfig,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
-		runner:       runner,
+		manager:      manager,
 		connections:  newChatConnections(),
 		services:     serviceSettings,
 	}

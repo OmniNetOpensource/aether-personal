@@ -15,7 +15,6 @@ import (
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,7 +22,7 @@ import (
 // prepareContext 是每次调用模型前的上下文入口：读入该 Main 当前世代的消息，
 // 判断要不要压缩（上次官方用量达到 token 阈值或容量上限；不看闲置时长），需要时先完成压缩，再按组装规则返回最终请求。
 // 输入按已确定的值信任：模型、容量、阈值都来自设置；压缩只对模型调用本身失败负责，不处理其他假想状态（见 docs/wiki/05-main-runtime.md）。
-func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, userID uuid.UUID) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (modelRequest, error) {
 	// 先定这次用哪个模型和上下文上限：取管理员在看板保存的设置。
 	queries := database.New(connection)
 	settings, err := modelsettings.Load(ctx, queries, r.settings)
@@ -31,13 +30,13 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 		return modelRequest{}, err
 	}
 	model, outputLimit, capacity := settings.MainModel, settings.EffectiveOutputLimit, settings.MainContextLength
-	rows, err := queries.ListAgentContextRows(ctx, userID)
+	rows, err := queries.ListAgentContextRows(ctx, r.userID)
 	if err != nil {
 		return modelRequest{}, err
 	}
 	// 触发只看官方用量：上一次成功的 Agent 请求由供应商回的 prompt_tokens 已存入 model_calls，直接拿它当压缩前的大小；本地不再估算。没有上次用量（首次请求）或已换模型（不同 tokenizer 的数字不可比）时按 0 处理，不因 token 或容量触发。
 	var before int64
-	usage, err := queries.GetLastContextUsage(ctx, userID)
+	usage, err := queries.GetLastContextUsage(ctx, r.userID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return modelRequest{}, err
 	}
@@ -94,7 +93,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	// 摘要覆盖位置停在待压缩历史里最后一条原文上；待压范围按序号排列，最后一条就是序号最大的原文。
 	through := rowsToCompact[len(rowsToCompact)-1].Sequence
 	// 先登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
-	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: userID, Model: model})
+	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: model})
 	if err != nil {
 		return modelRequest{}, err
 	}
@@ -127,10 +126,10 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	// 摘要落库：一个事务里写入摘要消息并给压缩步骤记上用量，两步要么一起成要么都不算；压缩后的大小不估算，下一次 Agent 请求的官方 prompt_tokens 就是它。
 	err = pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		q := database.New(tx)
-		if err := q.LockUserMessages(ctx, userID); err != nil {
+		if err := q.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{UserID: userID, Content: summaryJSON, StepID: &compactStepID, SummaryThroughSequence: &through}); err != nil {
+		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{UserID: r.userID, Content: summaryJSON, StepID: &compactStepID, SummaryThroughSequence: &through}); err != nil {
 			return err
 		}
 		return q.FinishStep(ctx, database.FinishStepParams{ID: compactStepID, InputTokens: result.Usage.PromptTokens, OutputTokens: result.Usage.CompletionTokens, Cost: result.Usage.Cost})
@@ -140,7 +139,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn, u
 	}
 	committed = true
 	// 重读上下文带上新摘要与保留的新消息原文；压缩期间新到的消息序号更大，同样在新世代里。
-	rows, err = queries.ListAgentContextRows(ctx, userID)
+	rows, err = queries.ListAgentContextRows(ctx, r.userID)
 	if err != nil {
 		return modelRequest{}, err
 	}
