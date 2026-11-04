@@ -102,6 +102,7 @@ type geminiFunctionCall struct {
 func geminiRequestBody(prepared Request) ([]byte, error) {
 	contents := []geminiContent{}
 	toolCalls := map[string]geminiFunctionCall{}
+	previousMessageRole := ""
 	for _, raw := range prepared.Messages {
 		var message struct {
 			Role          string            `json:"role"`
@@ -197,15 +198,17 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 		default:
 			return nil, fmt.Errorf("unsupported Gemini history role: %s", message.Role)
 		}
-		// 并行工具的结果放在同一条 user 消息中，避免拆断一轮工具调用。
+		// 只合并来源角色相同的相邻消息：并行工具回执成组，用户正文与时间成组。
+		// tool 虽然也转成 user，但后续用户输入必须另起一条，避免埋在工具结果里被忽略。
 		if len(content.Parts) == 0 {
 			continue
 		}
-		if len(contents) > 0 && contents[len(contents)-1].Role == content.Role {
+		if len(contents) > 0 && previousMessageRole == message.Role {
 			contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, content.Parts...)
 		} else {
 			contents = append(contents, content)
 		}
+		previousMessageRole = message.Role
 	}
 
 	// JSON Schema 直接使用现有工具定义；指定工具选择沿用同一份工具定义转换。
