@@ -8,5 +8,6 @@
 backend/bin
 frontend/build
 frontend/dist
+admin/build
 infra/sandbox/.local
 docs/experiments

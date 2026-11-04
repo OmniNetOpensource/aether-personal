@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 本文件编排本机与 GitHub Actions 发布：从固定提交构建、通过 SSH 更新主机、保存备份，再发布并核对 Cloudflare。
+# 本文件编排固定提交的发布，复用构建缓存并记录命令耗时，再备份、更新主机和核对 Cloudflare。
 
 import argparse
 import fcntl
@@ -30,16 +30,21 @@ def run(arguments, cwd=ROOT, stdin=None, quiet=False):
     if LOG:
         LOG.write("\n$ " + shlex.join(command) + "\n")
         LOG.flush()
+    started = time.monotonic()
     result = subprocess.run(command, cwd=cwd, input=stdin, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, check=False)
+    elapsed = time.monotonic() - started
     if LOG:
         LOG.write(result.stdout)
         LOG.write(result.stderr)
+        LOG.write(f"\n耗时 {elapsed:.1f}s，退出码 {result.returncode}\n")
         LOG.flush()
     if not quiet or result.returncode:
         print(result.stdout, end="", flush=True)
     if result.stderr:
         print(result.stderr, end="", file=sys.stderr, flush=True)
+    if not quiet or result.returncode:
+        print(f"耗时 {elapsed:.1f}s，退出码 {result.returncode}", flush=True)
     result.check_returncode()
     return result.stdout.strip()
 
@@ -194,13 +199,26 @@ def main():
             run(["go", "build", "./..."], cwd=snapshot / "backend")
             run(["go", "vet", "./..."], cwd=snapshot / "backend")
             run(["make", "edge-dry-run"], cwd=snapshot)
-            run(["npm", "ci"], cwd=snapshot / "admin")
-            run(["npm", "run", "check"], cwd=snapshot / "admin")
+            # 看板 Docker 构建中的 npm run build 已包含类型与服务脚本检查，不在宿主机重复安装。
+            cache_root = os.environ.get("PUBLISH_BUILD_CACHE")
             for service in ("backend", "admin"):
-                run(["docker", "build", "--platform", "linux/amd64", "-f", f"infra/prod/Dockerfile.{service}",
-                     "--label", f"org.opencontainers.image.revision={revision}", "-t", f"aether-personal-{service}:{release_id}", "."], cwd=snapshot)
+                command = ["docker", "buildx", "build", "--load", "--platform", "linux/amd64", "-f", f"infra/prod/Dockerfile.{service}",
+                           "--label", f"org.opencontainers.image.revision={revision}", "-t", f"aether-personal-{service}:{release_id}"]
+                if cache_root:
+                    cache = Path(cache_root).resolve() / service
+                    next_cache = cache.with_name(service + "-next")
+                    shutil.rmtree(next_cache, ignore_errors=True)
+                    if (cache / "index.json").is_file():
+                        command += ["--cache-from", f"type=local,src={cache}"]
+                    command += ["--cache-to", f"type=local,dest={next_cache},mode=max"]
+                run([*command, "."], cwd=snapshot)
+                # 每次导出到新目录再替换，避免旧版本的无用缓存层一直累积。
+                if cache_root:
+                    shutil.rmtree(cache, ignore_errors=True)
+                    next_cache.replace(cache)
             run(["docker", "save", "-o", release_dir / "images.tar", f"aether-personal-backend:{release_id}", f"aether-personal-admin:{release_id}"])
-            run(["gzip", release_dir / "images.tar"])
+            # pigz 并行压缩并保持 gzip 格式，服务器加载与既有恢复包格式保持兼容。
+            run(["pigz" if shutil.which("pigz") else "gzip", release_dir / "images.tar"])
             manifest["sha256"] = {name: sha256(release_dir / name) for name in ("source.tar.gz", "images.tar.gz", "install-release.sh")}
             (release_dir / "SHA256SUMS").write_text("".join(f"{digest}  {name}\n" for name, digest in manifest["sha256"].items()))
             (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -224,11 +242,17 @@ def main():
         backup = Path(server_result["backup"])
         if backup.parent != Path("/opt/aether-personal/backups") or backup.name != f"pre-{release_id}.dump":
             raise RuntimeError("服务器返回了不属于本次发布的备份路径")
+        print("下载并校验数据库备份……", flush=True)
+        backup_started = time.monotonic()
         with (release_dir / "database.dump.partial").open("wb") as output:
             subprocess.run([*ssh, shlex.join(["sudo", "-n", "cat", str(backup)])], stdout=output, check=True)
         if sha256(release_dir / "database.dump.partial") != server_result["backup_sha256"]:
             raise RuntimeError("异机备份校验失败；服务器备份与新后端保留")
         (release_dir / "database.dump.partial").replace(release_dir / "database.dump")
+        backup_timing = f"数据库备份下载及校验耗时 {time.monotonic() - backup_started:.1f}s\n"
+        print(backup_timing, end="", flush=True)
+        LOG.write(backup_timing)
+        LOG.flush()
 
         # 后端健康后才更新 Worker；失败保留可恢复目录，不自动回退已迁移的数据库。
         edge = snapshot / "infra/cloudflare"

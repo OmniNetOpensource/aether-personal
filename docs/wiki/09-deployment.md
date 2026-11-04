@@ -151,7 +151,7 @@ make publish-check
 make publish
 ```
 
-脚本拒绝未提交改动，获取并快进合并 `origin/main`，允许发布尚未推送的本地提交。随后从固定提交建立独立源码快照，执行 Go 构建与 vet、前端构建与类型检查、看板及 Worker 检查，构建带完整提交标签的镜像。运行期间工作区的后续修改不会进入该快照。
+脚本拒绝未提交改动，获取并快进合并 `origin/main`，允许发布尚未推送的本地提交。随后从固定提交建立独立源码快照，执行 Go 构建与 vet、前端构建与类型检查、Worker 检查，并在看板镜像构建中执行构建、类型和服务脚本检查，构建带完整提交标签的镜像。运行期间工作区的后续修改不会进入该快照。
 
 所有上传文件均有 SHA-256 摘要。主机先加载镜像和验证配置，停止 API 与管理看板写入后导出完整数据库备份，再执行 goose up 并等待新服务健康。生产 `.env` 只从当前服务器复制，Compose 项目名和数据卷沿用原值；模型、邮件与 OSS 服务配置继续使用生产数据库中的现有记录。
 
@@ -194,6 +194,10 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。
 
 工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。Node 固定为 `24.22.1`，与现有 Docker 构建镜像一致，避免工具链随 runner 更新而变化。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
+
+Actions 使用独立 Buildx builder，将后端与看板的中间构建层分别导出到本地 OCI 缓存，再由 Actions Cache 按提交保存；新 runner 优先恢复最近一次提交的缓存。每次导出后替换原缓存目录，避免历史层持续累积。缓存只包含公开源码的构建层，不包含生产配置或数据库备份。本机发布默认沿用本机 Docker 缓存；设置绝对路径环境变量 `PUBLISH_BUILD_CACHE` 时也可导入和导出同样的缓存。
+
+后端镜像将只支持 PostgreSQL 的 goose 提前到应用源码之前编译，应用代码变化不会使迁移工具的构建层失效；三个 Go 可执行文件去掉调试符号，减少镜像传输量。看板的 `npm run build` 已包含检查，发布脚本不再在宿主机重复安装和检查。Actions 安装 pigz 并行压缩镜像，本机缺少 pigz 时回退 gzip，两者仍生成相同格式的发布包。外部命令输出会记录耗时与退出码，便于区分构建、传输和主机安装耗时。
 
 发布顺序为检查与构建、上传、停写备份、迁移与启动后端、下载并校验备份、发布 Cloudflare、核对公网文件和健康状态。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
 

@@ -49,8 +49,19 @@ jobs:
             admin/package-lock.json
             infra/cloudflare/package-lock.json
 
+      # 独立 BuildKit builder 可导出中间构建层，临时 runner 从前一次提交恢复缓存。
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Restore Docker build cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/aether-build-cache
+          key: production-buildkit-${{ runner.os }}-amd64-v1-${{ github.sha }}
+          restore-keys: production-buildkit-${{ runner.os }}-amd64-v1-
+
       - name: Install backup encryption
-        run: sudo apt-get update && sudo apt-get install -y age
+        run: sudo apt-get update && sudo apt-get install -y age pigz
 
       # 凭证只写入 runner 的私有目录；主机公钥来自已核对的 Secrets，不现场信任 keyscan。
       - name: Configure deployment access
@@ -99,6 +110,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PUBLISH_BUILD_CACHE: ${{ runner.temp }}/aether-build-cache
         run: python3 scripts/publish.py --ci
 
       # 公开仓库的产物可被下载，产物目录只包含 age 密文和不含连接信息的发布摘要。
@@ -137,6 +149,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+          # age 密文不可压缩，避免上传时再次消耗 CPU 压缩。
+          compression-level: 0
 
       - name: Remove runner credentials and plaintext backups
         if: ${{ always() }}
