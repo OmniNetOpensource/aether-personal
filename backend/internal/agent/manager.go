@@ -1,9 +1,10 @@
-// 本文件在单个后端进程内调度 Main：消息提交后直接唤醒，每用户最多一个 Runner，启动与周期补查恢复持久待办。
+// 本文件在单进程内调度 Main：消息提交后直接唤醒，启动时恢复持久待办，临时失败仅延迟重试对应用户。
 
 package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -17,9 +18,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// 补查只负责找回提交与唤醒之间的中断；正常输入和名额释放都立即触发调度。
-const recoveryInterval = 5 * time.Second
+// 数据库故障退避最多十五秒；正常退出也给正在运行的任务十五秒收尾。
+const maxDatabaseRetryDelay = 15 * time.Second
 const agentDrainTimeout = 15 * time.Second
+
+// pendingUser 区分正常唤醒和临时失败退避；等待重试不占并发名额，新输入可立即重新调度。
+type pendingUser struct {
+	retryAt    time.Time
+	retryDelay time.Duration
+}
 
 // Manager 共享进程依赖，用同一把互斥锁登记 Runner 和待唤醒用户，防止空闲退出时漏掉新输入。
 type Manager struct {
@@ -32,7 +39,7 @@ type Manager struct {
 	wakeSignal   chan struct{}
 	mutex        sync.Mutex
 	runners      map[uuid.UUID]*Runner
-	pending      map[uuid.UUID]struct{}
+	pending      map[uuid.UUID]pendingUser
 	queue        []uuid.UUID
 	running      sync.WaitGroup
 }
@@ -48,17 +55,17 @@ func NewManager(pool *pgxpool.Pool, settings config.Config, serviceSettings *ser
 		toolDeps: tools.Dependencies{DatabasePool: pool, Services: serviceSettings,
 			HTTPClient: &http.Client{Timeout: 120 * time.Second}},
 		capacity: capacity, wakeSignal: make(chan struct{}, 1),
-		runners: map[uuid.UUID]*Runner{}, pending: map[uuid.UUID]struct{}{}}
+		runners: map[uuid.UUID]*Runner{}, pending: map[uuid.UUID]pendingUser{}}
 }
 
-// Wake 在输入提交后登记最新序号并立即打断尚未输出的思考；只发合并信号，不等待数据库或模型。
+// Wake 在输入提交后登记待办，并用输入序号打断尚未输出的思考；只发合并信号，不等待数据库或模型。
 // 运行中的用户也保留待唤醒标记，直到 Runner 注销后再消费，因此退出与新输入交错时不会漏跑。
 func (m *Manager) Wake(userID uuid.UUID, sequence int64) {
 	m.mutex.Lock()
 	if _, queued := m.pending[userID]; !queued {
 		m.queue = append(m.queue, userID)
 	}
-	m.pending[userID] = struct{}{}
+	m.pending[userID] = pendingUser{}
 	if runner := m.runners[userID]; runner != nil {
 		runner.newInput(sequence)
 	}
@@ -75,16 +82,21 @@ func (m *Manager) signal() {
 }
 
 // Start 恢复数据库待办并消费进程内唤醒；退出时停止创建 Runner，给已有执行十五秒完成，再取消并等待收尾。
-func (m *Manager) Start(ctx context.Context) {
+func (m *Manager) Start(ctx context.Context) error {
+	if err := m.recoverPending(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	runtimeCtx, cancelRuntime := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRuntime()
-	ticker := time.NewTicker(recoveryInterval)
-	defer ticker.Stop()
-	m.recoverPending(runtimeCtx)
 	m.signal()
 	shutdown := ctx.Done()
 	var drainTimer *time.Timer
 	var drainDeadline <-chan time.Time
+	var retryTimer *time.Timer
+	var retryReady <-chan time.Time
 	for {
 		select {
 		case <-shutdown:
@@ -93,13 +105,25 @@ func (m *Manager) Start(ctx context.Context) {
 			drainDeadline = drainTimer.C
 		case <-drainDeadline:
 			goto finished
-		case <-ticker.C:
-			if ctx.Err() == nil {
-				m.recoverPending(runtimeCtx)
-			}
+		case <-retryReady:
+			retryReady = nil
+			m.signal()
 		case <-m.wakeSignal:
 			if ctx.Err() == nil {
-				m.startPending(runtimeCtx)
+				retryAt := m.startPending(runtimeCtx)
+				// 只为最近一个失败用户的到期时间设闹钟，没有失败用户时不保留定时器。
+				if retryTimer != nil {
+					retryTimer.Stop()
+				}
+				retryReady = nil
+				if !retryAt.IsZero() {
+					if retryTimer == nil {
+						retryTimer = time.NewTimer(time.Until(retryAt))
+					} else {
+						retryTimer.Reset(time.Until(retryAt))
+					}
+					retryReady = retryTimer.C
+				}
 			}
 		}
 		m.mutex.Lock()
@@ -113,30 +137,54 @@ finished:
 	if drainTimer != nil {
 		drainTimer.Stop()
 	}
+	if retryTimer != nil {
+		retryTimer.Stop()
+	}
 	cancelRuntime()
 	m.running.Wait()
+	return nil
 }
 
-// recoverPending 从持久事实找回未处理输入和任务，也用最新序号补上遗漏的新输入打断。
-func (m *Manager) recoverPending(ctx context.Context) {
-	operation, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	users, err := database.New(m.databasePool).ListMainWork(operation)
-	if err != nil {
-		slog.Error("recover pending agents failed", "error", err)
-		return
-	}
-	for _, user := range users {
-		m.Wake(user.UserID, user.InputSequence)
+// recoverPending 只在启动时读取一次成功的待办快照；读取本身临时失败时退避重试，成功后不再全局扫描。
+func (m *Manager) recoverPending(ctx context.Context) error {
+	delay := time.Second
+	for {
+		operation, cancel := context.WithTimeout(ctx, 3*time.Second)
+		users, err := database.New(m.databasePool).ListMainWork(operation)
+		cancel()
+		if err == nil {
+			for _, user := range users {
+				m.Wake(user.UserID, user.InputSequence)
+			}
+			return nil
+		}
+		if ctx.Err() != nil || !temporaryDatabaseError(err) {
+			return fmt.Errorf("recover pending agents: %w", err)
+		}
+		slog.Error("recover pending agents failed; retrying startup", "error", err, "retry_delay", delay)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, maxDatabaseRetryDelay)
 	}
 }
 
 // startPending 按首次唤醒顺序分配本地名额；活跃用户的补充标记留到注销，等待用户不会被它阻塞。
-func (m *Manager) startPending(ctx context.Context) {
+func (m *Manager) startPending(ctx context.Context) (retryAt time.Time) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	waiting := m.queue[:0]
 	for _, userID := range m.queue {
+		pending := m.pending[userID]
+		if time.Until(pending.retryAt) > 0 {
+			waiting = append(waiting, userID)
+			if retryAt.IsZero() || pending.retryAt.Before(retryAt) {
+				retryAt = pending.retryAt
+			}
+			continue
+		}
 		if m.runners[userID] != nil || len(m.runners) >= m.capacity {
 			waiting = append(waiting, userID)
 			continue
@@ -148,12 +196,23 @@ func (m *Manager) startPending(ctx context.Context) {
 		m.running.Add(1)
 		go func() {
 			defer m.running.Done()
-			runner.run(ctx)
+			err := runner.run(ctx)
+			retrying := err != nil && ctx.Err() == nil && temporaryDatabaseError(err)
 			m.mutex.Lock()
 			delete(m.runners, userID)
+			// 失败用户重新排到队尾并让出名额；若期间已有新输入，沿用其立即唤醒，不覆盖为退避。
+			if _, queued := m.pending[userID]; retrying && !queued {
+				delay := min(max(pending.retryDelay*2, time.Second), maxDatabaseRetryDelay)
+				m.pending[userID] = pendingUser{retryAt: time.Now().Add(delay), retryDelay: delay}
+				m.queue = append(m.queue, userID)
+			}
 			m.mutex.Unlock()
+			if err != nil && ctx.Err() == nil {
+				slog.Error("agent run stopped", "user_id", userID, "retrying", retrying, "error", err)
+			}
 			m.signal()
 		}()
 	}
 	m.queue = waiting
+	return retryAt
 }

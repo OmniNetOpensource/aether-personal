@@ -1,4 +1,4 @@
-// 本命令用隔离数据库、真实单后端进程与受控 Gemini 响应验证进程内调度、输入交接和重启恢复；不调用外部模型。
+// 本命令用隔离数据库、真实单后端和受控 Gemini 响应验证直接唤醒、单用户故障重试与启动恢复；不调用外部模型。
 
 package main
 
@@ -34,11 +34,12 @@ import (
 
 // fakeModel 通过闸门区分首段输出前后的等待，记录新输入和重启引起的取消与重试。
 type fakeModel struct {
-	mutex   sync.Mutex
-	gates   map[string]chan struct{}
-	stream  map[string]bool
-	starts  map[string]int
-	cancels map[string]int
+	databasePool *pgxpool.Pool
+	mutex        sync.Mutex
+	gates        map[string]chan struct{}
+	stream       map[string]bool
+	starts       map[string]int
+	cancels      map[string]int
 }
 
 // serve 从真实请求的任务快照与工具回执决定下一步，驱动完整的登记、选择、回复与完成链路。
@@ -251,7 +252,7 @@ func main() {
 	build := exec.CommandContext(ctx, "go", "build", "-race", "-o", executable, "./cmd/server")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	must(build.Run())
-	fake := &fakeModel{gates: map[string]chan struct{}{}, stream: map[string]bool{}, starts: map[string]int{}, cancels: map[string]int{}}
+	fake := &fakeModel{databasePool: pool, gates: map[string]chan struct{}{}, stream: map[string]bool{}, starts: map[string]int{}, cancels: map[string]int{}}
 	model := httptest.NewServer(http.HandlerFunc(fake.serve))
 	defer model.Close()
 	key := make([]byte, 32)
@@ -276,6 +277,7 @@ func main() {
 		}
 		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
+		_, _ = pool.Exec(cleanup, "DROP TRIGGER IF EXISTS verify_runtime_delete_fault ON messages; DROP TRIGGER IF EXISTS verify_runtime_step_fault ON steps; DROP FUNCTION IF EXISTS verify_runtime_fault(); DROP TABLE IF EXISTS verify_runtime_faults; DROP SEQUENCE IF EXISTS verify_runtime_fault_attempts")
 		_, _ = pool.Exec(cleanup, "DELETE FROM users WHERE email LIKE '%@runtime.invalid'; DELETE FROM service_settings WHERE service='ikun_gemini'")
 	}()
 	// 同一端口先停后启，保持任意时刻只有一个执行进程；日志按重启次数分文件保存。
@@ -374,7 +376,9 @@ func main() {
 				c.mutex.Unlock()
 			}
 		}()
-		c.send(ctx, label, c.clientID)
+		if label != "" {
+			c.send(ctx, label, c.clientID)
+		}
 		return c
 	}
 	// 完成以数据库正文、任务状态和持久待办共同判断，浏览器推送另外检查。
@@ -444,10 +448,11 @@ func main() {
 	fake.release("disconnected")
 	complete(disconnected, "disconnected")
 	fmt.Println("PASS output ordering and work survives browser disconnect")
-	// 绕过 WebSocket 直接提交输入，不发送任何通知，验证周期补查仍找回持久工作。
+	// 直接写库不再触发运行；只有对应用户的新唤醒或进程启动恢复能调度它。
 	persisted := newClient("before-recovery", false)
 	complete(persisted, "before-recovery")
-	insert := func(c *client, label string) {
+	insert := func(c *client, label string) uuid.UUID {
+		id := uuid.New()
 		must(pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 			q := database.New(tx)
 			if err := q.LockUserMessages(ctx, c.userID); err != nil {
@@ -457,14 +462,94 @@ func main() {
 			if err != nil {
 				return err
 			}
-			id := uuid.New()
 			_, err = q.InsertUserMessage(ctx, database.InsertUserMessageParams{UserID: c.userID, ClientMessageID: &id, Content: content})
 			return err
 		}))
+		return id
 	}
-	insert(persisted, "missed-wake")
-	complete(persisted, "missed-wake")
-	fmt.Println("PASS periodic recovery without an execution notification")
+	// 只在本专用验证库安装故障触发器；序列不随事务回滚，用它观察真实失败与退避重试次数。
+	_, err = pool.Exec(ctx, `
+CREATE TABLE verify_runtime_faults(user_id uuid PRIMARY KEY, phase text NOT NULL, error_code text NOT NULL);
+CREATE SEQUENCE verify_runtime_fault_attempts;
+CREATE FUNCTION verify_runtime_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE target_user uuid; failure_code text;
+BEGIN
+    IF TG_OP='DELETE' THEN target_user := OLD.user_id; ELSE target_user := NEW.user_id; END IF;
+    SELECT error_code INTO failure_code FROM verify_runtime_faults WHERE user_id=target_user AND phase=TG_TABLE_NAME;
+    IF FOUND THEN
+        PERFORM nextval('verify_runtime_fault_attempts');
+        RAISE EXCEPTION USING ERRCODE=failure_code, MESSAGE='local runtime verification fault';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$;
+CREATE TRIGGER verify_runtime_delete_fault BEFORE DELETE ON messages FOR EACH ROW EXECUTE FUNCTION verify_runtime_fault();
+CREATE TRIGGER verify_runtime_step_fault BEFORE INSERT ON steps FOR EACH ROW EXECUTE FUNCTION verify_runtime_fault();`)
+	must(err)
+	attempts := func() int {
+		var value int
+		must(pool.QueryRow(ctx, "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM verify_runtime_fault_attempts").Scan(&value))
+		return value
+	}
+	untouchedID := insert(persisted, "no-global-scan")
+	failed := newClient("", false)
+	_, err = pool.Exec(ctx, "INSERT INTO messages(user_id,role,content,generating) VALUES($1,'assistant','{\"role\":\"assistant\"}',true)", failed.userID)
+	must(err)
+	_, err = pool.Exec(ctx, "INSERT INTO verify_runtime_faults VALUES($1,'messages','40001')", failed.userID)
+	must(err)
+	failed.send(ctx, "temporary-init", failed.clientID)
+	wait(ctx, "initialization failure injected", 2*time.Second, func() bool { return attempts() >= 1 })
+	healthy := newClient("healthy-during-retry", false)
+	complete(healthy, "healthy-during-retry")
+	observation := time.Now()
+	wait(ctx, "no global scan while one user retries", 8*time.Second, func() bool {
+		if fake.count("no-global-scan", false) != 0 {
+			panic("local retry scanned and started another user's unwoken input")
+		}
+		return time.Since(observation) >= 6*time.Second
+	})
+	if attempts() < 3 || attempts() > 5 {
+		panic("temporary failure did not use per-user backoff")
+	}
+	var markedFailed bool
+	must(pool.QueryRow(ctx, "SELECT main_failed_through_sequence IS NOT NULL FROM users WHERE id=$1", failed.userID).Scan(&markedFailed))
+	if markedFailed {
+		panic("temporary database failure was marked as a business failure")
+	}
+	_, err = pool.Exec(ctx, "DELETE FROM verify_runtime_faults WHERE user_id=$1", failed.userID)
+	must(err)
+	complete(failed, "temporary-init")
+	persisted.send(ctx, "no-global-scan", untouchedID)
+	complete(persisted, "no-global-scan")
+	fmt.Println("PASS initialization retries only the failed user, frees capacity, and never scans global work")
+	// 同样覆盖运行循环里的临时故障；新的用户输入解除退避，永久错误则写失败位置并停止。
+	loopFailure := newClient("", false)
+	_, err = pool.Exec(ctx, "INSERT INTO verify_runtime_faults VALUES($1,'steps','55P03')", loopFailure.userID)
+	must(err)
+	before := attempts()
+	loopFailure.send(ctx, "temporary-loop", loopFailure.clientID)
+	wait(ctx, "loop failure retries", 4*time.Second, func() bool { return attempts() >= before+2 })
+	_, err = pool.Exec(ctx, "DELETE FROM verify_runtime_faults WHERE user_id=$1", loopFailure.userID)
+	must(err)
+	loopFailure.send(ctx, "supplement-retry", uuid.New())
+	complete(loopFailure, "temporary-loop")
+	permanent := newClient("", false)
+	_, err = pool.Exec(ctx, "INSERT INTO verify_runtime_faults VALUES($1,'steps','22023')", permanent.userID)
+	must(err)
+	before = attempts()
+	permanent.send(ctx, "permanent-error", permanent.clientID)
+	wait(ctx, "permanent database failure stops", 2*time.Second, func() bool {
+		must(pool.QueryRow(ctx, "SELECT main_failed_through_sequence IS NOT NULL FROM users WHERE id=$1", permanent.userID).Scan(&markedFailed))
+		return markedFailed
+	})
+	observation = time.Now()
+	wait(ctx, "permanent error is not retried", 3*time.Second, func() bool {
+		if attempts() != before+1 {
+			panic("permanent database error was retried")
+		}
+		return time.Since(observation) >= 2*time.Second
+	})
+	fmt.Println("PASS runtime retry, fresh input during backoff and permanent failure exclusion")
 	// 先杀掉执行进程并等待退出，再持久化一条离线输入；新进程同时恢复进行中的任务和未唤醒输入。
 	crashed := newClient("crash", true)
 	wait(ctx, "crash work started", 3*time.Second, func() bool { return fake.count("crash", false) == 1 })
@@ -472,7 +557,19 @@ func main() {
 	<-current.exit
 	current.dead = true
 	insert(persisted, "offline-input")
+	// 启动读取暂时超时后会重新读取，成功恢复一次后彻底停止全局补查。
+	lock, err := pool.Begin(ctx)
+	must(err)
+	defer lock.Rollback(ctx)
+	_, err = lock.Exec(ctx, "LOCK TABLE users IN ACCESS EXCLUSIVE MODE")
+	must(err)
 	current = start()
+	wait(ctx, "startup snapshot retries after a temporary timeout", 5*time.Second, func() bool {
+		log, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("server-%d.log", len(processes)-1)))
+		must(err)
+		return strings.Contains(string(log), "retrying startup")
+	})
+	must(lock.Commit(ctx))
 	wait(ctx, "startup resumes interrupted task", 3*time.Second, func() bool { return fake.count("crash", false) == 2 })
 	fake.release("crash")
 	complete(crashed, "crash")

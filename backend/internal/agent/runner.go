@@ -59,8 +59,8 @@ func (r *Runner) newInput(sequence int64) {
 	}
 }
 
-// run 在用户独占的协程里恢复中断记录，再按持久待办循环执行；没有工作就返回，由 Manager 交接后续唤醒。
-func (r *Runner) run(parent context.Context) {
+// run 在用户独占的协程里恢复中断记录，再按持久待办循环执行；临时数据库错误返回 Manager 退避重试。
+func (r *Runner) run(parent context.Context) error {
 	queries := database.New(r.databasePool)
 	// 运行结束刷新其他连接的消息与思考状态，浏览器连接的生命周期不影响本次执行。
 	defer func() {
@@ -73,27 +73,23 @@ func (r *Runner) run(parent context.Context) {
 	// 先收尾上次进程退出留下的记录：进行中的模型调用记为中断，未结束的步骤以中断收尾。
 	// 它们只供看板查看，不影响下面按消息尾部接着运行。
 	if err := queries.InterruptModelCalls(parent, r.userID); err != nil {
-		slog.Error("recover model call journal failed", "error", err)
-		return
+		return fmt.Errorf("recover model call journal: %w", err)
 	}
 	// 单进程内没有其他 Runner，清掉上次中断且未向用户发布的占位。
 	if err := queries.DiscardGeneratingReply(parent, r.userID); err != nil {
-		slog.Error("recover incomplete reply", "error", err)
-		return
+		return fmt.Errorf("recover incomplete reply: %w", err)
 	}
 	interrupted := "interrupted before the step finished"
 	if err := queries.FailUnfinishedSteps(parent, database.FailUnfinishedStepsParams{UserID: r.userID, Error: &interrupted}); err != nil {
-		slog.Error("recover unfinished steps failed", "error", err)
-		return
+		return fmt.Errorf("recover unfinished steps: %w", err)
 	}
 	// 消息尾部已经回复完毕、或停在上次失败处，就直接结束，让调度循环把名额让给其他 Agent。
 	hasWork, err := queries.HasMainWork(parent, r.userID)
 	if err != nil {
-		slog.Error("check Main work failed", "error", err)
-		return
+		return fmt.Errorf("check Main work: %w", err)
 	}
 	if !hasWork {
-		return
+		return nil
 	}
 	// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 	var through int64
@@ -135,16 +131,20 @@ func (r *Runner) run(parent context.Context) {
 	}
 	if loopErr != nil {
 		if parent.Err() != nil {
-			return
+			return nil
+		}
+		// 临时数据库故障保留原持久状态，交给 Manager 延迟重试本用户，不写入业务失败位置。
+		if temporaryDatabaseError(loopErr) {
+			return loopErr
 		}
 		slog.Error("agent run failed", "user_id", r.userID, "error", loopErr)
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := r.failAgent(cleanup, through, loopErr); err != nil {
-			slog.Error("save agent failure failed", "error", err)
+			return fmt.Errorf("save agent failure: %w", err)
 		}
 	}
-	return
+	return nil
 }
 
 // executeToolCalls 并行执行尚无回执的工具，每个调用仅在保存结果时使用连接池。

@@ -54,8 +54,14 @@ func main() {
 		os.Exit(1)
 	}
 	manager := agent.NewManager(databasePool, appConfig, serviceSettings)
-	managerDone := make(chan struct{})
-	go func() { defer close(managerDone); manager.Start(ctx) }()
+	managerDone := make(chan error, 1)
+	go func() {
+		err := manager.Start(ctx)
+		if err != nil {
+			stop()
+		}
+		managerDone <- err
+	}()
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
@@ -74,5 +80,8 @@ func main() {
 	}
 	stop()
 	<-httpDone
-	<-managerDone
+	if err := <-managerDone; err != nil {
+		slog.Error("agent manager stopped", "error", err)
+		os.Exit(1)
+	}
 }
