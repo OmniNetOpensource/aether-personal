@@ -43,26 +43,12 @@ type MainWork struct {
 	UserID uuid.UUID
 }
 
-type MemoryRoot struct {
+type MemoryFile struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
+	Path      string
 	Content   string
-	Version   int64
 	UpdatedAt time.Time
-}
-
-type MemoryTopic struct {
-	ID                       uuid.UUID
-	UserID                   uuid.UUID
-	Topic                    string
-	Title                    string
-	Summary                  string
-	Content                  string
-	SourceMessageID          uuid.UUID
-	Version                  int64
-	UpdatedAt                time.Time
-	DeletedAt                *time.Time
-	ForgottenThroughSequence *int64
 }
 
 type Message struct {
