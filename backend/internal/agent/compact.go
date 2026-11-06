@@ -1,4 +1,4 @@
-// 本文件负责上下文准备与压缩：普通请求按组装规则排好当前世代的消息，压缩达到阈值时用一条摘要开启新世代再继续对话；
+// 本文件负责上下文准备与压缩：压缩请求保留普通请求的指令、历史前缀和工具定义，在末尾要求摘要，再开启新世代继续对话；
 // 消息尾部是还没回复的用户消息时只压它之前的历史，让它以原文接在摘要之后发给模型，不看闲置时长。
 // 原始消息始终保留在数据库里，压缩失败就用原上下文，不丢任何内容。
 
@@ -81,17 +81,23 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (
 	} else {
 		keepFrom = len(rows)
 	}
+	// 只有实际对话计入压缩覆盖位置；没有原文、只剩上一条摘要时，不把刚生成的摘要再压一遍。
 	rowsToCompact := rows[:keepFrom]
-	// 待压范围里没有原文、只剩上一条摘要（同一轮重试时摘要已落库）时，不把摘要再压一遍。
-	if len(rowsToCompact) == 0 || (len(rowsToCompact) == 1 && rowsToCompact[0].IsSummary) {
+	var through int64
+	for _, row := range rowsToCompact {
+		if !row.IsSummary {
+			through = max(through, row.Sequence)
+		}
+	}
+	if through == 0 {
 		return buildAgentRequest(rows, model, outputLimit)
 	}
-	// 组装压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，摘要要求作为最后一条 user 消息；
-	// 压缩只许产出摘要正文：请求明确禁止调用任何工具，避免模型顺着历史里的工具轨迹继续干活而不是写摘要。
+	// 沿用普通请求的消息前缀与上一次 Main 的供应商工具定义，只在末尾追加压缩要求；仍禁止实际工具调用。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
 	summaryRequest := modelRequest{Model: model, Messages: compactMessages, MaxTokens: outputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
-	// 摘要覆盖位置停在待压缩历史里最后一条原文上；待压范围按序号排列，最后一条就是序号最大的原文。
-	through := rowsToCompact[len(rowsToCompact)-1].Sequence
+	if err := json.Unmarshal(usage.ProviderTools, &summaryRequest.ProviderTools); err != nil {
+		return modelRequest{}, fmt.Errorf("decode previous Main tool definitions: %w", err)
+	}
 	// 先登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
 	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: model})
 	if err != nil {

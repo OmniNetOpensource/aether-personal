@@ -135,12 +135,9 @@ func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, ou
 	return modelRequest{InputSequence: inputSequence, RequireOutput: requireOutput, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
-// buildCompactRequestMessages 组装一次压缩请求：压缩指令作为不可见 user 消息在前，待压历史按同一组装规则居中，末尾一条用户消息提出摘要要求。
+// buildCompactRequestMessages 复用普通请求的固定指令和历史前缀，包括已读取的工具结果，只在末尾追加压缩要求。
 func buildCompactRequestMessages(rows []database.ListAgentContextRowsRow, summaryPrompt string) []json.RawMessage {
-	compactInstructionsMessage, _ := json.Marshal(map[string]string{"role": "user", "content": compactInstructions})
-	summaryRequestMessage, _ := json.Marshal(map[string]string{"role": "user", "content": summaryPrompt})
-	messages := append([]json.RawMessage{compactInstructionsMessage}, assembleMessages(rows)...)
-	return append(messages, summaryRequestMessage)
+	return append(buildRequestMessages(rows), runtimeMessage("compaction", compactInstructions+"\n\n"+summaryPrompt))
 }
 
 // validateRequestMessages 是发给模型供应商前的最后一道检查：每个工具调用都有回执，且最后一条是 user 或 tool（有待模型回应的内容）。

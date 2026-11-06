@@ -118,7 +118,8 @@ INSERT INTO messages (user_id, role, content, step_id, is_summary, summary_throu
 VALUES ($1, 'user', $2, $3, true, $4);
 
 -- name: GetLastContextUsage :one
-SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
+SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens,
+    coalesce(request_body -> 'tools', '[]'::jsonb)::jsonb AS provider_tools
 FROM model_calls WHERE user_id = sqlc.arg(user_id)
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL
 ORDER BY started_at DESC LIMIT 1;

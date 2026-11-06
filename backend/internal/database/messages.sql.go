@@ -79,7 +79,8 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 }
 
 const getLastContextUsage = `-- name: GetLastContextUsage :one
-SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
+SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens,
+    coalesce(request_body -> 'tools', '[]'::jsonb)::jsonb AS provider_tools
 FROM model_calls WHERE user_id = $1
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL AND request_body IS NOT NULL
 ORDER BY started_at DESC LIMIT 1
@@ -88,12 +89,13 @@ ORDER BY started_at DESC LIMIT 1
 type GetLastContextUsageRow struct {
 	RequestedModel string
 	InputTokens    int32
+	ProviderTools  []byte
 }
 
 func (q *Queries) GetLastContextUsage(ctx context.Context, userID uuid.UUID) (GetLastContextUsageRow, error) {
 	row := q.db.QueryRow(ctx, getLastContextUsage, userID)
 	var i GetLastContextUsageRow
-	err := row.Scan(&i.RequestedModel, &i.InputTokens)
+	err := row.Scan(&i.RequestedModel, &i.InputTokens, &i.ProviderTools)
 	return i, err
 }
 

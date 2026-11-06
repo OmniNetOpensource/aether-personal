@@ -16,7 +16,9 @@ type Request struct {
 	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
 	InputSequence int64 `json:"-"`
 	// RequireOutput 表示用户还没收到正文，不能把无正文、无工具调用的响应当成完成。
-	RequireOutput bool              `json:"-"`
+	RequireOutput bool `json:"-"`
+	// ProviderTools preserves the previous provider tool declarations for compaction.
+	ProviderTools []json.RawMessage `json:"-"`
 	Reasoning     map[string]any    `json:"reasoning,omitempty"`
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`

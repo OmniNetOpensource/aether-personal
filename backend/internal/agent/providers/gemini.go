@@ -251,6 +251,10 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 	if len(declarations) > 0 {
 		body["tools"] = []any{map[string]any{"functionDeclarations": declarations}}
 	}
+	// 压缩直接复用同渠道上次发送的工具声明，包括登记阶段的受限集合；NONE 只限制调用，不删除定义。
+	if prepared.ProviderTools != nil {
+		body["tools"] = prepared.ProviderTools
+	}
 	if len(prepared.ToolChoice) > 0 {
 		// 禁止工具的选择（如上下文压缩）翻成 NONE：即使请求里没有工具声明，也明确告诉模型不要输出工具调用；
 		// 指定某个工具的选择仍按原来的 ANY 加白名单处理。
