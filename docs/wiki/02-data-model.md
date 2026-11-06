@@ -21,7 +21,6 @@ erDiagram
     users ||--o{ sessions : "登录"
     users ||--o{ messages : "拥有"
     users ||--o{ tasks : "需求队列"
-    tasks ||--o{ messages : "一项任务的多条助手回复"
     tasks ||--o{ task_messages : "关联消息"
     messages ||--o{ task_messages : "需求与补充来源"
     users ||--o{ memory_files : "记忆根文档与主题文件"
@@ -84,7 +83,6 @@ erDiagram
 | `content` | jsonb | 按 OpenRouter 格式保存的内容；普通请求组装时直接使用原文，只删前端展示字段，第一条由代码常量的不可见 user 指令注入、不落库 |
 | `sender` | text | 别人发来的消息填发送方：`user` / `main` / `system`；否则为空 |
 | `step_id` | uuid | 模型输出的消息指向产生它的那次请求；工具结果和别人发来的消息为空 |
-| `task_id` | uuid，可空 | 助手消息的唯一任务归属，在请求占位时绑定；用户输入、内部登记和无法可靠回填的旧历史为空（`00036`） |
 | `client_message_id` | uuid | App 生成，同一用户下唯一，只用于识别重发（见 [04 消息与实时通信](04-messaging.md#消息-id-与重发)） |
 | `is_summary` | boolean | 是否为压缩摘要，默认 false |
 | `summary_through_sequence` | bigint | 摘要覆盖到的原始消息位置；仅摘要非空 |
@@ -106,7 +104,7 @@ Main 按任务登记完整要求，补充说明更新同一任务。每个用户
 | `status` | text | `queued`、`in_progress`、`waiting`、`completed`、`cancelled`；默认 `queued` |
 | `created_at`、`updated_at` | timestamptz | 创建与最后变更时间 |
 
-上述字段均非空。`tasks_one_in_progress_per_user` 部分唯一索引保证每用户最多一项 `in_progress`。助手记录通过 `messages.task_id` 保存单一任务归属，一个任务可有多条可见回复。任务完成状态独立于某一条消息，未来可接入文件交付，详见 [11](11-tasks.md)。
+上述字段均非空。`tasks_one_in_progress_per_user` 部分唯一索引保证每用户最多一项 `in_progress`。任务只保存需求和状态，不关联助手消息或文件产物，详见 [11](11-tasks.md)。
 
 ### `task_messages`
 
@@ -117,7 +115,7 @@ Main 按任务登记完整要求，补充说明更新同一任务。每个用户
 | `task_id` | uuid，非空 | 引用 `tasks.id` |
 | `message_id` | uuid，非空 | 引用 `messages.id` |
 
-一个任务可以由多条输入共同说明，一条输入也可以提出多个任务，因此用户输入通过此表保存多对多关联，不复制消息正文。`related_message_ids` 不是任务表里的数组列；查询时合并这些输入与 `messages.task_id` 指向该任务的可见助手回复，按消息序号返回去重后的 ID 列表。登记输入和关联消息在同一事务里提交。
+一个任务可以由多条输入共同说明，一条输入也可以提出多个任务，因此用户输入通过此表保存多对多关联，不复制消息正文。`related_message_ids` 不是任务表里的数组列；查询时只返回相关用户输入的 ID，按消息序号排列。登记输入和关联消息在同一事务里提交。
 
 ### `memory_files`
 
@@ -242,7 +240,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 
 ## 外键
 
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`tasks`、`task_messages`、`memory_files`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`messages.task_id → tasks`、`tasks → users`、`task_messages → tasks`、`task_messages → messages`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`tasks`、`task_messages`、`memory_files`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`tasks → users`、`task_messages → tasks`、`task_messages → messages`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
 
 ## 索引
 
@@ -284,7 +282,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00035_simplify_memory_files.sql` | 单一 memory 文件工具的文本存储；迁移旧正文并移除旧表 | `开发中` |
 | `00038_memory_context_messages.sql` | 旧根快照原型的通知排除；现已取消自动快照，旧行仅供审计 | `历史` |
 | `00039_drop_task_source_sequence.sql` | 删除冗余任务来源序号，保留按 ID 列举索引；下一项任务由模型选择 | `开发中` |
-| `00036_associate_assistant_messages_with_tasks.sql` | 一条助手回复只归属一个任务，保留旧历史，为后续多种交付形式保持任务状态独立 | `开发中` |
+| `00036_associate_assistant_messages_with_tasks.sql` | 旧自动消息归属原型，已由 `00041` 替代 | `历史` |
+| `00041_remove_assistant_task_binding.sql` | 移除助手消息的任务 ID 与强制归属约束；只保留任务和相关用户输入 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。

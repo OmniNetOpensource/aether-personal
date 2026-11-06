@@ -130,7 +130,7 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, jo
 		return response, false, fmt.Errorf("model provider returned invalid assistant message")
 	}
 	// 登记阶段没有回答任务，只说正文不能推进需求；实际执行允许正文或工具交付，空闲允许静默结束。
-	if prepared.RequireOutput && len(message.ToolCalls) == 0 && (AssistantTextToUser(response.Choices[0].Message) == "" || (journal.Purpose == "agent" && prepared.TaskID == nil)) {
+	if prepared.RequireOutput && len(message.ToolCalls) == 0 && (AssistantTextToUser(response.Choices[0].Message) == "" || (journal.Purpose == "agent" && prepared.ToolOnly)) {
 		return response, false, errEmptyReply
 	}
 	outcome = "succeeded"

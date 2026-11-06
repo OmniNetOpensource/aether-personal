@@ -45,13 +45,8 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (uuid.UU
 
 const getActiveTask = `-- name: GetActiveTask :one
 SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress'
 `
@@ -101,13 +96,8 @@ func (q *Queries) GetNextTaskInput(ctx context.Context, userID uuid.UUID) (GetNe
 
 const getTask = `-- name: GetTask :one
 SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.id = $2
 `
@@ -166,13 +156,8 @@ func (q *Queries) LinkTaskMessage(ctx context.Context, arg LinkTaskMessageParams
 
 const listTasks = `-- name: ListTasks :many
 SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1
     AND ($2::boolean OR t.status NOT IN ('completed', 'cancelled'))

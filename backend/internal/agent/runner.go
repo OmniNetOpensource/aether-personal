@@ -302,7 +302,7 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, stepID uuid.UUID, 
 				cancel(errNewInput)
 				return errNewInput
 			}
-			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID, TaskID: prepared.TaskID})
+			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID})
 			return err
 		})
 	}
@@ -323,18 +323,18 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, stepID uuid.UUID, 
 			return false, err
 		}
 	}
-	return false, r.saveReply(ctx, stepID, replyID, prepared.TaskID, response)
+	return false, r.saveReply(ctx, stepID, replyID, prepared.ToolOnly, response)
 }
 
-// saveReply 在一个事务里完成助手记录与步骤：只有已绑定任务的正文成为用户回复，登记与空闲输出保留为不可见轨迹。
+// saveReply 在一个事务里完成助手记录与步骤：正文独立成为用户回复，登记与选择阶段只保留内部轨迹。
 // 工具调用从此成为历史的一部分，下一轮按消息尾部看到它们没有回执，就去执行。
-func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, taskID *uuid.UUID, response chatResponse) error {
+func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, toolOnly bool, response chatResponse) error {
 	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: taskID != nil && AssistantTextToUser(response.Choices[0].Message) != ""})
+		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: !toolOnly && AssistantTextToUser(response.Choices[0].Message) != ""})
 		if err != nil {
 			return err
 		}

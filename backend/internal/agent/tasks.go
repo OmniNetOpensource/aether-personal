@@ -79,11 +79,9 @@ func (r *Runner) buildTaskRequest(ctx context.Context, rows []database.ListAgent
 	if err != nil {
 		return modelRequest{}, err
 	}
-	// 登记可以涉及多个需求，只有实际执行当前任务时才允许产生用户回复；任务归属随请求快照固定。
-	if state.NextInput == nil && state.ActiveTask != nil {
-		prepared.TaskID = &state.ActiveTask.ID
-	}
-	// 尚有输入或任务时不能空转；没有任务时允许静默结束，未来文件交付也不需要额外正文才能收尾。
+	// 登记和选择只允许内部工具调用；普通正文独立保存，不关联任务。
+	prepared.ToolOnly = state.NextInput != nil || state.NeedsTaskSelection
+	// 尚有输入或任务时不能空转；没有任务时允许静默结束。
 	prepared.RequireOutput = state.NextInput != nil || state.ActiveTask != nil || state.NeedsTaskSelection
 	if state.NeedsTaskSelection {
 		prepared.Tools = tools.TaskSelectionDefinitions()

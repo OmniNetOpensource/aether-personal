@@ -11,7 +11,7 @@ flowchart TD
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
             MAIN["Main Runtime：messageList 上下文 · 按用户串行处理"]
-            TASKS["需求队列：登记输入 · 更新任务<br/>每用户一项执行中 · 按顺序领取"]
+            TASKS["需求队列：登记输入 · 更新任务<br/>每用户一项执行中 · 模型选择下一项"]
             SEARCH["search_message"]
             READ["read_message"]
             MEMORY["memory 工具渐进加载<br/>需要时先读 memory.md 索引 · 再读相关主题"]
@@ -32,7 +32,7 @@ flowchart TD
         ROUTING -->|"取得用户执行锁并核对归属"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
-        TASKS <-->|"任务与输入位置 / 回执同事务"| DB
+        TASKS <-->|"任务、相关用户输入与登记位置 / 回执同事务"| DB
         SEARCH <-->|"按用户搜索历史"| DB
         READ <-->|"按 ID 读取"| DB
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB

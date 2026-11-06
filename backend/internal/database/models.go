@@ -67,7 +67,6 @@ type Message struct {
 	Visible                bool
 	Generating             bool
 	ChatUpdatedSequence    *int64
-	TaskID                 *uuid.UUID
 }
 
 type ModelCall struct {

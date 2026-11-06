@@ -83,7 +83,7 @@ func (f *fakeModel) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	part := map[string]any{"text": "idle"}
+	part := map[string]any{"text": ""}
 	label := ""
 	var gate chan struct{}
 	streaming := false

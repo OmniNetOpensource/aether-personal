@@ -107,7 +107,6 @@ sequenceDiagram
 | `id` | 显示 ID：用户与 Main 的消息都用所在行 ID（Main 一行至多一条正文消息） |
 | `position` | 所在行的 ID，用于显示排序和向前翻页 |
 | `client_message_id` | 仅用户消息有；对应 App 发送时生成的 ID |
-| `task_id` | 新助手回复的唯一任务 ID；同一任务可以有多条回复，旧历史和用户消息不带此字段（`00036`） |
 | `sender` | `user` 或 `main` |
 | `text` | 正文文字，兼容旧客户端 |
 | `parts` | 用户消息的有序多模态内容；图片项的 `url` 是本次读取生成的临时预览地址 |

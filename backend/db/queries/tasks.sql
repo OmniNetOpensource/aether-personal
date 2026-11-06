@@ -11,13 +11,8 @@ UPDATE users SET task_input_through_sequence = $2 WHERE id = $1;
 
 -- name: ListTasks :many
 SELECT sqlc.embed(t), ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = sqlc.arg(user_id)
     AND (sqlc.arg(include_closed)::boolean OR t.status NOT IN ('completed', 'cancelled'))
@@ -27,25 +22,15 @@ LIMIT 100;
 
 -- name: GetTask :one
 SELECT sqlc.embed(t), ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.id = $2;
 
 -- name: GetActiveTask :one
 SELECT sqlc.embed(t), ARRAY(
-    SELECT related.id FROM (
-        SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-        WHERE tm.task_id = t.id
-        UNION
-        SELECT m.id, m.sequence FROM messages AS m
-        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
-    ) AS related ORDER BY related.sequence
+    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
+    WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress';
 

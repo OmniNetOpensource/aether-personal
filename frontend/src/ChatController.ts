@@ -8,10 +8,9 @@ import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js
 import { messageImageSchema } from './messageAttachments.js';
 import type { MessageImage, MessagePart } from './messageAttachments.js';
 
-// ChatMessage 是服务器已保存的聊天消息，保留助手回复的任务归属；发送中的内容留在输入框里。
+// ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
 export interface ChatMessage {
   id: string;
-  taskID: string | null;
   text: string;
   parts: MessagePart[];
   isUser: boolean;
@@ -391,7 +390,6 @@ export class ChatController {
     for (const row of page.messages) {
       const message: ChatMessage = {
         id: row.id,
-        taskID: row.task_id ?? null,
         text: row.text,
         parts: row.parts ?? (row.text ? [{ type: 'text', text: row.text }] : []),
         isUser: row.sender === 'user',

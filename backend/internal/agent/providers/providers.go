@@ -8,7 +8,6 @@ import (
 	"net/http"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
-	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -16,8 +15,8 @@ import (
 type Request struct {
 	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
 	InputSequence int64 `json:"-"`
-	// TaskID 是本轮回复的唯一任务归属，仅运行时使用，不发送给模型供应商；登记与空闲决策为空。
-	TaskID *uuid.UUID `json:"-"`
+	// ToolOnly 限定登记和任务选择阶段仅产生内部工具调用，不公开正文。
+	ToolOnly bool `json:"-"`
 	// RequireOutput 表示本轮仍有待办，不能把既无正文又无工具调用的响应当成完成。
 	RequireOutput bool `json:"-"`
 	// ProviderTools 供压缩复用上次请求的供应商工具定义，避免重新选择工具集合改写前缀；不参与统一协议序列化。
