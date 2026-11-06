@@ -10,9 +10,11 @@ flowchart TD
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
             MAIN["Main Runtime：messageList 上下文 · 按用户串行处理"]
+            TASKS["需求队列：登记输入 · 更新任务<br/>每用户一项执行中 · 按顺序领取"]
             SEARCH["search_message"]
             READ["read_message"]
 
+            MAIN <-->|"登记补充 / 继续当前任务"| TASKS
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
             MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
@@ -25,6 +27,7 @@ flowchart TD
         MESSAGES -->|"消息保存后经 NOTIFY 触发 main"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
+        TASKS <-->|"任务与输入位置 / 回执同事务"| DB
         SEARCH <-->|"按用户搜索历史"| DB
         READ <-->|"按 ID 读取"| DB
 

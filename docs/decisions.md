@@ -31,7 +31,7 @@
 | Agent 运行过程 | 2026-10-30 新增“运行过程”页并保留模型调用列表；按 Agent 时间降序（最新在上）显示输入、推理、工具调用与结果、压缩摘要、失败请求和不可见指令，长内容截断后按需加载；不显示待读消息与工具时长 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：运行概览汇总与服务配置明细两处显示六个服务的剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel 不接受产品 API Key）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
-| 任务 | 原为虚拟概念、实体是 Subagent；2026-11-02 Subagent 已整体删除，系统不再有派发任务 | [05](wiki/05-main-runtime.md#删除-subagent2026-11-02) |
+| 任务 | `tasks` 持久化用户需求与补充，登记后按用户单任务执行；空闲时由模型选择下一项，不按 ID 或登记先后领取 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
@@ -71,7 +71,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`messages`、`steps`、`login_codes`、`sessions`，开发中新增 `model_calls`（`subagents` 已由 `00025` 删除） | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`messages`、`steps`、`login_codes`、`sessions`；2026-11-06 本地新增 `tasks` 与 `task_messages`（`00034`），开发中新增 `model_calls`（`subagents` 已由 `00025` 删除） | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |

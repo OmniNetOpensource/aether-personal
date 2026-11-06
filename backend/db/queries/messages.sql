@@ -39,7 +39,7 @@ INSERT INTO messages (user_id, role, content, step_id, generating)
 VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id;
 
 -- name: CompleteMainReply :execrows
-UPDATE messages SET content = $2, generating = false, visible = true
+UPDATE messages SET content = $2, generating = false, visible = $3
 WHERE id = $1 AND generating;
 
 -- name: DiscardGeneratingReply :exec

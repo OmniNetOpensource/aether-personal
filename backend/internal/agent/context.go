@@ -1,5 +1,5 @@
-// 本文件负责把数据库消息组装成模型请求，并从消息尾部判断 Main 下一步该做什么：第一条注入固定指令，其后是上一个 compact 以来的原生消息，
-// 每组工具回执紧跟它的调用，时间与进度提醒在组装时按历史现算、不落库，所以同一段历史每次组装出的前缀都一样。
+// 本文件负责把数据库消息组装成模型请求并配对工具回执：第一条注入固定指令，其后读取摘要与原生消息，记忆通过工具渐进加载；
+// 每组工具回执紧跟调用，时间与进度提醒按历史现算，实时任务状态另加在末尾，不改写已保存的历史。
 
 package agent
 
@@ -54,7 +54,7 @@ func requestMessage(row database.ListAgentContextRowsRow) json.RawMessage {
 
 // assembleMessages 按组装规则把当前世代的消息排成请求顺序，普通请求与压缩请求共用：
 // 每个工具调用的回执紧跟在它的 assistant 之后（工具执行期间到达的用户消息因此排在回执之后），
-// 每条用户发来的消息后接一条当时的时间，连续每满 4 轮没有可见正文的工具调用后插一条进度提醒。
+// 每条用户发来的消息后接当时的时间和消息 ID，方便定位原话；连续每满 4 轮没有可见正文的工具调用后插一条进度提醒。
 func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
 	results := map[string]json.RawMessage{}
 	for _, row := range rows {
@@ -71,9 +71,9 @@ func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage
 			continue
 		case "user":
 			messages = append(messages, requestMessage(row))
-			// 时间取这条消息自己的入库时间，同一条消息每次组装出的时间都一样，不破坏前缀缓存。
+			// 时间与消息 ID 都取这条消息的固定字段，便于定位原文，同一段历史每次组装仍完全相同。
 			if row.Sender != nil && *row.Sender == "user" {
-				messages = append(messages, runtimeMessage(currentTimeMessageName, fmt.Sprintf(currentTimePrompt, row.CreatedAt.UTC().Format(time.RFC3339))))
+				messages = append(messages, runtimeMessage(currentTimeMessageName, fmt.Sprintf(currentTimePrompt, row.CreatedAt.UTC().Format(time.RFC3339), row.ID)))
 				silentToolRounds = 0
 			}
 		case "assistant":
@@ -103,14 +103,14 @@ func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage
 	return messages
 }
 
-// buildRequestMessages 组装一次普通请求：第一条是固定指令，其后是按组装规则排好的当前世代消息。
+// buildRequestMessages 注入固定指令后，直接展开数据库中的摘要与历史，不额外读取或注入记忆文件。
 func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage {
 	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, MainInstructions)}, assembleMessages(rows)...)
 }
 
-// buildAgentRequest 组装一次普通 Agent 请求：组装好的消息发出前先过工具配对与尾巴检查，再附上工具定义与输出上限交给发送层。
-func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
-	messages := buildRequestMessages(rows)
+// buildAgentRequest 组装固定指令、历史与实时任务状态，再校验工具配对；输入登记阶段只开放登记工具。
+func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32, taskContext []json.RawMessage, registeringInput bool) (modelRequest, error) {
+	messages := append(buildRequestMessages(rows), taskContext...)
 	if err := validateRequestMessages(messages); err != nil {
 		return modelRequest{}, err
 	}
@@ -119,20 +119,11 @@ func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, ou
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
 	}
-	// 最近一次用户输入之后还没有可见正文时，工具续接也不能用沉默结束；已经说过话才允许安静收尾。
-	requireOutput := true
-	for index := len(rows) - 1; index >= 0; index-- {
-		row := rows[index]
-		role := parseContextMessage(row.Content).Role
-		if role == "user" {
-			break
-		}
-		if role == "assistant" && AssistantTextToUser(row.Content) != "" {
-			requireOutput = false
-			break
-		}
+	definitions := tools.Definitions()
+	if registeringInput {
+		definitions = tools.TaskInputDefinitions()
 	}
-	return modelRequest{InputSequence: inputSequence, RequireOutput: requireOutput, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
+	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: definitions, MaxTokens: outputLimit}, nil
 }
 
 // buildCompactRequestMessages 复用普通请求的固定指令和历史前缀，包括已读取的工具结果，只在末尾追加压缩要求。
@@ -189,9 +180,4 @@ func pendingToolCalls(rows []database.ListAgentContextRowsRow) ([]toolCall, uuid
 		return pending, *rows[index].StepID
 	}
 	return nil, uuid.Nil
-}
-
-// needsReply 判断 Main 是否该调用模型：最后一条消息是用户消息、摘要或工具回执时需要回应，是 assistant 说明已经回复完毕。
-func needsReply(rows []database.ListAgentContextRowsRow) bool {
-	return len(rows) > 0 && parseContextMessage(rows[len(rows)-1].Content).Role != "assistant"
 }

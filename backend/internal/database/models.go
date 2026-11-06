@@ -153,9 +153,26 @@ type Step struct {
 	Purpose      string
 }
 
+type Task struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Title          string
+	Description    string
+	Status         string
+	SourceSequence int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type TaskMessage struct {
+	TaskID    uuid.UUID
+	MessageID uuid.UUID
+}
+
 type User struct {
 	ID                        uuid.UUID
 	Email                     string
 	CreatedAt                 time.Time
 	MainFailedThroughSequence *int64
+	TaskInputThroughSequence  int64
 }

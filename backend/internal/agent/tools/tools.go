@@ -30,7 +30,7 @@ type Tool struct {
 }
 
 // all 是工具的唯一登记表，顺序即发给模型的顺序。新增工具时在这里登记，并同步 admin.sql 里的已知工具名。
-var all = []Tool{searchMessageTool, readMessageTool, searchTool, searchTwitterTool, fetchURLTool}
+var all = []Tool{listTasksTool, recordTaskInputTool, updateTaskTool, searchMessageTool, readMessageTool, searchTool, searchTwitterTool, fetchURLTool}
 
 // Definitions 返回全部工具的定义，顺序与登记表一致。
 func Definitions() []json.RawMessage {
@@ -57,4 +57,14 @@ func RecordedName(name string) string {
 		return name
 	}
 	return "other"
+}
+
+// TaskInputDefinitions 限定新输入登记阶段的工具，模型登记完新需求后才能继续执行当前任务。
+func TaskInputDefinitions() []json.RawMessage {
+	return []json.RawMessage{listTasksTool.Definition, recordTaskInputTool.Definition}
+}
+
+// TaskSelectionDefinitions 只开放目录读取和任务状态变更，让模型先选定唯一任务再执行。
+func TaskSelectionDefinitions() []json.RawMessage {
+	return []json.RawMessage{listTasksTool.Definition, updateTaskTool.Definition}
 }

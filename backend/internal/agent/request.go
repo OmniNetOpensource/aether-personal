@@ -22,8 +22,8 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-// errEmptyReply 区分没有回答的有效响应与传输故障，让运行时只为前者补试一次。
-var errEmptyReply = errors.New("model provider returned no reply text or tool calls")
+// errEmptyReply 区分没有有效任务回复或工具动作的响应与传输故障，让运行时只为前者补试一次。
+var errEmptyReply = errors.New("model provider returned no usable task reply or tool calls")
 
 // sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
 func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
@@ -129,7 +129,8 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, jo
 	if json.Unmarshal(response.Choices[0].Message, &message) != nil || message.Role != "assistant" {
 		return response, false, fmt.Errorf("model provider returned invalid assistant message")
 	}
-	if prepared.RequireOutput && AssistantTextToUser(response.Choices[0].Message) == "" && len(message.ToolCalls) == 0 {
+	// 登记阶段没有回答任务，只说正文不能推进需求；实际执行允许正文或工具交付，空闲允许静默结束。
+	if prepared.RequireOutput && len(message.ToolCalls) == 0 && (AssistantTextToUser(response.Choices[0].Message) == "" || (journal.Purpose == "agent" && prepared.TaskID == nil)) {
 		return response, false, errEmptyReply
 	}
 	outcome = "succeeded"

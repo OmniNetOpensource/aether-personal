@@ -241,7 +241,12 @@ func (r *Runner) run(parent context.Context) {
 			}
 			continue
 		}
-		if !needsReply(rows) {
+		hasWork, err := queries.HasMainWork(parent, r.userID)
+		if err != nil {
+			loopErr = err
+			break
+		}
+		if !hasWork {
 			break
 		}
 		if loopErr = r.reply(parent, connection, &through); loopErr != nil {
@@ -267,6 +272,10 @@ func (r *Runner) run(parent context.Context) {
 // 批次执行期间另有看守协程定期 ping 锁连接，连接失效就取消整批，等看守退出后调用方才继续用锁连接。
 // 事务外的工具在存回执前崩溃会被重跑，按至少执行一次处理；与回执同一事务的工具不会重复生效。
 func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn, stepID uuid.UUID, calls []toolCall) error {
+	blocked, err := r.taskBatchRestrictions(ctx, database.New(connection), calls)
+	if err != nil {
+		return err
+	}
 	batchContext, cancelBatch := context.WithCancel(ctx)
 	defer cancelBatch()
 	// 看守协程在整批工具执行期间看住执行锁连接：连接一断就关掉它并取消整批，避免失去执行权后还继续干活。
@@ -304,6 +313,10 @@ func (r *Runner) executeToolCalls(ctx context.Context, connection *pgxpool.Conn,
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
+			if reason, ok := blocked[call.ID]; ok {
+				toolErrors[index] = r.saveToolResult(batchContext, stepID, call, reason)
+				return
+			}
 			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整批按中断处理。
 			if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
 				result, err := tool.Execute(batchContext, r.toolDeps, nil, r.userID, call.Function.Arguments)
@@ -476,7 +489,7 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, conn *pgxpool.Conn
 			return false, err
 		}
 	}
-	return false, r.saveReply(ctx, conn, stepID, replyID, result.response)
+	return false, r.saveReply(ctx, conn, stepID, replyID, prepared.TaskID, result.response)
 }
 
 // whileRequest 在等待一次模型请求期间看住执行锁连接（并行工具批次有自己的看守，见 executeToolCalls）：
@@ -544,15 +557,15 @@ func whileRequest[T any](ctx context.Context, connection *pgxpool.Conn, onOutput
 	}
 }
 
-// saveReply 在一个事务里保存模型回复：写入 assistant 消息并给这一步记上用量。
+// saveReply 在一个事务里完成助手记录与步骤：只有已绑定任务的正文成为用户回复，登记与空闲输出保留为不可见轨迹。
 // 工具调用从此成为历史的一部分，下一轮按消息尾部看到它们没有回执，就去执行。
-func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, stepID, replyID uuid.UUID, response chatResponse) error {
+func (r *Runner) saveReply(ctx context.Context, connection *pgxpool.Conn, stepID, replyID uuid.UUID, taskID *uuid.UUID, response chatResponse) error {
 	return pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message})
+		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: taskID != nil && AssistantTextToUser(response.Choices[0].Message) != ""})
 		if err != nil {
 			return err
 		}

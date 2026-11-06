@@ -18,6 +18,9 @@
 erDiagram
     users ||--o{ sessions : "登录"
     users ||--o{ messages : "拥有"
+    users ||--o{ tasks : "需求队列"
+    tasks ||--o{ task_messages : "关联消息"
+    messages ||--o{ task_messages : "需求与补充来源"
     users ||--o{ steps : "产生"
     steps ||--o{ model_calls : "HTTP 请求尝试"
     users ||--o{ model_calls : "调用归属"
@@ -25,12 +28,14 @@ erDiagram
     login_codes
 ```
 
-原有 6 张表，调用观测新增 1 张表，运行时模型选择新增 `model_settings`：
+当前表及各自用途如下：
 
 | 表 | 用途 | 状态 |
 | --- | --- | --- |
 | `users` | 用户；每个用户即一个 Main | `已实现` |
 | `messages` | Main 的上下文列表，即 `messageList` | `已实现` |
+| `tasks` | 持久化需求、补充后的完整要求与执行状态；每用户最多一项执行中 | `开发中` |
+| `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
@@ -53,6 +58,7 @@ erDiagram
 | `id` | uuid | 主键 |
 | `email` | text | 登录邮箱，唯一 |
 | `main_failed_through_sequence` | bigint | Main 上次运行失败时的最大消息序号；最新消息不超过它时不再自动重试，空表示没有失败停住（`00026`） |
+| `task_input_through_sequence` | bigint | 已登记需求的用户输入位置；只标记分类完成，与任务完成、聊天已读无关（`00034`） |
 | `created_at` | timestamptz | 注册时间 |
 
 ### `subagents`（已删除）
@@ -78,6 +84,34 @@ erDiagram
 | `created_at` | timestamptz | 写入（到达）时间 |
 
 用户多模态消息继续使用 `messages.content` JSONB，不新增图片二进制列。`content` 保存模型所需的文本与 OSS 图片引用，附带的 `parts` 保存按用户编辑顺序排列的文字、引用位置和图片元信息；`user_text` 用于回显原始正文。图片本体在私有 OSS Bucket，预览签名只在向前端发出时生成。图片读取为 base64 发生在模型渠道适配前，详见 [04](04-messaging.md#引用图片与多模态输入框)。
+
+### `tasks`
+
+Main 按任务登记完整要求，补充说明更新同一任务。每个用户同时最多一项任务执行中。下一项由模型读取任务列表后自行选择。UUIDv7 的 `id` 用于标识和稳定列举，不代表执行优先级。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键，默认 `uuidv7()` |
+| `user_id` | uuid | 所属用户，引用 `users.id` |
+| `title` | text | 完整标题，1 至 200 字符 |
+| `description` | text | 当前完整目标、背景与约束，1 至 32,000 字符 |
+| `status` | text | `queued`、`in_progress`、`waiting`、`completed`、`cancelled`；默认 `queued` |
+| `source_sequence` | bigint | 最初关联输入的序号，不用于决定执行优先级 |
+| `created_at`、`updated_at` | timestamptz | 创建与最后变更时间 |
+
+上述字段均非空。`tasks_one_in_progress_per_user` 部分唯一索引保证每用户最多一项 `in_progress`。任务完成状态独立于某一条消息，未来可接入文件交付，详见 [11](11-tasks.md)。
+
+### `task_messages`
+
+两列分别引用任务和用户原始消息，联合主键 `(task_id, message_id)` 防止重复关联。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `task_id` | uuid，非空 | 引用 `tasks.id` |
+| `message_id` | uuid，非空 | 引用 `messages.id` |
+
+一个任务可以由多条输入共同说明，一条输入也可以提出多个任务，因此用户输入通过此表保存多对多关联，不复制消息正文。`related_message_ids` 不是任务表里的数组列；查询时按消息序号返回去重后的用户输入 ID 列表。登记输入和关联消息在同一事务里提交。
+
 
 ### `steps`
 

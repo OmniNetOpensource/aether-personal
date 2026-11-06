@@ -14,17 +14,18 @@ import (
 )
 
 const completeMainReply = `-- name: CompleteMainReply :execrows
-UPDATE messages SET content = $2, generating = false, visible = true
+UPDATE messages SET content = $2, generating = false, visible = $3
 WHERE id = $1 AND generating
 `
 
 type CompleteMainReplyParams struct {
 	ID      uuid.UUID
 	Content []byte
+	Visible bool
 }
 
 func (q *Queries) CompleteMainReply(ctx context.Context, arg CompleteMainReplyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, completeMainReply, arg.ID, arg.Content)
+	result, err := q.db.Exec(ctx, completeMainReply, arg.ID, arg.Content, arg.Visible)
 	if err != nil {
 		return 0, err
 	}
