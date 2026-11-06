@@ -150,10 +150,6 @@ func (r *Runner) run(parent context.Context) error {
 // executeToolCalls 并行执行尚无回执的工具，每个调用仅在保存结果时使用连接池。
 // 数据库工具与回执同事务提交；外部调用中断后可能重跑，已保存的回执不会重复执行。
 func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls []toolCall) error {
-	blocked, err := r.taskBatchRestrictions(ctx, database.New(r.databasePool), calls)
-	if err != nil {
-		return err
-	}
 	// 全部工具同时开工，每个协程只写自己下标的结果槽，等待结束后按调用顺序取第一个硬错误。
 	toolErrors := make([]error, len(calls))
 	var waitGroup sync.WaitGroup
@@ -161,10 +157,6 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			if reason, ok := blocked[call.ID]; ok {
-				toolErrors[index] = r.saveToolResult(ctx, stepID, call, reason)
-				return
-			}
 			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整批按中断处理。
 			if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
 				result, err := tool.Execute(ctx, r.toolDeps, nil, r.userID, call.Function.Arguments)
