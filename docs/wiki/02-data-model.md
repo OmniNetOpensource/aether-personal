@@ -183,6 +183,8 @@ erDiagram
 | `00026_derive_main_work_from_messages.sql` | 去掉待读：遗留待读行补号后 `sequence` 改为非空；删除落库的指令、当前时间与进度提醒行及 `steps.model_reply`；新增 `users.main_failed_through_sequence` 与视图 `main_work` | `已实现` |
 | `00029_add_main_output_limit.sql` | 曾保存手动请求输出额度，字段已由 `00031` 删除 | `历史` |
 | `00031_drop_main_output_limit.sql` | 删除手动输出额度；请求使用模型最大输出能力，未知时省略额度参数 | `已实现` |
+| `00032_add_memory_topics.sql` | 保存主题正文、来源、版本与删除标记 | `开发中` |
+| `00033_add_memory_roots.sql` | 保存每用户可编辑的根文档 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。
