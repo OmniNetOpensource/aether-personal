@@ -4,7 +4,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -109,7 +108,7 @@ func (s *server) listenForUserMessages() {
 	}
 }
 
-// listenOnce 用一条独占连接完成一轮 LISTEN；通知的载荷就是用户 ID，据此唤醒该用户的连接推送并推进其 agent 运行。
+// listenOnce 只监听聊天推送；执行调度由 Agent 自己的定向通知与补偿扫描负责。
 func (s *server) listenOnce(ctx context.Context) error {
 	pooledConnection, err := s.databasePool.Acquire(ctx)
 	if err != nil {
@@ -119,7 +118,7 @@ func (s *server) listenOnce(ctx context.Context) error {
 	connection := pooledConnection.Hijack()
 	defer connection.Close(ctx)
 
-	if _, err := connection.Exec(ctx, "LISTEN main_input; LISTEN user_messages"); err != nil {
+	if _, err := connection.Exec(ctx, "LISTEN user_messages"); err != nil {
 		return err
 	}
 	// 未监听期间的通知已经丢失，让所有连接各自查一次表。
@@ -129,21 +128,7 @@ func (s *server) listenOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		// 只有已提交的新输入能取消思考中的请求，普通消息通知只负责刷新和扫描。
-		if notification.Channel == "main_input" {
-			var input struct {
-				UserID   uuid.UUID `json:"user_id"`
-				Sequence int64     `json:"sequence"`
-			}
-			if err := json.Unmarshal([]byte(notification.Payload), &input); err != nil {
-				slog.Error("invalid main input notification", "error", err)
-				continue
-			}
-			s.manager.NewInput(input.UserID, input.Sequence)
-			continue
-		}
 		s.connections.wake(uuid.MustParse(notification.Payload))
-		s.manager.Wake(uuid.MustParse(notification.Payload))
 	}
 }
 
@@ -426,20 +411,23 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在一个事务里落库用户消息并发出数据库通知，使该用户的其他连接被唤醒推送、Manager 被通知唤醒；
+// saveUserMessage 在事务里落库并通知聊天连接，提交后直接唤醒同进程的 Manager；
 // 成功后先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
+	var sequence int64
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		if _, err := queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
+		var err error
+		sequence, err = queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
 			UserID:          userID,
 			Content:         userMessageContent(frame),
 			ClientMessageID: &frame.ClientMessageID,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, userID)
@@ -450,6 +438,8 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 		return false
 	}
 
+	// 唤醒先于任何 WebSocket 写入；连接此时断开也不影响已经提交的工作。
+	s.agents.Wake(userID, sequence)
 	if s.pushChatMessages(ctx, relay, userID, changeCursor) != nil {
 		return false
 	}

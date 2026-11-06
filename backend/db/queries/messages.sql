@@ -13,7 +13,9 @@ SELECT pg_advisory_unlock(hashtextextended(sqlc.arg(lock_key)::text, 0));
 -- name: NotifyUserMessages :exec
 SELECT pg_notify('user_messages', sqlc.arg(user_id)::uuid::text);
 
--- name: InsertUserMessage :execrows
+-- name: InsertUserMessage :one
+-- 重发返回原输入序号，唤醒时不会把同一条输入误认为更新的输入。
+WITH inserted AS (
 INSERT INTO messages (user_id, role, content, sender, client_message_id, visible)
 VALUES (
     sqlc.arg(user_id),
@@ -23,7 +25,21 @@ VALUES (
     sqlc.arg(client_message_id),
     true
 )
-ON CONFLICT (user_id, client_message_id) DO NOTHING;
+ON CONFLICT (user_id, client_message_id) DO NOTHING
+RETURNING sequence
+)
+SELECT sequence FROM inserted
+UNION ALL
+SELECT sequence FROM messages
+WHERE user_id = sqlc.arg(user_id) AND client_message_id = sqlc.arg(client_message_id)
+    AND NOT EXISTS (SELECT 1 FROM inserted);
+
+-- name: ListMainWork :many
+-- 启动与周期补查只读取业务待办，不再维护实例目录或临时执行归属。
+SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
+    WHERE m.user_id = w.user_id AND m.role = 'user' AND NOT m.is_summary
+        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
+FROM main_work AS w ORDER BY w.user_id;
 
 -- name: InsertAgentMessage :exec
 INSERT INTO messages (user_id, role, content, step_id, sender, visible)
@@ -45,9 +61,6 @@ WHERE id = $1 AND generating;
 
 -- name: DiscardGeneratingReply :exec
 DELETE FROM messages WHERE user_id = $1 AND generating;
-
--- name: ListRunnableAgents :many
-SELECT user_id FROM main_work ORDER BY user_id;
 
 -- name: HasMainWork :one
 -- 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。

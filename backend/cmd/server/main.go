@@ -54,12 +54,15 @@ func main() {
 		os.Exit(1)
 	}
 	manager := agent.NewManager(databasePool, appConfig, serviceSettings)
-	go manager.Start(ctx)
+	managerDone := make(chan struct{})
+	go func() { defer close(managerDone); manager.Start(ctx) }()
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, manager, serviceSettings), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, serviceSettings, manager), ReadHeaderTimeout: 10 * time.Second}
+	httpDone := make(chan struct{})
 	go func() {
+		defer close(httpDone)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -69,4 +72,7 @@ func main() {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
+	stop()
+	<-httpDone
+	<-managerDone
 }

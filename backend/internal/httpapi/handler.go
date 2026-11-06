@@ -19,20 +19,21 @@ type server struct {
 	queries      *database.Queries
 	appConfig    config.Config
 	httpClient   *http.Client
-	manager      *agent.Manager
 	connections  *chatConnections
 	services     *services.Store
+	agents       *agent.Manager
 }
 
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, manager *agent.Manager, serviceSettings *services.Store) http.Handler {
+// NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器。
+func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
 		appConfig:    appConfig,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
-		manager:      manager,
 		connections:  newChatConnections(),
 		services:     serviceSettings,
+		agents:       agents,
 	}
 	go s.listenForUserMessages()
 

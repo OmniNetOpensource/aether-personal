@@ -226,7 +226,8 @@ func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSum
 	return err
 }
 
-const insertUserMessage = `-- name: InsertUserMessage :execrows
+const insertUserMessage = `-- name: InsertUserMessage :one
+WITH inserted AS (
 INSERT INTO messages (user_id, role, content, sender, client_message_id, visible)
 VALUES (
     $1,
@@ -237,6 +238,13 @@ VALUES (
     true
 )
 ON CONFLICT (user_id, client_message_id) DO NOTHING
+RETURNING sequence
+)
+SELECT sequence FROM inserted
+UNION ALL
+SELECT sequence FROM messages
+WHERE user_id = $1 AND client_message_id = $3
+    AND NOT EXISTS (SELECT 1 FROM inserted)
 `
 
 type InsertUserMessageParams struct {
@@ -245,12 +253,12 @@ type InsertUserMessageParams struct {
 	ClientMessageID *uuid.UUID
 }
 
+// 重发返回原输入序号，唤醒时不会把同一条输入误认为更新的输入。
 func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessageParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertUserMessage, arg.UserID, arg.Content, arg.ClientMessageID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	row := q.db.QueryRow(ctx, insertUserMessage, arg.UserID, arg.Content, arg.ClientMessageID)
+	var sequence int64
+	err := row.Scan(&sequence)
+	return sequence, err
 }
 
 const listAgentContextRows = `-- name: ListAgentContextRows :many
@@ -415,23 +423,32 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 	return items, nil
 }
 
-const listRunnableAgents = `-- name: ListRunnableAgents :many
-SELECT user_id FROM main_work ORDER BY user_id
+const listMainWork = `-- name: ListMainWork :many
+SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
+    WHERE m.user_id = w.user_id AND m.role = 'user' AND NOT m.is_summary
+        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
+FROM main_work AS w ORDER BY w.user_id
 `
 
-func (q *Queries) ListRunnableAgents(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listRunnableAgents)
+type ListMainWorkRow struct {
+	UserID        uuid.UUID
+	InputSequence int64
+}
+
+// 启动与周期补查只读取业务待办，不再维护实例目录或临时执行归属。
+func (q *Queries) ListMainWork(ctx context.Context) ([]ListMainWorkRow, error) {
+	rows, err := q.db.Query(ctx, listMainWork)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []ListMainWorkRow
 	for rows.Next() {
-		var user_id uuid.UUID
-		if err := rows.Scan(&user_id); err != nil {
+		var i ListMainWorkRow
+		if err := rows.Scan(&i.UserID, &i.InputSequence); err != nil {
 			return nil, err
 		}
-		items = append(items, user_id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

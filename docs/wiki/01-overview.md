@@ -209,7 +209,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
-| `DATABASE_MAX_CONNS` | 默认 20，最小 5；预留 4 条连接处理普通请求 |
+| `DATABASE_MAX_CONNS` | 默认 20，最小 5；聊天 LISTEN 使用一条池外连接 |
+| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制进程内并行用户数 |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 

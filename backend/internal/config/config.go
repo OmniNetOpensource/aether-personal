@@ -21,6 +21,7 @@ type Config struct {
 	Port                 string
 	DatabaseURL          string
 	DatabaseMaxConns     int32
+	AgentCapacity        int32
 	MainModel            string
 	FrontendDir          string
 }
@@ -44,6 +45,16 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("DATABASE_MAX_CONNS must be at least 5, got %q", value)
 		}
 		databaseMaxConns = int32(parsed)
+	}
+
+	// 单进程并行用户数采用保守的连接预算；Runner 仅在短查询和事务期间使用连接。
+	agentCapacity := databaseMaxConns - 4
+	if value := os.Getenv("AGENT_CAPACITY"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		if err != nil || parsed < 1 || parsed > int64(databaseMaxConns-4) {
+			return Config{}, fmt.Errorf("AGENT_CAPACITY must be between 1 and DATABASE_MAX_CONNS - 4, got %q", value)
+		}
+		agentCapacity = int32(parsed)
 	}
 
 	port := os.Getenv("PORT")
@@ -89,6 +100,7 @@ func Load() (Config, error) {
 		Port:                 port,
 		DatabaseURL:          databaseURL,
 		DatabaseMaxConns:     databaseMaxConns,
+		AgentCapacity:        agentCapacity,
 		MainModel:            mainModel,
 		FrontendDir:          os.Getenv("FRONTEND_DIR"),
 	}, nil

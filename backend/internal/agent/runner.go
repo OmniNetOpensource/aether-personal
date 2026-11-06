@@ -33,39 +33,6 @@ func runtimeLockKey(userID uuid.UUID) string {
 	return "main:" + userID.String()
 }
 
-// Manager 是进程内唯一的 Agent 调度器：只持有进程级共享依赖和“哪个用户正在跑”的登记，
-// 要不要运行只由消息表尾部决定（见 main_work 视图）；唤醒只来自 PostgreSQL 通知，重启后遗留的工作等下一次通知触发扫描时恢复。
-type Manager struct {
-	databasePool *pgxpool.Pool
-	settings     config.Config
-	modelClient  *http.Client
-	toolDeps     tools.Dependencies
-	services     *services.Store
-	wakeSignal   chan struct{}
-	activeSlots  chan struct{}
-	mutex        sync.Mutex
-	runners      map[uuid.UUID]*Runner
-}
-
-// NewManager 组装调度器：模型与联网工具分别使用十分钟和两分钟超时的 HTTP 客户端，
-// 并按连接池大小预留并发名额，避免 Agent 把普通请求的连接占满。
-func NewManager(pool *pgxpool.Pool, settings config.Config, serviceSettings *services.Store) *Manager {
-	return &Manager{
-		databasePool: pool, settings: settings, modelClient: &http.Client{Timeout: modelRequestTimeout},
-		toolDeps:   tools.Dependencies{DatabasePool: pool, Services: serviceSettings, HTTPClient: &http.Client{Timeout: 120 * time.Second}},
-		services:   serviceSettings,
-		wakeSignal: make(chan struct{}, 1), activeSlots: make(chan struct{}, max(1, int(pool.Config().MaxConns)-4)), runners: map[uuid.UUID]*Runner{},
-	}
-}
-
-// Wake 只由 PostgreSQL 通知的监听转发调用，敲一下调度循环让它重新扫描；通道已满说明循环已被叫醒，不必排队。
-func (m *Manager) Wake(_ uuid.UUID) {
-	select {
-	case m.wakeSignal <- struct{}{}:
-	default:
-	}
-}
-
 // Runner 是一个用户的 Main 在本进程内的一次执行者：有活时由 Manager 创建并独占一条协程，
 // 只服务自己这一个用户，消息尾部没有活就结束、由 Manager 注销；进程级依赖按引用共享，不按用户复制。
 type Runner struct {
@@ -79,14 +46,6 @@ type Runner struct {
 	thinking     *thinkingRequest
 }
 
-// newRunner 为一个用户组装 Runner：连接池、模型客户端等共享依赖直接引用 Manager 持有的那一份。
-func (m *Manager) newRunner(userID uuid.UUID) *Runner {
-	return &Runner{
-		databasePool: m.databasePool, settings: m.settings, modelClient: m.modelClient,
-		toolDeps: m.toolDeps, services: m.services, userID: userID,
-	}
-}
-
 // thinkingRequest 只在模型还没有产出正文或工具时登记，序号来自实际发送的上下文。
 type thinkingRequest struct {
 	through int64
@@ -96,72 +55,12 @@ type thinkingRequest struct {
 // errNewInput 表示请求被更新的输入取代，应重新读上下文。
 var errNewInput = errors.New("superseded by new input")
 
-// NewInput 把新输入通知给正拥有这个用户的 Runner（若有），同时唤醒调度器处理空闲用户。
-func (m *Manager) NewInput(userID uuid.UUID, sequence int64) {
-	m.mutex.Lock()
-	runner := m.runners[userID]
-	m.mutex.Unlock()
-	if runner != nil {
-		runner.newInput(sequence)
-	}
-	m.Wake(userID)
-}
-
 // newInput 在本用户的模型请求还没有产出正文或工具时，用更新的输入序号取消它，让 Runner 重新读上下文。
 func (r *Runner) newInput(sequence int64) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	if r.thinking != nil && sequence > r.thinking.through {
 		r.thinking.cancel(errNewInput)
-	}
-}
-
-// Start 是常驻调度循环：只在 PostgreSQL 通知转发来的 Wake 时醒来，从数据库扫出消息尾部需要 Main 处理的用户，
-// 为每个还没有 Runner 的用户创建一个并开协程执行，Runner 结束时注销并释放并发名额。
-// 没有启动扫描与周期扫描：通知丢失时，遗留工作等下一次通知触发的全量扫描顺带恢复，不保证恢复时间。
-func (m *Manager) Start(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-m.wakeSignal:
-		}
-		userIDs, err := database.New(m.databasePool).ListRunnableAgents(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				slog.Error("scan agent queue failed", "error", err)
-			}
-			continue
-		}
-		// 派发单个 Main：本进程已有 Runner 的、或并发名额已满的先跳过，其余创建 Runner 登记后开协程执行。
-		for _, userID := range userIDs {
-			m.mutex.Lock()
-			if _, ok := m.runners[userID]; ok {
-				m.mutex.Unlock()
-				continue
-			}
-			select {
-			case m.activeSlots <- struct{}{}:
-			default:
-				m.mutex.Unlock()
-				continue
-			}
-			runner := m.newRunner(userID)
-			m.runners[userID] = runner
-			m.mutex.Unlock()
-			go func() {
-				// 运行已经结束；先从登记表移除本 Runner，再归还它占用的并发名额。
-				defer func() {
-					m.mutex.Lock()
-					if m.runners[userID] == runner {
-						delete(m.runners, userID)
-					}
-					m.mutex.Unlock()
-					<-m.activeSlots
-				}()
-				runner.run(ctx)
-			}()
-		}
 	}
 }
 
