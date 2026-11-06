@@ -259,7 +259,7 @@ WITH summary AS (
  WHERE user_id = $1 AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
+SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.task_id, m.created_at FROM messages AS m
 WHERE m.user_id = $1 AND NOT m.generating
  -- Old automatic memory snapshots are retained for audit only.
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
@@ -277,6 +277,7 @@ type ListAgentContextRowsRow struct {
 	IsSummary bool
 	Sender    *string
 	StepID    *uuid.UUID
+	TaskID    *uuid.UUID
 	CreatedAt time.Time
 }
 
@@ -296,6 +297,7 @@ func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([
 			&i.IsSummary,
 			&i.Sender,
 			&i.StepID,
+			&i.TaskID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -309,7 +311,7 @@ func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([
 }
 
 const listChatRowsAfter = `-- name: ListChatRowsAfter :many
-SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+SELECT id, role, sender, client_message_id, task_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND coalesce(chat_updated_sequence, sequence) > $2::bigint
 ORDER BY coalesce(chat_updated_sequence, sequence)
 LIMIT 100
@@ -325,6 +327,7 @@ type ListChatRowsAfterRow struct {
 	Role            string
 	Sender          *string
 	ClientMessageID *uuid.UUID
+	TaskID          *uuid.UUID
 	Content         []byte
 	CreatedAt       time.Time
 	ChangeCursor    int64
@@ -345,6 +348,7 @@ func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterPa
 			&i.Role,
 			&i.Sender,
 			&i.ClientMessageID,
+			&i.TaskID,
 			&i.Content,
 			&i.CreatedAt,
 			&i.ChangeCursor,
@@ -360,7 +364,7 @@ func (q *Queries) ListChatRowsAfter(ctx context.Context, arg ListChatRowsAfterPa
 }
 
 const listChatRowsBefore = `-- name: ListChatRowsBefore :many
-SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+SELECT id, role, sender, client_message_id, task_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND id < $2
 ORDER BY id DESC
 LIMIT 50
@@ -376,6 +380,7 @@ type ListChatRowsBeforeRow struct {
 	Role            string
 	Sender          *string
 	ClientMessageID *uuid.UUID
+	TaskID          *uuid.UUID
 	Content         []byte
 	CreatedAt       time.Time
 	ChangeCursor    int64
@@ -395,6 +400,7 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 			&i.Role,
 			&i.Sender,
 			&i.ClientMessageID,
+			&i.TaskID,
 			&i.Content,
 			&i.CreatedAt,
 			&i.ChangeCursor,
@@ -466,17 +472,18 @@ func (q *Queries) NotifyUserMessages(ctx context.Context, userID uuid.UUID) erro
 }
 
 const reserveMainReply = `-- name: ReserveMainReply :one
-INSERT INTO messages (user_id, role, content, step_id, generating)
-VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id
+INSERT INTO messages (user_id, role, content, step_id, task_id, generating)
+VALUES ($1, 'assistant', '{"role":"assistant"}', $2, $3, true) RETURNING id
 `
 
 type ReserveMainReplyParams struct {
 	UserID uuid.UUID
 	StepID *uuid.UUID
+	TaskID *uuid.UUID
 }
 
 func (q *Queries) ReserveMainReply(ctx context.Context, arg ReserveMainReplyParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.StepID)
+	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.StepID, arg.TaskID)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err

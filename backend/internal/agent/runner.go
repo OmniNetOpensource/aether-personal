@@ -466,7 +466,7 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, conn *pgxpool.Conn
 				cancel(errNewInput)
 				return errNewInput
 			}
-			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID})
+			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID, TaskID: prepared.TaskID})
 			return err
 		})
 	}

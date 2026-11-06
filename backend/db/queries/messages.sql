@@ -36,8 +36,8 @@ SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
     AND sequence > sqlc.arg(through)::bigint);
 
 -- name: ReserveMainReply :one
-INSERT INTO messages (user_id, role, content, step_id, generating)
-VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id;
+INSERT INTO messages (user_id, role, content, step_id, task_id, generating)
+VALUES ($1, 'assistant', '{"role":"assistant"}', $2, $3, true) RETURNING id;
 
 -- name: CompleteMainReply :execrows
 UPDATE messages SET content = $2, generating = false, visible = $3
@@ -70,7 +70,7 @@ WITH summary AS (
  WHERE user_id = sqlc.arg(user_id) AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
-SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
+SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.task_id, m.created_at FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
  -- Old automatic memory snapshots are retained for audit only.
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
@@ -94,13 +94,13 @@ WHERE user_id = sqlc.arg(user_id) AND finished_at IS NULL;
 
 -- name: ListChatRowsAfter :many
 -- 连接已确认的变更序号之后，包含先占位、现在才公开的旧行。
-SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+SELECT id, role, sender, client_message_id, task_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND coalesce(chat_updated_sequence, sequence) > sqlc.arg(after_cursor)::bigint
 ORDER BY coalesce(chat_updated_sequence, sequence)
 LIMIT 100;
 
 -- name: ListChatRowsBefore :many
-SELECT id, role, sender, client_message_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
+SELECT id, role, sender, client_message_id, task_id, content, created_at, coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor FROM messages
 WHERE user_id = $1 AND visible AND id < $2
 ORDER BY id DESC
 LIMIT 50;

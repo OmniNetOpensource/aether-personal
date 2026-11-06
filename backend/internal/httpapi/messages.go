@@ -1,4 +1,4 @@
-// 本文件负责聊天历史的读取与转换：分页查询消息，并转换成前端使用的消息结构。
+// 本文件负责聊天历史的读取与转换：分页查询消息，保留助手回复的任务归属，并转换成前端使用的消息结构。
 
 package httpapi
 
@@ -19,6 +19,7 @@ type chatMessage struct {
 	ID              string        `json:"id"`
 	Position        uuid.UUID     `json:"position"`
 	ClientMessageID *uuid.UUID    `json:"client_message_id,omitempty"`
+	TaskID          *uuid.UUID    `json:"task_id,omitempty"`
 	Sender          string        `json:"sender"`
 	Text            string        `json:"text"`
 	Parts           []messagePart `json:"parts,omitempty"`
@@ -95,6 +96,7 @@ func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
 		ID:        row.ID.String(),
 		Position:  row.ID,
 		Sender:    "main",
+		TaskID:    row.TaskID,
 		Text:      text,
 		CreatedAt: row.CreatedAt,
 	}}

@@ -14,6 +14,9 @@ SELECT sqlc.embed(t), ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
+        UNION
+        SELECT m.id, m.sequence FROM messages AS m
+        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
     ) AS related ORDER BY related.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = sqlc.arg(user_id)
@@ -27,6 +30,9 @@ SELECT sqlc.embed(t), ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
+        UNION
+        SELECT m.id, m.sequence FROM messages AS m
+        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
     ) AS related ORDER BY related.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.id = $2;
@@ -36,6 +42,9 @@ SELECT sqlc.embed(t), ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
+        UNION
+        SELECT m.id, m.sequence FROM messages AS m
+        WHERE m.task_id = t.id AND m.visible AND NOT m.generating
     ) AS related ORDER BY related.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress';

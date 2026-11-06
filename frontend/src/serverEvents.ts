@@ -14,6 +14,7 @@ export const chatMessageRowSchema = z.object({
   created_at: z.iso.datetime({ offset: true }),
   position: z.uuid(),
   client_message_id: z.uuid().nullable().optional(),
+  task_id: z.uuid().nullable().optional(),
 });
 
 export const chatPageSchema = z.object({
