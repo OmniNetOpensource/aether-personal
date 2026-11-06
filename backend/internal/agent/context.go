@@ -108,9 +108,9 @@ func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMes
 	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, MainInstructions)}, assembleMessages(rows)...)
 }
 
-// buildAgentRequest 组装固定指令、历史与实时任务状态，再校验工具配对；输入登记阶段只开放登记工具。
-func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32, taskContext []json.RawMessage, registeringInput bool) (modelRequest, error) {
-	messages := append(buildRequestMessages(rows), taskContext...)
+// buildAgentRequest 组装固定指令与历史，再校验工具配对，并附上全部工具定义打包成完整请求。
+func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32) (modelRequest, error) {
+	messages := buildRequestMessages(rows)
 	if err := validateRequestMessages(messages); err != nil {
 		return modelRequest{}, err
 	}
@@ -119,11 +119,7 @@ func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, ou
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
 	}
-	definitions := tools.Definitions()
-	if registeringInput {
-		definitions = tools.TaskInputDefinitions()
-	}
-	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: definitions, MaxTokens: outputLimit}, nil
+	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}, nil
 }
 
 // buildCompactRequestMessages 复用普通请求的固定指令和历史前缀，包括已读取的工具结果，只在末尾追加压缩要求。

@@ -58,13 +58,3 @@ func RecordedName(name string) string {
 	}
 	return "other"
 }
-
-// TaskInputDefinitions 限定新输入登记阶段的工具，模型登记完新需求后才能继续执行当前任务。
-func TaskInputDefinitions() []json.RawMessage {
-	return []json.RawMessage{listTasksTool.Definition, recordTaskInputTool.Definition}
-}
-
-// TaskSelectionDefinitions 只开放目录读取和任务状态变更，让模型先选定唯一任务再执行。
-func TaskSelectionDefinitions() []json.RawMessage {
-	return []json.RawMessage{listTasksTool.Definition, updateTaskTool.Definition}
-}

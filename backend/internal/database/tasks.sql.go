@@ -43,35 +43,6 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (uuid.UU
 	return id, err
 }
 
-const getActiveTask = `-- name: GetActiveTask :one
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-    WHERE tm.task_id = t.id ORDER BY m.sequence
-)::uuid[] AS related_message_ids
-FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress'
-`
-
-type GetActiveTaskRow struct {
-	Task              Task
-	RelatedMessageIds []uuid.UUID
-}
-
-func (q *Queries) GetActiveTask(ctx context.Context, userID uuid.UUID) (GetActiveTaskRow, error) {
-	row := q.db.QueryRow(ctx, getActiveTask, userID)
-	var i GetActiveTaskRow
-	err := row.Scan(
-		&i.Task.ID,
-		&i.Task.UserID,
-		&i.Task.Title,
-		&i.Task.Description,
-		&i.Task.Status,
-		&i.Task.CreatedAt,
-		&i.Task.UpdatedAt,
-		&i.RelatedMessageIds,
-	)
-	return i, err
-}
-
 const getNextTaskInput = `-- name: GetNextTaskInput :one
 
 SELECT m.id, m.sequence, m.content FROM messages AS m JOIN users AS u ON u.id = m.user_id
@@ -126,17 +97,6 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 		&i.RelatedMessageIds,
 	)
 	return i, err
-}
-
-const hasQueuedTasks = `-- name: HasQueuedTasks :one
-SELECT EXISTS (SELECT 1 FROM tasks WHERE user_id = $1 AND status = 'queued')
-`
-
-func (q *Queries) HasQueuedTasks(ctx context.Context, userID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasQueuedTasks, userID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const linkTaskMessage = `-- name: LinkTaskMessage :exec

@@ -26,14 +26,6 @@ SELECT sqlc.embed(t), ARRAY(
     WHERE tm.task_id = t.id ORDER BY m.sequence
 )::uuid[] AS related_message_ids
 FROM tasks AS t WHERE t.user_id = $1 AND t.id = $2;
-
--- name: GetActiveTask :one
-SELECT sqlc.embed(t), ARRAY(
-    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-    WHERE tm.task_id = t.id ORDER BY m.sequence
-)::uuid[] AS related_message_ids
-FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress';
-
 -- name: CreateTask :one
 INSERT INTO tasks (user_id, title, description)
 VALUES ($1, $2, $3) RETURNING id;
@@ -45,10 +37,6 @@ WHERE user_id = $1 AND id = $2;
 -- name: LinkTaskMessage :exec
 INSERT INTO task_messages (task_id, message_id) VALUES ($1, $2)
 ON CONFLICT (task_id, message_id) DO NOTHING;
-
--- name: HasQueuedTasks :one
-SELECT EXISTS (SELECT 1 FROM tasks WHERE user_id = $1 AND status = 'queued');
-
 -- name: UpdateTaskStatus :execrows
 -- 模型选择具体任务：没有当前任务和待登记输入时才能启动待执行项，其余状态变更只针对当前任务。
 UPDATE tasks AS t SET status = sqlc.arg(status)::text, updated_at = now()

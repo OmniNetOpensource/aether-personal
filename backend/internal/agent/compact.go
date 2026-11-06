@@ -61,7 +61,7 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 		reason = "capacity"
 	}
 	if reason == "" {
-		return r.buildTaskRequest(ctx, rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit)
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
 	// 否则（工具续跑）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
@@ -89,7 +89,7 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 		}
 	}
 	if through == 0 {
-		return r.buildTaskRequest(ctx, rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit)
 	}
 	// 沿用普通请求的消息前缀与上一次 Main 的供应商工具定义，只在末尾追加压缩要求；仍禁止实际工具调用。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
@@ -145,5 +145,5 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return r.buildTaskRequest(ctx, rows, model, outputLimit)
+	return buildAgentRequest(rows, model, outputLimit)
 }

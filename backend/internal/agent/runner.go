@@ -1,5 +1,5 @@
 // 本文件执行单个用户的 Main；Manager 保证进程内串行，模型和工具等待期间不占用数据库连接。
-// Runner 根据消息尾部与持久化任务决定下一步：补跑工具、登记输入、继续当前任务，或让模型选择下一项；没有工作后结束并注销。
+// Runner 只根据消息尾部决定下一步：补跑没有回执的工具，或再调用一次模型；没有工作后结束并注销。
 
 package agent
 
@@ -116,7 +116,7 @@ func (r *Runner) run(parent context.Context) error {
 			}
 			continue
 		}
-		// 消息正文已经结束时仍可能有未登记输入或排队任务，不能再只凭消息尾部停下。
+		// 消息尾部已经回复完毕就停下；任务队列本身不再单独算作待办。
 		hasWork, err := queries.HasMainWork(parent, r.userID)
 		if err != nil {
 			loopErr = err
@@ -187,13 +187,13 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 }
 
 // reply 调用模型并把回复存成 assistant 消息。每次尝试是一个步骤：上下文准备（含可能的压缩）、请求和退避共用十分钟预算，
-// 传输等临时故障最多再试 3 次，空回复单独最多补试一次；失败尝试以错误收尾。每次尝试都重新组装上下文，期间新到的消息会一并带上。
+// 传输等临时故障最多再试 3 次；失败尝试以错误收尾。每次尝试都重新组装上下文，期间新到的消息会一并带上。
 func (r *Runner) reply(ctx context.Context, through *int64) error {
 	queries := database.New(r.databasePool)
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
 	defer cancel()
-	transientRetries, emptyRetries := 0, 0
+	transientRetries := 0
 	for attempt := 0; ; attempt++ {
 		stepID, err := queries.StartStep(ctx, database.StartStepParams{UserID: r.userID, Model: r.settings.MainModel})
 		if err != nil {
@@ -232,20 +232,11 @@ func (r *Runner) reply(ctx context.Context, through *int64) error {
 		if retryContext.Err() != nil {
 			return callErr
 		}
-		// 空回复与网络重试分开计数，避免把模型反复沉默扩大成四次付费生成。
-		delay := time.Second
-		if errors.Is(callErr, errEmptyReply) {
-			if emptyRetries >= 1 {
-				return callErr
-			}
-			emptyRetries++
-		} else {
-			if !retryable || transientRetries >= 3 {
-				return callErr
-			}
-			delay <<= transientRetries
-			transientRetries++
+		if !retryable || transientRetries >= 3 {
+			return callErr
 		}
+		delay := time.Second << transientRetries
+		transientRetries++
 		select {
 		case <-retryContext.Done():
 			return context.Cause(retryContext)
@@ -315,18 +306,18 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, stepID uuid.UUID, 
 			return false, err
 		}
 	}
-	return false, r.saveReply(ctx, stepID, replyID, prepared.ToolOnly, response)
+	return false, r.saveReply(ctx, stepID, replyID, response)
 }
 
-// saveReply 在一个事务里完成助手记录与步骤：正文独立成为用户回复，登记与选择阶段只保留内部轨迹。
+// saveReply 在一个事务里完成助手记录与步骤：正文独立成为用户回复，有正文才对用户可见。
 // 工具调用从此成为历史的一部分，下一轮按消息尾部看到它们没有回执，就去执行。
-func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, toolOnly bool, response chatResponse) error {
+func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, response chatResponse) error {
 	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: !toolOnly && AssistantTextToUser(response.Choices[0].Message) != ""})
+		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: AssistantTextToUser(response.Choices[0].Message) != ""})
 		if err != nil {
 			return err
 		}
