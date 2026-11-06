@@ -161,7 +161,8 @@ func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, erro
 
 const hasNewMainInput = `-- name: HasNewMainInput :one
 SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = $1
-    AND role = 'user' AND NOT is_summary AND sequence > $2::bigint)
+    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
+    AND sequence > $2::bigint)
 `
 
 type HasNewMainInputParams struct {
@@ -260,6 +261,8 @@ WITH summary AS (
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
 WHERE m.user_id = $1 AND NOT m.generating
+ -- Old automatic memory snapshots are retained for audit only.
+ AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))

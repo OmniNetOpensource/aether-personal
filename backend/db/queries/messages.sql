@@ -32,7 +32,8 @@ VALUES ($1, $2, $3, $4, $5, $6);
 -- name: HasNewMainInput :one
 -- 只比较实际投递的输入，摘要和工具回执不打断生成。
 SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
-    AND role = 'user' AND NOT is_summary AND sequence > sqlc.arg(through)::bigint);
+    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
+    AND sequence > sqlc.arg(through)::bigint);
 
 -- name: ReserveMainReply :one
 INSERT INTO messages (user_id, role, content, step_id, generating)
@@ -71,6 +72,8 @@ WITH summary AS (
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
+ -- Old automatic memory snapshots are retained for audit only.
+ AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
   m.id = (SELECT id FROM summary)
   OR (NOT m.is_summary AND m.sequence > coalesce((SELECT summary_through_sequence FROM summary), 0))

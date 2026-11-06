@@ -13,10 +13,12 @@ flowchart TD
             TASKS["需求队列：登记输入 · 更新任务<br/>每用户一项执行中 · 按顺序领取"]
             SEARCH["search_message"]
             READ["read_message"]
+            MEMORY["memory 工具渐进加载<br/>需要时先读 memory.md 索引 · 再读相关主题"]
 
             MAIN <-->|"登记补充 / 继续当前任务"| TASKS
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
+            MAIN <-->|"根索引与主题按需读写"| MEMORY
             MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
         end
 
@@ -30,6 +32,7 @@ flowchart TD
         TASKS <-->|"任务与输入位置 / 回执同事务"| DB
         SEARCH <-->|"按用户搜索历史"| DB
         READ <-->|"按 ID 读取"| DB
+        MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
 
     end
 
