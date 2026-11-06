@@ -16,15 +16,14 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // prepareContext 是每次调用模型前的上下文入口：读入该 Main 当前世代的消息，
 // 判断要不要压缩（上次官方用量达到 token 阈值或容量上限；不看闲置时长），需要时先完成压缩，再按组装规则返回最终请求。
 // 输入按已确定的值信任：模型、容量、阈值都来自设置；压缩只对模型调用本身失败负责，不处理其他假想状态（见 docs/wiki/05-main-runtime.md）。
-func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 	// 先定这次用哪个模型和上下文上限：取管理员在看板保存的设置。
-	queries := database.New(connection)
+	queries := database.New(r.databasePool)
 	settings, err := modelsettings.Load(ctx, queries, r.settings)
 	if err != nil {
 		return modelRequest{}, err
@@ -105,7 +104,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (
 	}
 	committed := false
 	defer func() {
-		if committed || connection.Conn().IsClosed() {
+		if committed {
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -113,12 +112,9 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (
 		failure := "compaction did not commit; original context preserved"
 		_ = queries.FinishStep(cleanup, database.FinishStepParams{ID: compactStepID, Error: &failure})
 	}()
-	// 真正调用压缩模型，等待期间同样靠 whileRequest 看住执行锁连接。
+	// 压缩直接使用本轮上下文调用模型，等待网络期间不持有连接。
 	beforeValue := int32(min(before, math.MaxInt32))
-	result, err := whileRequest(ctx, connection, nil, func(requestContext context.Context, _ func() error) (chatResponse, error) {
-		response, _, requestErr := r.sendModelRequest(requestContext, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through}, nil)
-		return response, requestErr
-	})
+	result, _, err := r.sendModelRequest(ctx, summaryRequest, database.StartModelCallParams{StepID: compactStepID, Purpose: "compact", CompactReason: &reason, ContextTokensBefore: &beforeValue, SummaryThroughSequence: &through}, nil)
 	if err != nil {
 		return modelRequest{}, fmt.Errorf("compact context: %w", err)
 	}
@@ -130,7 +126,7 @@ func (r *Runner) prepareContext(ctx context.Context, connection *pgxpool.Conn) (
 	// 压缩后的新世代以这条摘要替代被压的历史，保留下来的新消息原文依次跟在后面；指令由每次请求的第一条注入，不随世代落库。
 	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary.Content})
 	// 摘要落库：一个事务里写入摘要消息并给压缩步骤记上用量，两步要么一起成要么都不算；压缩后的大小不估算，下一次 Agent 请求的官方 prompt_tokens 就是它。
-	err = pgx.BeginFunc(ctx, connection, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
 		if err := q.LockUserMessages(ctx, r.userID); err != nil {
 			return err

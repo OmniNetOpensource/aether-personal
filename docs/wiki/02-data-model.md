@@ -16,6 +16,8 @@
 
 ```mermaid
 erDiagram
+    users ||--o| agent_routes : "临时执行归属"
+    agent_instances ||--o{ agent_routes : "负责执行"
     users ||--o{ sessions : "登录"
     users ||--o{ messages : "拥有"
     users ||--o{ tasks : "需求队列"
@@ -35,6 +37,8 @@ erDiagram
 | 表 | 用途 | 状态 |
 | --- | --- | --- |
 | `users` | 用户；每个用户即一个 Main | `已实现` |
+| `agent_instances` | 进程身份、用户执行容量、心跳和接单状态，见 [12](12-agent-routing.md#两张表) | `开发中` |
+| `agent_routes` | 每用户当前实例、本次分配 ID 与分配时间；不复制业务状态，见 [12](12-agent-routing.md#两张表) | `开发中` |
 | `messages` | Main 的上下文列表，即 `messageList` | `已实现` |
 | `tasks` | 持久化需求、补充后的完整要求与执行状态；每用户最多一项执行中 | `开发中` |
 | `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |

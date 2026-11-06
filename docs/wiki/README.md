@@ -19,6 +19,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 | [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
 | [10 Schedule](10-schedules.md) | 2026-11-03 起不在当前范围；已有实现已删除 |
 | [11 需求队列](11-tasks.md) | 持久化需求与补充、登记阶段、每用户单任务执行、排队与恢复 |
+| [12 Agent 多实例路由](12-agent-routing.md) | 临时执行归属、按容量分配、定向通知、心跳接管与排空 |
 
 ## 状态标注
 

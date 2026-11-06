@@ -1,14 +1,8 @@
--- 本文件是消息与 Agent 运行时的核心查询集合：消息写入与读取、上下文读取、步骤记账、运行时锁与“是否有活”判断，是对话主循环的数据基础（sqlc 据此生成代码）。
+-- 本文件提供消息写入、上下文、步骤记账和持久待办查询；短事务用户锁保证消息顺序，执行由进程内 Manager 串行调度。
 
 -- name: LockUserMessages :exec
 -- 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || sqlc.arg(user_id)::uuid::text, 0));
-
--- name: TryLockRuntime :one
-SELECT pg_try_advisory_lock(hashtextextended(sqlc.arg(lock_key)::text, 0));
-
--- name: UnlockRuntime :one
-SELECT pg_advisory_unlock(hashtextextended(sqlc.arg(lock_key)::text, 0));
 
 -- name: NotifyUserMessages :exec
 SELECT pg_notify('user_messages', sqlc.arg(user_id)::uuid::text);
@@ -52,6 +46,7 @@ SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
     AND sequence > sqlc.arg(through)::bigint);
 
 -- name: ReserveMainReply :one
+-- 任务来自发起请求时的快照，回复完成时不会重新选择任务。
 INSERT INTO messages (user_id, role, content, step_id, task_id, generating)
 VALUES ($1, 'assistant', '{"role":"assistant"}', $2, $3, true) RETURNING id;
 
@@ -85,7 +80,7 @@ WITH summary AS (
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.task_id, m.created_at FROM messages AS m
 WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
- -- Old automatic memory snapshots are retained for audit only.
+ -- 旧原型的自动根快照留作历史审计，不再进入普通请求或 compact；主动读取记忆产生的工具回执仍正常保留。
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
   m.id = (SELECT id FROM summary)

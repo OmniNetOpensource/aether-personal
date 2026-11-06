@@ -269,7 +269,7 @@ WITH summary AS (
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.task_id, m.created_at FROM messages AS m
 WHERE m.user_id = $1 AND NOT m.generating
- -- Old automatic memory snapshots are retained for audit only.
+ -- 旧原型的自动根快照留作历史审计，不再进入普通请求或 compact；主动读取记忆产生的工具回执仍正常保留。
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
   m.id = (SELECT id FROM summary)
@@ -461,7 +461,7 @@ const lockUserMessages = `-- name: LockUserMessages :exec
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || $1::uuid::text, 0))
 `
 
-// 本文件是消息与 Agent 运行时的核心查询集合：消息写入与读取、上下文读取、步骤记账、运行时锁与“是否有活”判断，是对话主循环的数据基础（sqlc 据此生成代码）。
+// 本文件提供消息写入、上下文、步骤记账和持久待办查询；短事务用户锁保证消息顺序，执行由进程内 Manager 串行调度。
 // 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
 func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockUserMessages, userID)
@@ -499,6 +499,7 @@ type ReserveMainReplyParams struct {
 	TaskID *uuid.UUID
 }
 
+// 任务来自发起请求时的快照，回复完成时不会重新选择任务。
 func (q *Queries) ReserveMainReply(ctx context.Context, arg ReserveMainReplyParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.StepID, arg.TaskID)
 	var id uuid.UUID
@@ -539,26 +540,4 @@ func (q *Queries) StartStep(ctx context.Context, arg StartStepParams) (uuid.UUID
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
-}
-
-const tryLockRuntime = `-- name: TryLockRuntime :one
-SELECT pg_try_advisory_lock(hashtextextended($1::text, 0))
-`
-
-func (q *Queries) TryLockRuntime(ctx context.Context, lockKey string) (bool, error) {
-	row := q.db.QueryRow(ctx, tryLockRuntime, lockKey)
-	var pg_try_advisory_lock bool
-	err := row.Scan(&pg_try_advisory_lock)
-	return pg_try_advisory_lock, err
-}
-
-const unlockRuntime = `-- name: UnlockRuntime :one
-SELECT pg_advisory_unlock(hashtextextended($1::text, 0))
-`
-
-func (q *Queries) UnlockRuntime(ctx context.Context, lockKey string) (bool, error) {
-	row := q.db.QueryRow(ctx, unlockRuntime, lockKey)
-	var pg_advisory_unlock bool
-	err := row.Scan(&pg_advisory_unlock)
-	return pg_advisory_unlock, err
 }

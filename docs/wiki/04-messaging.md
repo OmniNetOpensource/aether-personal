@@ -20,14 +20,13 @@
 
 ## 整体结构
 
-参考业界做法后，采用“实例无状态、状态放在共享存储”的结构（与 [LangGraph Agent Server](https://docs.langchain.com/langsmith/agent-server)、[DBOS](https://www.dbos.dev/blog/postgres-is-all-you-need-for-durable-execution) 同一思路），不采用把请求路由到固定实例的 Actor 模型（如 Cloudflare Durable Objects、Restate Virtual Objects），因为后者依赖专门的平台。
+2026-11-06 起采用「共享持久状态 + 临时执行归属」：接入实例保存输入，数据库按用户归属定向通知执行者；无健康归属时按实例容量分配，全部满载时保留数据库待办。运行结束释放归属，实例失效后可接管。完整设计、理由与本地验证见 [12 Agent 多实例路由](12-agent-routing.md)。这取代此前所有实例收到通知后全量扫描、抢用户锁的调度方式。
 
-- 所有后端机器对等、无状态：机器内存中不保存丢失后无法找回的信息，Main 的上下文与运行状态（由消息表推出）都在 PostgreSQL 中。
-- 用户请求不需要路由到“正在运行 agent 的机器”：收到消息的机器只负责存入数据库；同一用户的 Main 由数据库锁保证同一时间只有一台机器运行，正在运行的机器在下一次模型调用前会取到新消息。
-- 机器之间通过 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，通知只带用户 ID，数据始终以表为准。不引入 Redis。
-- 内存中只有两样东西：WebSocket 连接（断开后 App 重连到任意机器即可）与进行中的模型调用（机器崩溃后由其他机器重新调用）。
-- 不单独建 `events` 表：用户能看到的消息本就在 `messages` 中，每条 WebSocket 连接自己记录推送位置，从 `messages` 中查出位置之后的消息即可。
-- 目前只部署一台，但代码按多台的要求编写。
+- 所有后端都可接收任意用户的 WebSocket；执行实例可以不同，用户连接不必迁移。
+- 消息、任务、记忆和轨迹在 PostgreSQL，`agent_routes` 只记录当前执行者，不承载唯一的业务状态。
+- 有归属的新输入直接发送实例专属通知，无归属发送 `agent_pending` 请求分配；聊天广播 `user_messages` 只用于推送，不再触发全局执行扫描。
+- 用户执行锁仍保证同一用户单处运行；分配 ID 和提交时的路由行锁阻止过期执行者提交业务结果。
+- 不引入 Redis 或单独事件表。通知负责及时性，启动和五秒补偿负责找回遗漏。
 
 ## 一条消息的完整路径
 
@@ -45,8 +44,8 @@ sequenceDiagram
     WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
     WS-->>App: messages {这条用户消息, main_thinking}
     WS-->>App: delivered {client_message_id}
-    DB-->>WS: NOTIFY user_messages（监听转发唤醒 Runner，Runner 只认此来源）
-    Runner->>DB: 尝试获取该用户的 Main 锁，读取上个 compact 以来的消息
+    DB-->>WS: 定向 Agent 通知（无归属则先分配）
+    Runner->>DB: 取得 Main 锁并核对分配 ID，读取上下文与任务
     Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
@@ -172,7 +171,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
 - 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
 - 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
-- 每台机器用一条专用数据库连接执行 `LISTEN user_messages`。监听连接断开后会重连，并让本机所有连接各查一次表，补上断开期间丢失的通知。此补查只覆盖聊天连接：Manager 同在这一条监听上接收唤醒，但 2026-11-03 起只认通知、不在重连时补扫，断开期间错过的 Main 工作等下一次通知触发全量扫描时恢复（见 [05](05-main-runtime.md#运行循环-已实现)）。
+- 每台机器用一条专用连接 `LISTEN user_messages`，断线重连后让本机所有聊天连接补查。Agent Manager 使用另一条专用连接接收执行通知，启动、重连和每五秒补查归属与遗漏待办，见 [12](12-agent-routing.md)。
 
 ## 助手消息宽度
 
@@ -215,7 +214,7 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 UUIDv7 的时间来自数据库服务器时钟；时钟被人为往回调时，新 `id` 可能小于旧 `id`。服务器时钟同步通常是逐渐校准，风险可接受。
 
-两把锁的区别：
+消息和执行锁的区别（另有只覆盖容量分配短事务的调度锁，见 [12](12-agent-routing.md)）：
 
 | 锁 | 范围 | 作用 |
 | --- | --- | --- |
@@ -225,7 +224,7 @@ UUIDv7 的时间来自数据库服务器时钟；时钟被人为往回调时，�
 ## 暂不采用、以后再评估
 
 - 将“连接服务器”与“agent worker”拆成两组机器（LangGraph 的做法）：代码按两种角色分开编写，目前在同一进程中运行。
-- 用租约代替 advisory lock：目前使用 advisory lock，更简单且机器崩溃时立即释放。
+- 用租约代替 advisory lock：当前心跳决定路由有效性，但仍保留 advisory lock 作为执行互斥；接管须等待旧数据库会话释放。
 - 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
 
 `待确认`：边生成边显示的推送方式；各平台的 WebSocket 连接恢复行为；其他平台的连接与部署验收。

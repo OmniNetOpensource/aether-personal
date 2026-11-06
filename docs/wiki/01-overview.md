@@ -141,7 +141,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 关键设计
 
-**后端无状态，状态都在 PostgreSQL。** 任何一台后端都能处理任何用户的请求；机器之间用 PostgreSQL 的 `LISTEN/NOTIFY` 互相唤醒，用咨询锁（advisory lock）保证同一用户的 Main 同一时间只在一台机器上运行。不引入 Redis。内存中只有 WebSocket 连接与进行中的模型调用，丢失后都能恢复。详见 [04 消息与实时通信](04-messaging.md#整体结构)。
+**共享持久状态，按用户维护临时执行归属。** 任意后端接收 WebSocket；Agent 运行期间按路由定向通知，无健康归属时按可用名额比例分配。消息、任务与记忆在 PostgreSQL，用户执行锁与分配 ID 保护单处执行和结果提交。启动、重连与五秒补偿恢复遗漏工作，不引入 Redis。详见 [12 Agent 多实例路由](12-agent-routing.md)，本地开发中，未部署。
 
 **一切通信都是消息。** 用户与 Main 只通过消息联系，Main 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）。
 
@@ -209,8 +209,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
-| `DATABASE_MAX_CONNS` | 默认 20，最小 5；聊天 LISTEN 使用一条池外连接 |
-| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制进程内并行用户数 |
+| `DATABASE_MAX_CONNS` | 默认 20，最小 5；池外另有聊天与 Agent 两条 LISTEN 连接 |
+| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制每实例用户执行名额 |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 
