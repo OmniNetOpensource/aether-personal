@@ -31,7 +31,7 @@
 | Agent 运行过程 | 2026-10-30 新增“运行过程”页并保留模型调用列表；按 Agent 时间降序（最新在上）显示输入、推理、工具调用与结果、压缩摘要、失败请求和不可见指令，长内容截断后按需加载；不显示待读消息与工具时长 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：运行概览汇总与服务配置明细两处显示六个服务的剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel 不接受产品 API Key）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
-| 任务 | `tasks` 持久化用户需求与补充，登记后按用户单任务执行；空闲时由模型选择下一项，不按 ID 或登记先后领取 | [11](wiki/11-tasks.md) |
+| 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，每用户一项执行中，当前任务结束后由模型读取 `list_tasks` 并用 `update_task(..., in_progress)` 选择下一项，后端不按 ID 或登记先后自动选取；删除冗余 `source_sequence`（`00039`）。任务记录以 `related_message_ids` 关联相关输入与可见助手回复，不设 `outcome`；`list_tasks` 统一返回列表，去掉 `task_id` 参数；不恢复 Subagent | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |

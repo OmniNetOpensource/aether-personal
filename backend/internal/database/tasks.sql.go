@@ -26,31 +26,25 @@ func (q *Queries) AdvanceTaskInput(ctx context.Context, arg AdvanceTaskInputPara
 }
 
 const createTask = `-- name: CreateTask :one
-INSERT INTO tasks (user_id, title, description, source_sequence)
-VALUES ($1, $2, $3, $4) RETURNING id
+INSERT INTO tasks (user_id, title, description)
+VALUES ($1, $2, $3) RETURNING id
 `
 
 type CreateTaskParams struct {
-	UserID         uuid.UUID
-	Title          string
-	Description    string
-	SourceSequence int64
+	UserID      uuid.UUID
+	Title       string
+	Description string
 }
 
 func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, createTask,
-		arg.UserID,
-		arg.Title,
-		arg.Description,
-		arg.SourceSequence,
-	)
+	row := q.db.QueryRow(ctx, createTask, arg.UserID, arg.Title, arg.Description)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
 
 const getActiveTask = `-- name: GetActiveTask :one
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.source_sequence, t.created_at, t.updated_at, ARRAY(
+SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
@@ -76,7 +70,6 @@ func (q *Queries) GetActiveTask(ctx context.Context, userID uuid.UUID) (GetActiv
 		&i.Task.Title,
 		&i.Task.Description,
 		&i.Task.Status,
-		&i.Task.SourceSequence,
 		&i.Task.CreatedAt,
 		&i.Task.UpdatedAt,
 		&i.RelatedMessageIds,
@@ -107,7 +100,7 @@ func (q *Queries) GetNextTaskInput(ctx context.Context, userID uuid.UUID) (GetNe
 }
 
 const getTask = `-- name: GetTask :one
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.source_sequence, t.created_at, t.updated_at, ARRAY(
+SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
@@ -138,7 +131,6 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 		&i.Task.Title,
 		&i.Task.Description,
 		&i.Task.Status,
-		&i.Task.SourceSequence,
 		&i.Task.CreatedAt,
 		&i.Task.UpdatedAt,
 		&i.RelatedMessageIds,
@@ -173,7 +165,7 @@ func (q *Queries) LinkTaskMessage(ctx context.Context, arg LinkTaskMessageParams
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.source_sequence, t.created_at, t.updated_at, ARRAY(
+SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
     SELECT related.id FROM (
         SELECT m.id, m.sequence FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
         WHERE tm.task_id = t.id
@@ -214,7 +206,6 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 			&i.Task.Title,
 			&i.Task.Description,
 			&i.Task.Status,
-			&i.Task.SourceSequence,
 			&i.Task.CreatedAt,
 			&i.Task.UpdatedAt,
 			&i.RelatedMessageIds,

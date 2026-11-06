@@ -137,7 +137,7 @@ func executeRecordTaskInput(ctx context.Context, _ Dependencies, queries *databa
 	for _, change := range input.Changes {
 		var taskID uuid.UUID
 		if change.TaskID == nil {
-			taskID, err = queries.CreateTask(ctx, database.CreateTaskParams{UserID: userID, Title: change.Title, Description: change.Description, SourceSequence: source.Sequence})
+			taskID, err = queries.CreateTask(ctx, database.CreateTaskParams{UserID: userID, Title: change.Title, Description: change.Description})
 		} else {
 			taskID = *change.TaskID
 			err = queries.ReviseTaskFromInput(ctx, database.ReviseTaskFromInputParams{UserID: userID, ID: taskID, Title: change.Title, Description: change.Description, Status: change.Status})

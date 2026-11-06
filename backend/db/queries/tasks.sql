@@ -50,8 +50,8 @@ SELECT sqlc.embed(t), ARRAY(
 FROM tasks AS t WHERE t.user_id = $1 AND t.status = 'in_progress';
 
 -- name: CreateTask :one
-INSERT INTO tasks (user_id, title, description, source_sequence)
-VALUES ($1, $2, $3, $4) RETURNING id;
+INSERT INTO tasks (user_id, title, description)
+VALUES ($1, $2, $3) RETURNING id;
 
 -- name: ReviseTaskFromInput :exec
 UPDATE tasks SET title = $3, description = $4, status = $5, updated_at = now()

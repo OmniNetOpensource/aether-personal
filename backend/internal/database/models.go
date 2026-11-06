@@ -141,14 +141,13 @@ type Step struct {
 }
 
 type Task struct {
-	ID             uuid.UUID
-	UserID         uuid.UUID
-	Title          string
-	Description    string
-	Status         string
-	SourceSequence int64
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Title       string
+	Description string
+	Status      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type TaskMessage struct {

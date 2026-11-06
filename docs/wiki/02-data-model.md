@@ -91,7 +91,7 @@ erDiagram
 
 ### `tasks`
 
-Main 按任务登记完整要求，补充说明更新同一任务。每个用户同时最多一项任务执行中。下一项由模型读取任务列表后自行选择。UUIDv7 的 `id` 用于标识和稳定列举，不代表执行优先级。
+Main 按任务登记完整要求，补充说明更新同一任务。每个用户同时最多一项任务执行中。2026-11-06，用户确认删除冗余的 `source_sequence`（`00039`），并纠正自动按 ID 领取的假设：下一项由模型读取任务列表后自行选择。UUIDv7 的 `id` 用于标识和稳定列举，不代表执行优先级。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -100,7 +100,6 @@ Main 按任务登记完整要求，补充说明更新同一任务。每个用户
 | `title` | text | 完整标题，1 至 200 字符 |
 | `description` | text | 当前完整目标、背景与约束，1 至 32,000 字符 |
 | `status` | text | `queued`、`in_progress`、`waiting`、`completed`、`cancelled`；默认 `queued` |
-| `source_sequence` | bigint | 最初关联输入的序号，不用于决定执行优先级 |
 | `created_at`、`updated_at` | timestamptz | 创建与最后变更时间 |
 
 上述字段均非空。`tasks_one_in_progress_per_user` 部分唯一索引保证每用户最多一项 `in_progress`。助手记录通过 `messages.task_id` 保存单一任务归属，一个任务可有多条可见回复。任务完成状态独立于某一条消息，未来可接入文件交付，详见 [11](11-tasks.md)。
@@ -136,7 +135,7 @@ Main 按任务登记完整要求，补充说明更新同一任务。每个用户
 
 `memory_files` 保存当前根文档和主题正文；它们只有被 `memory` 工具读取时才通过工具回执进入 `messages`。读取或编辑结果与普通工具历史一起续接，不另建根快照、快照表或世代关联字段。
 
-旧原型可能留下 `name = memory_context` 的自动根快照。它们仅保留供历史审计，`ListAgentContextRows` 明确排除这些行，普通请求与 compact 都不再加载它们；主动读取记忆的工具回执不受此过滤影响。
+旧原型可能留下 `name = memory_context` 的自动根快照。它们仅保留供历史审计，`ListAgentContextRows` 明确排除这些行，普通请求与 compact 都不再加载它们；主动读取记忆的工具回执不受此过滤影响。`00038` 是旧原型的输入通知排除迁移，不再代表会生成根快照。
 
 ### `steps`
 
@@ -279,6 +278,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00032_add_memory_topics.sql` | 曾保存主题来源、版本与删除标记；已由 `00035` 改为文件 | `历史` |
 | `00033_add_memory_roots.sql` | 曾单独保存根文档；已由 `00035` 合并为文件 | `历史` |
 | `00035_simplify_memory_files.sql` | 单一 memory 文件工具的文本存储；迁移旧正文并移除旧表 | `开发中` |
+| `00038_memory_context_messages.sql` | 旧根快照原型的通知排除；现已取消自动快照，旧行仅供审计 | `历史` |
+| `00039_drop_task_source_sequence.sql` | 删除冗余任务来源序号，保留按 ID 列举索引；下一项任务由模型选择 | `开发中` |
 | `00036_associate_assistant_messages_with_tasks.sql` | 一条助手回复只归属一个任务，保留旧历史，为后续多种交付形式保持任务状态独立 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
