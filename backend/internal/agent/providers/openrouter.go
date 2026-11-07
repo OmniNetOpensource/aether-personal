@@ -1,4 +1,4 @@
-// 本文件适配 OpenRouter 渠道：未被其他渠道认领的模型都走这里，请求沿用统一请求的 JSON 形状，只补流式与用量选项。
+// 本文件适配 OpenRouter 渠道：设置 Gemini 的默认推理强度，组装流式请求，并保留响应中的正文、推理与工具调用供保存和续接。
 
 package providers
 
@@ -29,6 +29,10 @@ func (openRouterProvider) PrepareRequest(ctx context.Context, credentials servic
 	// 要求流式返回，并在末尾分片带上用量；用量拿不到时记空，不阻断回复。
 	prepared.Stream = true
 	prepared.StreamOptions = map[string]bool{"include_usage": true}
+	// 普通 Gemini 请求明确使用高推理并返回思考；压缩已经指定低强度与隐藏推理，沿用其设置。
+	if strings.HasPrefix(prepared.Model, "google/gemini-") && prepared.Reasoning == nil {
+		prepared.Reasoning = map[string]any{"effort": "high", "exclude": false}
+	}
 	// 从 Gemini 切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
 	messages := make([]json.RawMessage, len(prepared.Messages))
 	copy(messages, prepared.Messages)
@@ -79,14 +83,16 @@ func (openRouterProvider) DecodeStream(payloads [][]byte, _ Request) (Response, 
 	return assembleOpenRouterStream(payloads)
 }
 
-// openRouterStreamChunk 是流式分片的形状：正文与工具参数都只给增量片段，用量通常只在末尾分片出现。
+// openRouterStreamChunk 接收正文、推理和工具调用的流式分片，用量通常只在末尾分片出现。
 type openRouterStreamChunk struct {
 	ID      string `json:"id"`
 	Model   string `json:"model"`
 	Choices []struct {
 		Delta struct {
-			Content   json.RawMessage `json:"content"`
-			ToolCalls []struct {
+			Content          json.RawMessage   `json:"content"`
+			Reasoning        string            `json:"reasoning"`
+			ReasoningDetails []json.RawMessage `json:"reasoning_details"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -116,6 +122,8 @@ type streamToolCall struct {
 func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 	var response Response
 	var content strings.Builder
+	var reasoning strings.Builder
+	var reasoningDetails []json.RawMessage
 	calls := map[int]*streamToolCall{}
 	finishReason := ""
 	sawDone := false
@@ -144,6 +152,9 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 				finishReason = choice.FinishReason
 			}
 			content.WriteString(streamContentText(choice.Delta.Content))
+			// 推理文本按流顺序拼接；详情分片保留原始顺序与字段，避免丢失加密签名或把同 index 的不同类型合并。
+			reasoning.WriteString(choice.Delta.Reasoning)
+			reasoningDetails = append(reasoningDetails, choice.Delta.ReasoningDetails...)
 			for _, delta := range choice.Delta.ToolCalls {
 				call := calls[delta.Index]
 				if call == nil {
@@ -180,7 +191,15 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 			"function": map[string]string{"name": call.name, "arguments": call.arguments.String()},
 		})
 	}
-	message, err := json.Marshal(map[string]any{"role": "assistant", "content": content.String(), "tool_calls": toolCalls})
+	// 推理与正文一起落进助手消息；下一轮原样回传，已有看板可直接读取文本或加密状态。
+	messageFields := map[string]any{"role": "assistant", "content": content.String(), "tool_calls": toolCalls}
+	if reasoning.Len() > 0 {
+		messageFields["reasoning"] = reasoning.String()
+	}
+	if len(reasoningDetails) > 0 {
+		messageFields["reasoning_details"] = reasoningDetails
+	}
+	message, err := json.Marshal(messageFields)
 	if err != nil {
 		return response, false, err
 	}
