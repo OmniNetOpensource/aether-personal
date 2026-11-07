@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
@@ -42,14 +41,10 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 	if err == nil && usage.RequestedModel == model {
 		before = int64(usage.InputTokens)
 	}
-	// 算出输入能用多少：总容量先扣掉模型最大输出预算和 5% 余量，剩下的才是历史能占的上限；再看是撞到压缩阈值还是已经超容量。
+	// 输入容量保留 5% 余量：OpenRouter 不再显式预留最大输出预算，Gemini 目录本身给的就是独立输入上限。
 	inputLimit := int64(math.MaxInt32)
 	if capacity > 0 {
-		inputLimit = capacity - int64(outputLimit) - max(1024, capacity/20)
-		// Gemini 目录给的是独立输入上限，不像 OpenRouter 总上下文容量那样扣除输出预算。
-		if strings.HasPrefix(model, "ikun:gemini-") {
-			inputLimit = capacity - max(1024, capacity/20)
-		}
+		inputLimit = capacity - max(1024, capacity/20)
 	}
 	// 所有模型共用看板阈值（2026-11-03 用户确认取消 ikun Gemini 固定 400,000 的例外）；容量上限仍可更早触发。
 	threshold := min(int64(settings.CompactAtTokens), inputLimit)

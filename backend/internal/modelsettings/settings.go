@@ -5,6 +5,7 @@ package modelsettings
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
@@ -12,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Settings 是运行时实际生效的模型设置：输出使用目录已知的模型最大值，未知时为零，请求不发送输出限制。
+// Settings 是运行时实际生效的模型设置：OpenRouter 输出由供应商决定，Gemini 使用目录已知的最大值；零表示不发送输出限制。
 type Settings struct {
 	CompactAtTokens      int32      `json:"compact_at_tokens"`
 	MainContextLength    int64      `json:"main_context_length"`
@@ -37,7 +38,8 @@ func Load(ctx context.Context, queries *database.Queries, defaults config.Config
 			result.MainContextLength = *row.MainContextLength
 		}
 		result.MainModel, result.Version = row.MainModel, row.Version
-		if row.MainModelMaxTokens != nil {
+		// OpenRouter 省略 max_tokens，避免目录最大输出量与当前输入相加超过总上下文容量。
+		if strings.HasPrefix(row.MainModel, "ikun:gemini-") && row.MainModelMaxTokens != nil {
 			result.EffectiveOutputLimit = *row.MainModelMaxTokens
 		}
 		result.UpdatedAt, result.UpdatedBy, result.Source = &row.UpdatedAt, &row.UpdatedBy, "database"
