@@ -175,6 +175,9 @@ export interface QuotaItem {
 }
 
 export interface ModelSettings {
+  compact_model: string;
+  compact_context_length: number;
+  compact_output_limit: number;
   compact_at_tokens: number;
   effective_output_limit: number;
   main_model: string;
@@ -185,6 +188,7 @@ export interface ModelSettings {
 }
 
 export interface CatalogModel {
+  compact_only: boolean;
   id: string;
   name: string;
   provider: string;

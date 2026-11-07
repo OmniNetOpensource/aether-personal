@@ -22,6 +22,7 @@ import (
 const (
 	OpenRouter = "openrouter"
 	IkunGemini = "ikun_gemini"
+	IkunClaude = "ikun_claude"
 	Resend     = "resend"
 	Serper     = "serper"
 	Parallel   = "parallel"
@@ -29,6 +30,7 @@ const (
 	AliyunOSS  = "aliyun_oss"
 	// ikun Gemini 的默认线路由部署方确定，管理员日常只需填写 Key。
 	DefaultGeminiBaseURL = "https://api.ikuncode.cc"
+	DefaultClaudeBaseURL = "https://api.ikuncode.cc"
 )
 
 // Definition 提供看板名称与旧环境变量名称，导入命令与管理页使用同一份服务目录。
@@ -41,6 +43,7 @@ type Definition struct {
 var Definitions = []Definition{
 	{OpenRouter, "OpenRouter", "OPENROUTER_API_KEY"},
 	{IkunGemini, "ikun Gemini", "GEMINI_API_KEY_IKUNCODE"},
+	{IkunClaude, "ikun Claude", ""},
 	{Resend, "Resend", "RESEND_API_KEY"},
 	{Serper, "Serper", "SERP_API_KEY"},
 	{Parallel, "Parallel", "PARALLEL_API_KEY"},
@@ -216,6 +219,9 @@ func serviceBaseURL(service, baseURL string) string {
 	if service == IkunGemini && baseURL == "" {
 		return DefaultGeminiBaseURL
 	}
+	if service == IkunClaude && baseURL == "" {
+		return DefaultClaudeBaseURL
+	}
 	return baseURL
 }
 
@@ -225,9 +231,9 @@ func validate(service string, configured bool, baseURL, emailFrom, appEnv string
 		return fmt.Errorf("%w: service fields are too long", ErrInvalid)
 	}
 	switch service {
-	case IkunGemini:
+	case IkunGemini, IkunClaude:
 		if emailFrom != "" || (configured && baseURL == "") {
-			return fmt.Errorf("%w: Gemini requires a base URL", ErrInvalid)
+			return fmt.Errorf("%w: model service requires a base URL", ErrInvalid)
 		}
 		if baseURL != "" {
 			parsed, err := url.Parse(baseURL)

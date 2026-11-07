@@ -78,7 +78,7 @@ func (s *server) fetchServiceQuota(ctx context.Context, definition services.Defi
 	switch definition.ID {
 	case services.OpenRouter:
 		return s.openRouterQuota(ctx, quota, credentials.APIKey)
-	case services.IkunGemini:
+	case services.IkunGemini, services.IkunClaude:
 		return s.ikunQuota(ctx, quota, credentials)
 	case services.Resend:
 		return s.resendQuota(ctx, quota, credentials.APIKey)

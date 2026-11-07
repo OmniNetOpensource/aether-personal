@@ -26,7 +26,7 @@ const tabs: Record<Tab, [string, string]> = {
   overview: ['运行概览', '从用户到每一次调用，了解 Agent 正在如何工作。'],
   calls: ['模型调用', '真实请求尝试、提供方返回用量与结果。'],
   timeline: ['运行过程', '按时间查看 Main 收到的输入、推理与工具调用。'],
-  models: ['模型配置', '选择 Main 使用的模型，应用后从下一次请求生效。'],
+  models: ['模型配置', '分别选择对话与压缩模型，从下一次请求生效。'],
   services: ['服务配置', '管理模型、邮件与联网服务的 API Key，保存后从下一次请求生效。'],
 };
 const tabGlyphs: Record<Tab, string> = { overview: '◫', calls: '↗', timeline: '⋮', models: '⇄', services: '⚙' };

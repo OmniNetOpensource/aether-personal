@@ -60,7 +60,7 @@ type Provider interface {
 
 // registry 按顺序认领模型：先问有前缀约定的渠道，最后由 OpenRouter 兜底承接其余全部模型；
 // 新增渠道只需实现 Provider 并在此登记一行，Agent 的请求流程不变。
-var registry = []Provider{geminiProvider{}, openRouterProvider{}}
+var registry = []Provider{geminiProvider{}, claudeProvider{}, openRouterProvider{}}
 
 // ForModel 按模型名自动选择渠道，OpenRouter 的 Matches 恒为真，所以永远有渠道可用。
 func ForModel(model string) Provider {

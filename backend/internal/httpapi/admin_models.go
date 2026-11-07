@@ -1,4 +1,4 @@
-// 本文件实现管理看板的模型配置接口：拉取可用模型目录，读取并保存 Main 的运行时模型设置。
+// 本文件实现管理看板的模型配置接口：拉取可用模型目录，分别保存 Main 与上下文压缩的运行时模型设置。
 
 package httpapi
 
@@ -22,6 +22,7 @@ import (
 )
 
 type adminModel struct {
+	CompactOnly         bool   `json:"compact_only"`
 	MaxCompletionTokens *int32 `json:"max_completion_tokens"`
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
@@ -44,13 +45,13 @@ type adminModelCatalog struct {
 // availableModels 汇总已配置渠道，错误提示只包含固定文案，不暴露供应商响应或密钥。
 func (s *server) availableModels(ctx context.Context) adminModelCatalog {
 	catalog := adminModelCatalog{Items: []adminModel{}, Warnings: []string{}, FetchedAt: time.Now().UTC(), UnavailableProviders: map[string]bool{}}
-	// 两家目录并行读取，共享页面请求的时限，不把两个供应商的超时串起来。
+	// 各渠道目录并行读取，共享页面请求的时限。
 	type result struct {
 		provider string
 		models   []adminModel
 		err      error
 	}
-	results := make(chan result, 2)
+	results := make(chan result, 3)
 	go func() {
 		credentials, err := s.services.Load(ctx, services.OpenRouter)
 		var models []adminModel
@@ -67,7 +68,15 @@ func (s *server) availableModels(ctx context.Context) adminModelCatalog {
 		}
 		results <- result{"ikun Gemini", models, err}
 	}()
-	for range 2 {
+	go func() {
+		credentials, err := s.services.Load(ctx, services.IkunClaude)
+		var models []adminModel
+		if err == nil {
+			models, err = s.ikunClaudeModels(ctx, credentials)
+		}
+		results <- result{"ikun Claude", models, err}
+	}()
+	for range 3 {
 		result := <-results
 		if result.err != nil {
 			catalog.UnavailableProviders[result.provider] = true
@@ -165,11 +174,12 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	var request struct {
 		CompactAtTokens int32  `json:"compact_at_tokens"`
 		MainModel       string `json:"main_model"`
+		CompactModel    string `json:"compact_model"`
 		Version         int64  `json:"version"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 {
+	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || len(request.CompactModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 {
 		http.Error(w, "invalid model settings", http.StatusBadRequest)
 		return
 	}
@@ -177,25 +187,49 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	catalog := s.availableModels(ctx)
 	models := catalog.Items
-	if !slices.ContainsFunc(models, func(model adminModel) bool { return model.ID == request.MainModel }) {
+	// 两种用途各自校验：Claude 当前只做压缩，空压缩模型明确表示跟随 Main。
+	for _, selected := range []struct {
+		id      string
+		compact bool
+	}{{request.MainModel, false}, {request.CompactModel, true}} {
+		if selected.compact && selected.id == "" {
+			continue
+		}
+		if slices.ContainsFunc(models, func(model adminModel) bool {
+			return model.ID == selected.id && (selected.compact || !model.CompactOnly)
+		}) {
+			continue
+		}
 		provider := "OpenRouter"
-		if strings.HasPrefix(request.MainModel, "ikun:gemini-") {
+		if strings.HasPrefix(selected.id, "ikun:gemini-") {
 			provider = "ikun Gemini"
+		}
+		if strings.HasPrefix(selected.id, "ikun:claude-") {
+			provider = "ikun Claude"
 		}
 		if catalog.UnavailableProviders[provider] {
 			http.Error(w, "model catalog unavailable or model missing; settings unchanged", http.StatusBadGateway)
 			return
 		}
-		http.Error(w, "model is unavailable or incompatible with agent capabilities", http.StatusBadRequest)
+		http.Error(w, "model is unavailable or incompatible with its purpose", http.StatusBadRequest)
 		return
 	}
 	var mainCap *int32
 	var mainContext *int64
+	var compactModel *string
+	var compactCap *int32
+	var compactContext *int64
 	for _, model := range models {
 		if model.ID == request.MainModel {
 			mainCap = model.MaxCompletionTokens
 			if model.ContextLength > 0 {
 				mainContext = &model.ContextLength
+			}
+		}
+		if model.ID == request.CompactModel {
+			compactModel, compactCap = &request.CompactModel, model.MaxCompletionTokens
+			if model.ContextLength > 0 {
+				compactContext = &model.ContextLength
 			}
 		}
 	}
@@ -213,7 +247,7 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		if current.Version != request.Version {
 			return conflict
 		}
-		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, MainModelMaxTokens: mainCap, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, UpdatedBy: "管理员"}); err != nil {
+		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, MainModelMaxTokens: mainCap, CompactModel: compactModel, CompactModelMaxTokens: compactCap, CompactContextLength: compactContext, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, UpdatedBy: "管理员"}); err != nil {
 			return err
 		}
 		saved, err = modelsettings.Load(ctx, queries, s.appConfig)
@@ -227,6 +261,6 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		internalError(w, "save model settings failed", err)
 		return
 	}
-	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel)
+	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel, "compact_model", saved.CompactModel)
 	writeAdminJSON(w, saved)
 }

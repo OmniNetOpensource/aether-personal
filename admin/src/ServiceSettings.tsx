@@ -1,4 +1,4 @@
-// 本文件是管理看板的服务配置页：六个服务与阿里云 OSS 各自独立保存 Key，完整 Key 只用于当次提交、不回显也不存页面状态。
+// 本文件是管理看板的服务配置页：各渠道与工具服务独立保存凭证，完整 Key 只用于当次提交、不回显。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -14,6 +14,7 @@ import { Empty } from './ui.js';
 const descriptions: Record<string, string> = {
   openrouter: '模型目录与 OpenRouter 模型请求。',
   ikun_gemini: '通过 ikun 使用 Gemini 原生模型接口。',
+  ikun_claude: '通过 ikun 使用 Claude 生成上下文摘要，需要 Claude 专用 Key。',
   resend: '发送正式环境的登录验证码邮件。',
   serper: 'Google 搜索。',
   parallel: '普通网页与 Reddit 正文读取。',

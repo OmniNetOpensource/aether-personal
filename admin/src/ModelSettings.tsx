@@ -1,4 +1,4 @@
-// 本文件是管理看板的模型配置页：选择 Main 模型并填写压缩阈值，输出额度由模型能力决定，保存后从下一次请求生效。
+// 本文件是管理看板的模型配置页：分别选择 Main 与压缩模型并填写压缩阈值，保存后从下一次请求生效。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,7 +27,7 @@ export function ModelSettingsPage({
 }) {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [draft, setDraft] = useState<{ main_model: string; compact_at_tokens: number } | null>(null);
+  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loadError, setLoadError] = useState(false);
@@ -47,6 +47,7 @@ export function ModelSettingsPage({
       setCatalog(loadedCatalog);
       setDraft({
         main_model: loadedSettings.main_model,
+        compact_model: loadedSettings.compact_model,
         compact_at_tokens: loadedSettings.compact_at_tokens,
       });
       setLoadError(false);
@@ -73,8 +74,10 @@ export function ModelSettingsPage({
     return <div className="loading-card">正在读取当前配置与可用模型…</div>;
 
   const selected = catalog.items.find((model) => model.id === draft.main_model);
+  const selectedCompact = catalog.items.find((model) => model.id === draft.compact_model);
   const changed =
     draft.main_model !== settings.main_model ||
+    draft.compact_model !== settings.compact_model ||
     draft.compact_at_tokens !== settings.compact_at_tokens;
   const perMillion = (value: string) =>
     value !== '' && Number.isFinite(Number(value)) ? `$${Number(value) * 1000000}` : '未知';
@@ -84,7 +87,8 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (saving || !settings || !catalog || !draft) return;
     setSaveError('');
-    if (!catalog.items.some((model) => model.id === draft.main_model)) {
+    if (!catalog.items.some((model) => model.id === draft.main_model && !model.compact_only) ||
+        (draft.compact_model !== '' && !catalog.items.some((model) => model.id === draft.compact_model))) {
       setSaveError('请选择目录中的完整模型 ID，或刷新目录后重试。');
       return;
     }
@@ -103,6 +107,7 @@ export function ModelSettingsPage({
       setSettings(saved);
       setDraft({
         main_model: saved.main_model,
+        compact_model: saved.compact_model,
         compact_at_tokens: saved.compact_at_tokens,
       });
       notify('模型配置已应用，下一次请求开始生效。');
@@ -133,7 +138,7 @@ export function ModelSettingsPage({
       ) : null}
       <section className="model-intro">
         <div className="eyebrow teal">MODEL ROUTING</div>
-        <h2>选择 Main 的运行模型</h2>
+        <h2>选择对话与压缩模型</h2>
         <p>应用于所有用户。配置保存后立即生效，服务重启后继续保留；正在执行的请求会正常完成。</p>
         <p>
           {settings.effective_output_limit > 0
@@ -178,7 +183,7 @@ export function ModelSettingsPage({
                 onChange={(event) => setDraft({ ...draft, main_model: event.target.value.trim() })}
               />
               <datalist id="main-model-list">
-                {catalog.items.map((model) => (
+                {catalog.items.filter((model) => !model.compact_only).map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name}
                   </option>
@@ -206,6 +211,33 @@ export function ModelSettingsPage({
           <p className="muted">
             上下文达到阈值后，在下一次调用模型前压缩；恰好是用户新消息触发时，只压它之前的历史并保留这条消息原文。空闲时不产生请求，完整聊天历史保留。
           </p>
+          <div className="model-active">
+            <span>当前压缩模型</span>
+            <strong>{settings.compact_model || `跟随 Main · ${settings.main_model}`}</strong>
+          </div>
+          <label className="model-picker">
+            选择压缩模型
+            <input
+              list="compact-model-list"
+              autoComplete="off"
+              placeholder="留空跟随 Main；也可独立选择模型"
+              aria-label="选择压缩模型"
+              value={draft.compact_model}
+              disabled={saving}
+              onChange={(event) => setDraft({ ...draft, compact_model: event.target.value.trim() })}
+            />
+            <datalist id="compact-model-list">
+              {catalog.items.map((model) => (
+                <option key={model.id} value={model.id}>{model.name}</option>
+              ))}
+            </datalist>
+          </label>
+          <p className="muted">
+            {selectedCompact
+              ? `${selectedCompact.provider} · ${selectedCompact.context_length > 0 ? `${formatNumber(selectedCompact.context_length)} Token 容量` : '模型容量未知'}。仅生成摘要，后续回复继续由 Main 完成。`
+              : draft.compact_model === '' ? '未单独选择时，压缩跟随 Main 模型。' : '请从目录中选择完整的压缩模型 ID。'}
+          </p>
+          <p className="muted">摘要使用模型自身的输出额度；Claude 使用其最大输出能力。跨模型压缩不保证复用 Main 的缓存。</p>
           <div className="model-role-grid">
             <label className="model-picker">
               上下文阈值（Token）
@@ -222,7 +254,7 @@ export function ModelSettingsPage({
             </label>
           </div>
           <p className="muted">
-            Token 取上一次同模型成功请求的官方输入用量，所有模型共用这一阈值，并受已知输入容量上限约束；不再看距上次回答的时间。
+            触发依据 Main 上一次成功请求的官方输入用量，并受 Main 已知容量上限约束；请选择能容纳待压缩历史的压缩模型。
           </p>
         </section>
         <div className="model-save-bar">
@@ -239,7 +271,7 @@ export function ModelSettingsPage({
         </div>
       </form>
       <p className="model-catalog-note">
-        {`来自已配置的 OpenRouter 与 ikun Gemini 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。Gemini 目录不提供工具能力证明及渠道价格，实际可用性以请求结果为准，未返回的费用显示未知。`}
+        {`来自已配置的 OpenRouter、ikun Gemini 与 ikun Claude 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。ikun Claude 当前只用于压缩。目录不保证即时可用性，渠道未返回的费用显示未知。`}
       </p>
     </>
   );

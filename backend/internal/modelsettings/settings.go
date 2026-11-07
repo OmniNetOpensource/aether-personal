@@ -13,11 +13,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Settings 是运行时实际生效的模型设置：OpenRouter 输出由供应商决定，Gemini 使用目录已知的最大值；零表示不发送输出限制。
+// Settings 分别记录主对话与压缩的模型能力：OpenRouter 省略输出额度，ikun 模型使用已知最大值；空压缩模型表示跟随 Main。
 type Settings struct {
 	CompactAtTokens      int32      `json:"compact_at_tokens"`
 	MainContextLength    int64      `json:"main_context_length"`
 	EffectiveOutputLimit int32      `json:"effective_output_limit"`
+	CompactOutputLimit   int32      `json:"compact_output_limit"`
+	CompactContextLength int64      `json:"compact_context_length"`
+	CompactModel         string     `json:"compact_model"`
 	MainModel            string     `json:"main_model"`
 	Version              int64      `json:"version"`
 	UpdatedAt            *time.Time `json:"updated_at"`
@@ -38,6 +41,16 @@ func Load(ctx context.Context, queries *database.Queries, defaults config.Config
 			result.MainContextLength = *row.MainContextLength
 		}
 		result.MainModel, result.Version = row.MainModel, row.Version
+		if row.CompactModel != nil {
+			result.CompactModel = *row.CompactModel
+		}
+		if row.CompactContextLength != nil {
+			result.CompactContextLength = *row.CompactContextLength
+		}
+		// Claude 的 max_tokens 为必填项，使用目录最大值；OpenRouter 仍省略额度参数。
+		if strings.HasPrefix(result.CompactModel, "ikun:") && row.CompactModelMaxTokens != nil {
+			result.CompactOutputLimit = *row.CompactModelMaxTokens
+		}
 		// OpenRouter 省略 max_tokens，避免目录最大输出量与当前输入相加超过总上下文容量。
 		if strings.HasPrefix(row.MainModel, "ikun:gemini-") && row.MainModelMaxTokens != nil {
 			result.EffectiveOutputLimit = *row.MainModelMaxTokens
