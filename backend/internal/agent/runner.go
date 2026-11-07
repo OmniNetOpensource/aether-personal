@@ -1,5 +1,5 @@
 // 本文件执行单个用户的 Main；Manager 保证进程内串行，模型和工具等待期间不占用数据库连接。
-// Runner 只根据消息尾部决定下一步：补跑没有回执的工具，或再调用一次模型；没有工作后结束并注销。
+// Runner 根据消息尾部决定下一步：补跑没有回执的工具，或再调用一次模型；模型收尾后若还有进行中或排队的任务，用一轮任务提醒续跑，仍没有工作才结束并注销。
 
 package agent
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,6 +95,8 @@ func (r *Runner) run(parent context.Context) error {
 	// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 	var through int64
 	var loopErr error
+	// remindedTaskSignature 记录上一次收尾提醒时的未完成任务集合；集合没变就不重复提醒，避免模型始终不更新任务状态时无限续跑。
+	var remindedTaskSignature string
 	for {
 		rows, err := queries.ListAgentContextRows(parent, r.userID)
 		if err != nil {
@@ -122,10 +125,21 @@ func (r *Runner) run(parent context.Context) error {
 			loopErr = err
 			break
 		}
+		// 模型已经收尾但仍有进行中或排队的任务时，不直接结束：对同一批未完成任务只提醒一次，请模型核对并更新任务状态后再结束。
+		taskReminder := false
 		if !hasWork {
-			break
+			signature, err := r.unfinishedTaskSignature(parent)
+			if err != nil {
+				loopErr = err
+				break
+			}
+			if signature == "" || signature == remindedTaskSignature {
+				break
+			}
+			remindedTaskSignature = signature
+			taskReminder = true
 		}
-		if loopErr = r.reply(parent, &through); loopErr != nil {
+		if loopErr = r.reply(parent, &through, taskReminder); loopErr != nil {
 			break
 		}
 	}
@@ -145,6 +159,23 @@ func (r *Runner) run(parent context.Context) error {
 		}
 	}
 	return nil
+}
+
+// unfinishedTaskSignature 把进行中与排队的任务拼成一个可比较的签名：没有这类任务时返回空串。
+// Runner 用它判断收尾提醒是否已经对同一批未完成任务发过，任务集合发生变化后才允许再次提醒。
+func (r *Runner) unfinishedTaskSignature(ctx context.Context) (string, error) {
+	rows, err := database.New(r.databasePool).ListTasks(ctx, database.ListTasksParams{UserID: r.userID, IncludeClosed: false})
+	if err != nil {
+		return "", err
+	}
+	var signature strings.Builder
+	for _, row := range rows {
+		if row.Task.Status != "in_progress" && row.Task.Status != "queued" {
+			continue
+		}
+		fmt.Fprintf(&signature, "%s:%s;", row.Task.ID, row.Task.Status)
+	}
+	return signature.String(), nil
 }
 
 // executeToolCalls 并行执行尚无回执的工具，每个调用仅在保存结果时使用连接池。
@@ -188,7 +219,8 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 
 // reply 调用模型并把回复存成 assistant 消息。每次尝试是一个步骤：上下文准备（含可能的压缩）、请求和退避共用十分钟预算，
 // 传输等临时故障最多再试 3 次；失败尝试以错误收尾。每次尝试都重新组装上下文，期间新到的消息会一并带上。
-func (r *Runner) reply(ctx context.Context, through *int64) error {
+// taskReminder 为 true 时这一轮由收尾提醒触发，组装上下文时在末尾带上任务提醒。
+func (r *Runner) reply(ctx context.Context, through *int64, taskReminder bool) error {
 	queries := database.New(r.databasePool)
 	retryDeadline := time.Now().Add(modelRequestTimeout)
 	retryContext, cancel := context.WithDeadlineCause(ctx, retryDeadline, errModelRetryTimeout)
@@ -199,7 +231,7 @@ func (r *Runner) reply(ctx context.Context, through *int64) error {
 		if err != nil {
 			return err
 		}
-		prepared, err := r.prepareContext(retryContext)
+		prepared, err := r.prepareContext(retryContext, taskReminder)
 		if err != nil {
 			return err
 		}

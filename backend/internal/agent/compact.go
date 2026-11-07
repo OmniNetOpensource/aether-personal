@@ -19,8 +19,9 @@ import (
 
 // prepareContext 是每次调用模型前的上下文入口：读入该 Main 当前世代的消息，
 // 判断要不要压缩（上次官方用量达到 token 阈值或容量上限；不看闲置时长），需要时先完成压缩，再按组装规则返回最终请求。
+// taskReminder 只追加到最终的 Agent 请求，压缩请求本身不带提醒。
 // 输入按已确定的值信任：模型、容量、阈值都来自设置；压缩只对模型调用本身失败负责，不处理其他假想状态（见 docs/wiki/05-main-runtime.md）。
-func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRequest, error) {
 	// 先定这次用哪个模型和上下文上限：取管理员在看板保存的设置。
 	queries := database.New(r.databasePool)
 	settings, err := modelsettings.Load(ctx, queries, r.settings)
@@ -56,7 +57,7 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 		reason = "capacity"
 	}
 	if reason == "" {
-		return buildAgentRequest(rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit, taskReminder)
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
 	// 否则（工具续跑）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
@@ -84,7 +85,7 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 		}
 	}
 	if through == 0 {
-		return buildAgentRequest(rows, model, outputLimit)
+		return buildAgentRequest(rows, model, outputLimit, taskReminder)
 	}
 	// 沿用普通请求的消息前缀与上一次 Main 的供应商工具定义，只在末尾追加压缩要求；仍禁止实际工具调用。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
@@ -140,5 +141,5 @@ func (r *Runner) prepareContext(ctx context.Context) (modelRequest, error) {
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return buildAgentRequest(rows, model, outputLimit)
+	return buildAgentRequest(rows, model, outputLimit, taskReminder)
 }

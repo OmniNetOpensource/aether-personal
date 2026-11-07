@@ -7,6 +7,7 @@ const (
 	instructionsMessageName     = "instructions"
 	currentTimeMessageName      = "current_time"
 	progressReminderMessageName = "progress_reminder"
+	taskReminderMessageName     = "task_reminder"
 )
 
 // MainInstructions 是每次请求第一条以不可见 user 消息注入的固定指令，不落库；改动随代码部署对全部 Main 生效，看板时间线也展示这份原文。
@@ -242,6 +243,9 @@ const contextSummaryPrompt = "Historical context summary. Use as reference; cont
 
 // progressReminder 是组装请求时插在连续多轮无正文工具调用之后的提醒原文。
 const progressReminder = `Runtime progress check: several tool rounds have passed with no assistant text. If a task is in progress, write a short user-facing update about that task and continue its work. You may call tools in the same reply. Registration and task selection remain tool-only, without user-facing text. Do not end the in-progress task or repeat an update already sent. A progress update does not replace the final result.`
+
+// taskIncompleteReminder 是模型收尾后仍有进行中或排队任务时，收尾提醒轮在请求末尾追加的原文。
+const taskIncompleteReminder = `Runtime task check: you ended your reply while this user still has a task in progress or queued that is not completed. Read list_tasks to see the current tasks. If the in-progress task's work is actually finished, call update_task with status=completed in a separate tool-only batch, then end without repeating the result you already delivered. If its work is not finished, continue it now. If it is blocked on clarification or an external dependency, mark it waiting and explain the blocker to the user in that same reply. If no task is in progress, choose the next queued task yourself and start it with update_task status=in_progress in its own tool-only batch.`
 
 // currentTimePrompt 紧跟每条用户消息，%s 填这条消息固定的 UTC 入库时间。
 const currentTimePrompt = "Current time (UTC): %s"
