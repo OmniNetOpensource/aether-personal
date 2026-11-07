@@ -11,20 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const advanceTaskInput = `-- name: AdvanceTaskInput :exec
-UPDATE users SET task_input_through_sequence = $2 WHERE id = $1
-`
-
-type AdvanceTaskInputParams struct {
-	ID                       uuid.UUID
-	TaskInputThroughSequence int64
-}
-
-func (q *Queries) AdvanceTaskInput(ctx context.Context, arg AdvanceTaskInputParams) error {
-	_, err := q.db.Exec(ctx, advanceTaskInput, arg.ID, arg.TaskInputThroughSequence)
-	return err
-}
-
 const createTask = `-- name: CreateTask :one
 INSERT INTO tasks (user_id, title, description)
 VALUES ($1, $2, $3) RETURNING id
@@ -43,33 +29,8 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (uuid.UU
 	return id, err
 }
 
-const getNextTaskInput = `-- name: GetNextTaskInput :one
-
-SELECT m.id, m.sequence, m.content FROM messages AS m JOIN users AS u ON u.id = m.user_id
-WHERE m.user_id = $1 AND m.sender = 'user' AND m.role = 'user' AND NOT m.is_summary
-    AND m.sequence > u.task_input_through_sequence
-ORDER BY m.sequence LIMIT 1
-`
-
-type GetNextTaskInputRow struct {
-	ID       uuid.UUID
-	Sequence int64
-	Content  []byte
-}
-
-// 本文件维护按用户串行的需求队列与新输入登记位置；Main 的登记工具与回执共用事务，模型选择下一项，运行时保证一次只执行一项任务。
-func (q *Queries) GetNextTaskInput(ctx context.Context, userID uuid.UUID) (GetNextTaskInputRow, error) {
-	row := q.db.QueryRow(ctx, getNextTaskInput, userID)
-	var i GetNextTaskInputRow
-	err := row.Scan(&i.ID, &i.Sequence, &i.Content)
-	return i, err
-}
-
 const getTask = `-- name: GetTask :one
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-    WHERE tm.task_id = t.id ORDER BY m.sequence
-)::uuid[] AS related_message_ids
+SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at
 FROM tasks AS t WHERE t.user_id = $1 AND t.id = $2
 `
 
@@ -79,8 +40,7 @@ type GetTaskParams struct {
 }
 
 type GetTaskRow struct {
-	Task              Task
-	RelatedMessageIds []uuid.UUID
+	Task Task
 }
 
 func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, error) {
@@ -94,31 +54,13 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 		&i.Task.Status,
 		&i.Task.CreatedAt,
 		&i.Task.UpdatedAt,
-		&i.RelatedMessageIds,
 	)
 	return i, err
 }
 
-const linkTaskMessage = `-- name: LinkTaskMessage :exec
-INSERT INTO task_messages (task_id, message_id) VALUES ($1, $2)
-ON CONFLICT (task_id, message_id) DO NOTHING
-`
-
-type LinkTaskMessageParams struct {
-	TaskID    uuid.UUID
-	MessageID uuid.UUID
-}
-
-func (q *Queries) LinkTaskMessage(ctx context.Context, arg LinkTaskMessageParams) error {
-	_, err := q.db.Exec(ctx, linkTaskMessage, arg.TaskID, arg.MessageID)
-	return err
-}
-
 const listTasks = `-- name: ListTasks :many
-SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at, ARRAY(
-    SELECT m.id FROM task_messages AS tm JOIN messages AS m ON m.id = tm.message_id
-    WHERE tm.task_id = t.id ORDER BY m.sequence
-)::uuid[] AS related_message_ids
+
+SELECT t.id, t.user_id, t.title, t.description, t.status, t.created_at, t.updated_at
 FROM tasks AS t WHERE t.user_id = $1
     AND ($2::boolean OR t.status NOT IN ('completed', 'cancelled'))
 ORDER BY CASE t.status WHEN 'in_progress' THEN 0 WHEN 'queued' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
@@ -132,10 +74,10 @@ type ListTasksParams struct {
 }
 
 type ListTasksRow struct {
-	Task              Task
-	RelatedMessageIds []uuid.UUID
+	Task Task
 }
 
+// 本文件维护按用户串行的需求队列；任务只保存自身的要求与状态，模型选择下一项，运行时保证一次只执行一项任务。
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
 	rows, err := q.db.Query(ctx, listTasks, arg.UserID, arg.IncludeClosed)
 	if err != nil {
@@ -153,7 +95,6 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 			&i.Task.Status,
 			&i.Task.CreatedAt,
 			&i.Task.UpdatedAt,
-			&i.RelatedMessageIds,
 		); err != nil {
 			return nil, err
 		}
@@ -196,11 +137,6 @@ WHERE t.user_id = $2 AND t.id = $3 AND (
     OR (
         t.status = 'queued' AND $1::text = 'in_progress'
         AND NOT EXISTS (SELECT 1 FROM tasks WHERE user_id = $2 AND status = 'in_progress')
-        AND NOT EXISTS (
-            SELECT 1 FROM messages AS m JOIN users AS u ON u.id = m.user_id
-            WHERE m.user_id = $2 AND m.sender = 'user' AND m.role = 'user'
-                AND NOT m.is_summary AND m.sequence > u.task_input_through_sequence
-        )
     )
 )
 `
@@ -211,7 +147,7 @@ type UpdateTaskStatusParams struct {
 	ID     uuid.UUID
 }
 
-// 模型选择具体任务：没有当前任务和待登记输入时才能启动待执行项，其余状态变更只针对当前任务。
+// 模型选择具体任务：没有当前任务时才能启动待执行项，其余状态变更只针对当前任务。
 func (q *Queries) UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateTaskStatus, arg.Status, arg.UserID, arg.ID)
 	if err != nil {

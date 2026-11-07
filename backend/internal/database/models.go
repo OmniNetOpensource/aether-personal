@@ -149,15 +149,9 @@ type Task struct {
 	UpdatedAt   time.Time
 }
 
-type TaskMessage struct {
-	TaskID    uuid.UUID
-	MessageID uuid.UUID
-}
-
 type User struct {
 	ID                        uuid.UUID
 	Email                     string
 	CreatedAt                 time.Time
 	MainFailedThroughSequence *int64
-	TaskInputThroughSequence  int64
 }

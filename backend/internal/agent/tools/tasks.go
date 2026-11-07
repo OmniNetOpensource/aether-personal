@@ -1,4 +1,4 @@
-// 本文件提供需求登记、列表读取、模型选择与任务状态工具；登记不切换当前任务，变更与回执在同一事务中提交。
+// 本文件提供需求登记、列表读取、模型选择与任务状态工具；登记不切换当前任务，全部变更在同一事务中提交。
 
 package tools
 
@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -22,10 +21,10 @@ var listTasksTool = Tool{
 	Execute:    executeListTasks,
 }
 
-// recordTaskInputTool 原子登记一条用户输入包含的全部目标和补充，避免重试重复创建任务。
+// recordTaskInputTool 原子登记一个用户请求包含的全部目标和补充，全部变更一次提交。
 var recordTaskInputTool = Tool{
 	Name:       "record_task_input",
-	Definition: json.RawMessage(`{"type":"function","function":{"name":"record_task_input","description":"Register a new user message before doing its work: pass source_message_id from that message's current_time marker, once per message. Include ALL goals in this message: create a queued task for each new goal, or revise the existing task for additions/corrections to that same goal. Supply the COMPLETE updated title and description, preserving earlier constraints. A new goal never cancels or switches the in-progress task. Existing task status is preserved unless the user asks to cancel, pause (waiting, explaining why to the user in the same reply), or resume (queued). Do not revive closed tasks unless explicitly asked; a new follow-up goal can be a new task. Empty changes is only for a message containing no request and no task change. One message may update several tasks and create several new ones. Use tool calls only during registration; do not write assistant text or answer a newly queued goal.","parameters":{"type":"object","additionalProperties":false,"properties":{"source_message_id":{"type":"string"},"changes":{"type":"array","maxItems":20,"items":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string","description":"Omit for a new task; otherwise the exact existing task ID."},"title":{"type":"string","maxLength":200},"description":{"type":"string","maxLength":32000},"status":{"type":"string","enum":["queued","waiting","cancelled"],"description":"Only for an existing task and only when the user changes its lifecycle; omit to preserve its status."}},"required":["title","description"]}}},"required":["source_message_id","changes"]}}}`),
+	Definition: json.RawMessage(`{"type":"function","function":{"name":"record_task_input","description":"Register a new user request before doing its work. Include ALL goals in this request: create a queued task for each new goal, or revise the existing task for additions/corrections to that same goal. Supply the COMPLETE updated title and description, preserving earlier constraints. A new goal never cancels or switches the in-progress task. Existing task status is preserved unless the user asks to cancel, pause (waiting, explaining why to the user in the same reply), or resume (queued). Do not revive closed tasks unless explicitly asked; a new follow-up goal can be a new task. Empty changes is only for a request containing no task change. One request may update several tasks and create several new ones. Use tool calls only during registration; do not write assistant text or answer a newly queued goal.","parameters":{"type":"object","additionalProperties":false,"properties":{"changes":{"type":"array","maxItems":20,"items":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string","description":"Omit for a new task; otherwise the exact existing task ID."},"title":{"type":"string","maxLength":200},"description":{"type":"string","maxLength":32000},"status":{"type":"string","enum":["queued","waiting","cancelled"],"description":"Only for an existing task and only when the user changes its lifecycle; omit to preserve its status."}},"required":["title","description"]}}},"required":["changes"]}}}`),
 	Execute:    executeRecordTaskInput,
 }
 
@@ -36,18 +35,17 @@ var updateTaskTool = Tool{
 	Execute:    executeUpdateTask,
 }
 
-// TaskRecord 是工具与运行时共用的任务快照，只包含完整要求、状态与相关用户输入。
+// TaskRecord 是任务工具返回的任务快照，只包含任务自身的要求与状态。
 type TaskRecord struct {
-	ID                uuid.UUID   `json:"id"`
-	Title             string      `json:"title"`
-	Description       string      `json:"description"`
-	Status            string      `json:"status"`
-	RelatedMessageIDs []uuid.UUID `json:"related_message_ids"`
+	ID          uuid.UUID `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
 }
 
-// TaskSnapshot 为任务目录、写入回执和执行上下文提供一致的表示，消息列表按原始输入顺序排列。
-func TaskSnapshot(row database.Task, relatedMessageIDs []uuid.UUID) TaskRecord {
-	return TaskRecord{ID: row.ID, Title: row.Title, Description: row.Description, Status: row.Status, RelatedMessageIDs: relatedMessageIDs}
+// TaskSnapshot 把数据库任务行转成工具返回的任务快照。
+func TaskSnapshot(row database.Task) TaskRecord {
+	return TaskRecord{ID: row.ID, Title: row.Title, Description: row.Description, Status: row.Status}
 }
 
 // executeListTasks 按用户隔离返回任务数组，不提供按任务 ID 单独读取的入口。
@@ -64,7 +62,7 @@ func executeListTasks(ctx context.Context, _ Dependencies, queries *database.Que
 	}
 	records := make([]TaskRecord, 0, len(rows))
 	for _, row := range rows {
-		records = append(records, TaskSnapshot(row.Task, row.RelatedMessageIds))
+		records = append(records, TaskSnapshot(row.Task))
 	}
 	result, err := json.Marshal(records)
 	return string(result), err
@@ -78,24 +76,13 @@ type taskInputChange struct {
 	Status      string     `json:"status"`
 }
 
-// executeRecordTaskInput 先检查全部变更，再写任务和输入位置，业务参数错误不会留下半条输入的登记。
+// executeRecordTaskInput 先检查全部变更，再写任务，业务参数错误不会留下半条登记。
 func executeRecordTaskInput(ctx context.Context, _ Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error) {
 	var input struct {
-		SourceMessageID uuid.UUID         `json:"source_message_id"`
-		Changes         []taskInputChange `json:"changes"`
+		Changes []taskInputChange `json:"changes"`
 	}
-	if err := json.Unmarshal([]byte(arguments), &input); err != nil || input.SourceMessageID == uuid.Nil || input.Changes == nil || len(input.Changes) > 20 {
-		return "Error: source_message_id and changes (0 to 20 items) are required", nil
-	}
-	source, err := queries.GetNextTaskInput(ctx, userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "Error: no unregistered input remains; do not register it again", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	if source.ID != input.SourceMessageID {
-		return fmt.Sprintf("Error: register the next input %s before any later message", source.ID), nil
+	if err := json.Unmarshal([]byte(arguments), &input); err != nil || input.Changes == nil || len(input.Changes) > 20 {
+		return "Error: changes (0 to 20 items) is required", nil
 	}
 	// 参数和归属在写入前一次检查，随后内部代码信任这份已经归一的变更。
 	seen := map[uuid.UUID]bool{}
@@ -132,10 +119,11 @@ func executeRecordTaskInput(ctx context.Context, _ Dependencies, queries *databa
 			return "Error: keep the active task in progress; pause or cancel it only when the user asks", nil
 		}
 	}
-	// 全部变更都已校验；任务与输入登记位置在调用方事务内一次提交。
+	// 全部变更都已校验；任务变更在调用方事务内一次提交。
 	records := make([]TaskRecord, 0, len(input.Changes))
 	for _, change := range input.Changes {
 		var taskID uuid.UUID
+		var err error
 		if change.TaskID == nil {
 			taskID, err = queries.CreateTask(ctx, database.CreateTaskParams{UserID: userID, Title: change.Title, Description: change.Description})
 		} else {
@@ -145,23 +133,17 @@ func executeRecordTaskInput(ctx context.Context, _ Dependencies, queries *databa
 		if err != nil {
 			return "", err
 		}
-		if err := queries.LinkTaskMessage(ctx, database.LinkTaskMessageParams{TaskID: taskID, MessageID: source.ID}); err != nil {
-			return "", err
-		}
 		row, err := queries.GetTask(ctx, database.GetTaskParams{UserID: userID, ID: taskID})
 		if err != nil {
 			return "", err
 		}
-		records = append(records, TaskSnapshot(row.Task, row.RelatedMessageIds))
-	}
-	if err := queries.AdvanceTaskInput(ctx, database.AdvanceTaskInputParams{ID: userID, TaskInputThroughSequence: source.Sequence}); err != nil {
-		return "", err
+		records = append(records, TaskSnapshot(row.Task))
 	}
 	result, err := json.Marshal(records)
 	return string(result), err
 }
 
-// executeUpdateTask 根据模型给出的 ID 启动待办或更新当前任务；SQL 阻止任务抢占、跳过登记和提前完成未执行项。
+// executeUpdateTask 根据模型给出的 ID 启动待办或更新当前任务；SQL 阻止任务抢占和提前完成未执行项。
 func executeUpdateTask(ctx context.Context, _ Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error) {
 	var input struct {
 		TaskID uuid.UUID `json:"task_id"`
@@ -178,12 +160,12 @@ func executeUpdateTask(ctx context.Context, _ Dependencies, queries *database.Qu
 		return "", err
 	}
 	if affected == 0 {
-		return "Error: finish or pause only the active task; starting requires a queued task, no active task, and no unregistered input", nil
+		return "Error: finish or pause only the active task; starting requires a queued task and no active task", nil
 	}
 	row, err := queries.GetTask(ctx, database.GetTaskParams{UserID: userID, ID: input.TaskID})
 	if err != nil {
 		return "", err
 	}
-	result, err := json.Marshal(TaskSnapshot(row.Task, row.RelatedMessageIds))
+	result, err := json.Marshal(TaskSnapshot(row.Task))
 	return string(result), err
 }

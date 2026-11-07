@@ -71,9 +71,9 @@ func assembleMessages(rows []database.ListAgentContextRowsRow) []json.RawMessage
 			continue
 		case "user":
 			messages = append(messages, requestMessage(row))
-			// 时间与消息 ID 都取这条消息的固定字段，便于定位原文，同一段历史每次组装仍完全相同。
+			// 时间取这条消息的入库时间，同一段历史每次组装仍完全相同。
 			if row.Sender != nil && *row.Sender == "user" {
-				messages = append(messages, runtimeMessage(currentTimeMessageName, fmt.Sprintf(currentTimePrompt, row.CreatedAt.UTC().Format(time.RFC3339), row.ID)))
+				messages = append(messages, runtimeMessage(currentTimeMessageName, fmt.Sprintf(currentTimePrompt, row.CreatedAt.UTC().Format(time.RFC3339))))
 				silentToolRounds = 0
 			}
 		case "assistant":

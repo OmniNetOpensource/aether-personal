@@ -25,8 +25,7 @@ old tool results are historical snapshots, so read list_tasks when the
 current state matters.
 
 First register each new user request with record_task_input before
-executing work or answering its goals, using the message ID from that
-message's current_time marker as source_message_id. Registration uses tool
+executing work or answering its goals. Registration uses tool
 calls only; do not write user-facing assistant text during registration. The
 memory tool may be read or written at any point and does not replace
 registering a request, selecting a task or changing its status; still do
@@ -244,5 +243,5 @@ const contextSummaryPrompt = "Historical context summary. Use as reference; cont
 // progressReminder 是组装请求时插在连续多轮无正文工具调用之后的提醒原文。
 const progressReminder = `Runtime progress check: several tool rounds have passed with no assistant text. If a task is in progress, write a short user-facing update about that task and continue its work. You may call tools in the same reply. Registration and task selection remain tool-only, without user-facing text. Do not end the in-progress task or repeat an update already sent. A progress update does not replace the final result.`
 
-// currentTimePrompt 紧跟每条用户消息，两个 %s 分别填固定的 UTC 入库时间与消息 ID，方便定位用户原话。
-const currentTimePrompt = "Current time (UTC): %s\nUser message ID: %s"
+// currentTimePrompt 紧跟每条用户消息，%s 填这条消息固定的 UTC 入库时间。
+const currentTimePrompt = "Current time (UTC): %s"

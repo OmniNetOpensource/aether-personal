@@ -385,7 +385,7 @@ func (q *Queries) ListAdminTimelineMessages(ctx context.Context, arg ListAdminTi
 
 const listAdminUsers = `-- name: ListAdminUsers :many
 WITH page AS (
- SELECT u.id, u.email, u.created_at, u.main_failed_through_sequence, u.task_input_through_sequence FROM users u WHERE ($3::uuid IS NULL OR u.id=$3::uuid)
+ SELECT u.id, u.email, u.created_at, u.main_failed_through_sequence FROM users u WHERE ($3::uuid IS NULL OR u.id=$3::uuid)
  AND ($6::text='' OR strpos(lower(u.email),lower($6::text))>0)
  AND ($7::timestamptz IS NULL OR (u.created_at,u.id)<($7::timestamptz,$8::uuid))
  ORDER BY u.created_at DESC,u.id DESC LIMIT $9::integer
