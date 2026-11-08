@@ -287,16 +287,8 @@ func (r *Runner) streamMainReply(ctx, budget context.Context, stepID uuid.UUID, 
 	}
 	defer stopListening()
 
-	// 登记之后补查组装期间的输入，避免早于登记到达的通知留下陈旧请求。
+	// 组装之后、登记之前到达的输入不会触发取消，由占位事务里的这次检查兜住，只是放弃得晚一些。
 	input := database.HasNewMainInputParams{UserID: r.userID, Through: prepared.InputSequence}
-	newer, err := database.New(r.databasePool).HasNewMainInput(ctx, input)
-	if err != nil {
-		return false, err
-	}
-	if newer {
-		return false, errNewInput
-	}
-
 	var replyID uuid.UUID
 	reserve := func() error {
 		stopListening()
