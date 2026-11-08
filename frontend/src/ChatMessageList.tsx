@@ -1,4 +1,4 @@
-// 本文件是聊天消息列表：管理虚拟滚动、长消息展开与阅读位置，提供引用回看和 Main 状态提示。
+// 本文件是聊天消息列表：管理虚拟滚动、长消息展开与阅读位置，提供一键回底、引用回看和 Main 状态提示。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject, UIEvent } from 'react';
@@ -45,7 +45,7 @@ export function ChatMessageList({
   const loadingOlder = useRef(false);
   const quoteCleanup = useRef<() => void>(() => {});
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const navigating = useRef(false);
+  const quoteNavigation = useRef<symbol | null>(null);
   const highlightedQuote = useRef<MessageQuote | null>(null);
   const heights = useRef(new Map<string, number>());
   const rowsRef = useRef<VirtualRow[]>([]);
@@ -69,6 +69,7 @@ export function ChatMessageList({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [listOrigin, setListOrigin] = useState(0);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   useEffect(
     () => () => {
       clearTimeout(quoteTimer.current);
@@ -79,8 +80,9 @@ export function ChatMessageList({
   );
   // 原文不在已加载历史时继续翻页；用户先停在原地，找到后再定位。
   const navigateQuote = async (quote: MessageQuote) => {
-    if (navigating.current) return;
-    navigating.current = true;
+    if (quoteNavigation.current) return;
+    const navigation = Symbol();
+    quoteNavigation.current = navigation;
     stickToBottom.current = false;
     userScrolling.current = false;
     setQuoteError('');
@@ -92,6 +94,8 @@ export function ChatMessageList({
       ) {
         const count = controller.messages.length;
         await controller.loadHistory(true);
+        // 回底会撤销这次定位；迟到的历史结果仍并入列表，但不再把人带回原文。
+        if (quoteNavigation.current !== navigation) return;
         if (controller.messages.length === count || controller.error) break;
       }
       if (!controller.messages.some((message) => message.id === quote.message_id)) {
@@ -104,7 +108,7 @@ export function ChatMessageList({
       highlightedQuote.current = null;
       setQuoteTarget(quote);
     } finally {
-      navigating.current = false;
+      if (quoteNavigation.current === navigation) quoteNavigation.current = null;
     }
   };
   const messages = controller.messages;
@@ -195,7 +199,7 @@ export function ChatMessageList({
   }
   rememberTopMessageRef.current = rememberTopMessage;
 
-  // 同步虚拟列表窗口，程序定位和内容尺寸变化也走这里。
+  // 同步虚拟列表窗口与回底按钮，程序定位和内容尺寸变化也走这里。
   function publishScroll() {
     const viewportElement = viewport.current;
     const innerElement = inner.current;
@@ -206,8 +210,32 @@ export function ChatMessageList({
     setScrollTop((current) => (Math.abs(current - top) < 1 ? current : top));
     setViewportHeight((current) => (current === height ? current : height));
     setListOrigin((current) => (Math.abs(current - origin) < 1 ? current : origin));
+    setShowScrollToBottom(viewportElement.scrollHeight - top - height >= edgeDistance);
   }
   publishScrollRef.current = publishScroll;
+
+  // 用户主动回底优先于历史阅读和引用定位；后续行高测量继续由现有贴底逻辑处理。
+  function scrollToBottom() {
+    const element = viewport.current;
+    if (!element) return;
+    quoteNavigation.current = null;
+    setQuoteTarget(null);
+    clearTimeout(quoteTimer.current);
+    quoteCleanup.current();
+    highlightedQuote.current = null;
+    resizedMessage.current = null;
+    pendingShift.current = 0;
+    loadingOlder.current = false;
+    userScrolling.current = false;
+    stickToBottom.current = true;
+    element.scrollTop = element.scrollHeight;
+    rememberTopMessage();
+    publishScroll();
+    // 键盘激活后按钮会隐藏，把焦点交回消息区；指针操作保留输入框焦点。
+    if (document.activeElement?.classList.contains('scroll-to-bottom')) {
+      element.focus({ preventScroll: true });
+    }
+  }
 
   useLayoutEffect(() => {
     const observer = new ResizeObserver(() => {
@@ -382,89 +410,111 @@ export function ChatMessageList({
     return callback;
   };
   return (
-    <div
-      id="messages"
-      className="messages"
-      ref={viewport}
-      onScroll={onScroll}
-      onWheel={() => {
-        userScrolling.current = true;
-      }}
-      onTouchStart={() => {
-        userScrolling.current = true;
-      }}
-      onPointerDown={() => {
-        userScrolling.current = true;
-      }}
-      onKeyDown={() => {
-        userScrolling.current = true;
-      }}
-      onScrollEnd={() => {
-        userScrolling.current = false;
-      }}
-      tabIndex={0}
-      aria-label="聊天消息"
-    >
-      <QuoteSelection container={viewport} onQuote={onQuote} />
-      <div className="message-content" ref={content}>
-        <div className="message-virtual" ref={inner} style={{ height: total }}>
-          {visibleIndexes.map((index) => {
-            const row = rows[index];
-            return (
-              <div
-                key={row.key}
-                ref={bindRow(row.key)}
-                className="message-virtual-row"
-                style={{ transform: `translateY(${starts[index]}px)` }}
-              >
-                {row.kind === 'status' ? (
-                  <>
-                    {quoteError && (
-                      <p className="error" role="status">
-                        {quoteError}
-                      </p>
-                    )}
-                    {controller.error && (
-                      <button
-                        type="button"
-                        className="history-error error"
-                        onClick={() => void controller.loadHistory()}
-                      >
-                        {controller.error}
-                      </button>
-                    )}
-                    {controller.hasMoreHistory && messages.length > 0 && (
-                      <button
-                        type="button"
-                        className="load-older"
-                        disabled={controller.loadingHistory}
-                        onClick={() => void loadOlderMessages()}
-                      >
-                        {controller.loadingHistory ? '正在加载…' : '加载更早的消息'}
-                      </button>
-                    )}
-                  </>
-                ) : row.kind === 'thinking' ? (
-                  <AssistantWorkingStatus />
-                ) : row.kind === 'failed' ? (
-                  <p className="error" role="alert">
-                    回复失败，请再发一条消息重试。
-                  </p>
-                ) : (
-                  <MessageEntry
-                    messages={messages}
-                    index={row.messageIndex}
-                    onQuoteNavigate={(quote) => void navigateQuote(quote)}
-                    expanded={expandedMessages.has(row.key)}
-                    onExpandedChange={(expanded) => changeMessageExpanded(row.key, expanded)}
-                  />
-                )}
-              </div>
-            );
-          })}
+    <>
+      <div
+        id="messages"
+        className="messages"
+        ref={viewport}
+        onScroll={onScroll}
+        onWheel={() => {
+          userScrolling.current = true;
+        }}
+        onTouchStart={() => {
+          userScrolling.current = true;
+        }}
+        onPointerDown={() => {
+          userScrolling.current = true;
+        }}
+        onKeyDown={() => {
+          userScrolling.current = true;
+        }}
+        onScrollEnd={() => {
+          userScrolling.current = false;
+        }}
+        tabIndex={0}
+        aria-label="聊天消息"
+      >
+        <QuoteSelection container={viewport} onQuote={onQuote} />
+        <div className="message-content" ref={content}>
+          <div className="message-virtual" ref={inner} style={{ height: total }}>
+            {visibleIndexes.map((index) => {
+              const row = rows[index];
+              return (
+                <div
+                  key={row.key}
+                  ref={bindRow(row.key)}
+                  className="message-virtual-row"
+                  style={{ transform: `translateY(${starts[index]}px)` }}
+                >
+                  {row.kind === 'status' ? (
+                    <>
+                      {quoteError && (
+                        <p className="error" role="status">
+                          {quoteError}
+                        </p>
+                      )}
+                      {controller.error && (
+                        <button
+                          type="button"
+                          className="history-error error"
+                          onClick={() => void controller.loadHistory()}
+                        >
+                          {controller.error}
+                        </button>
+                      )}
+                      {controller.hasMoreHistory && messages.length > 0 && (
+                        <button
+                          type="button"
+                          className="load-older"
+                          disabled={controller.loadingHistory}
+                          onClick={() => void loadOlderMessages()}
+                        >
+                          {controller.loadingHistory ? '正在加载…' : '加载更早的消息'}
+                        </button>
+                      )}
+                    </>
+                  ) : row.kind === 'thinking' ? (
+                    <AssistantWorkingStatus />
+                  ) : row.kind === 'failed' ? (
+                    <p className="error" role="alert">
+                      回复失败，请再发一条消息重试。
+                    </p>
+                  ) : (
+                    <MessageEntry
+                      messages={messages}
+                      index={row.messageIndex}
+                      onQuoteNavigate={(quote) => void navigateQuote(quote)}
+                      expanded={expandedMessages.has(row.key)}
+                      onExpandedChange={(expanded) => changeMessageExpanded(row.key, expanded)}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
-    </div>
+      {showScrollToBottom && (
+        <button
+          type="button"
+          className="scroll-to-bottom"
+          aria-label="滚动到底部"
+          title="滚动到底部"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={scrollToBottom}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 5v14m-6-6 6 6 6-6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+    </>
   );
 }
 

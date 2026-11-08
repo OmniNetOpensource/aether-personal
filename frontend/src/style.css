@@ -39,6 +39,34 @@ body {
   width: 100%;
   min-height: 0;
 }
+/* 回底入口悬浮在输入框上方，沿用输入框实测高度，避免随消息滚走或被键盘遮挡。 */
+.scroll-to-bottom {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: calc(var(--composer-height, 90px) + 12px);
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--accent-text);
+  box-shadow: 0 3px 12px var(--shadow);
+}
+.scroll-to-bottom:hover {
+  background: var(--surface-muted);
+}
+.scroll-to-bottom:active {
+  background: var(--quote-surface);
+}
+.scroll-to-bottom svg {
+  width: 24px;
+  height: 24px;
+}
 .message-content {
   padding: 16px 32px calc(22px + var(--composer-height, 90px));
 }
