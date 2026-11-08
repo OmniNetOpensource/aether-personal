@@ -24,6 +24,7 @@ erDiagram
     tasks ||--o{ task_messages : "关联消息"
     messages ||--o{ task_messages : "需求与补充来源"
     users ||--o{ memory_files : "记忆根文档与主题文件"
+    users ||--o{ schedules : "定时任务"
     users ||--o{ steps : "产生"
     steps ||--o{ model_calls : "HTTP 请求尝试"
     users ||--o{ model_calls : "调用归属"
@@ -42,11 +43,12 @@ erDiagram
 | `tasks` | 持久化需求、补充后的完整要求与执行状态；每用户最多一项执行中 | `开发中` |
 | `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `memory_files` | 用户私有 `/memories` 文本文件，包含 `memory.md` 根和详细主题 | `开发中` |
+| `schedules` | 定时任务：标题、到点交给 Main 的上下文、可空的 `cron` 与 `timezone`（同时为空即一次性）和下次触发时间，见 [10](10-schedules.md) | `开发中` |
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `model_calls` | 每次模型 HTTP 请求尝试、结果与可空用量 | `开发中` |
-| `model_settings` | 全局 Main 运行时模型选择、版本与最后修改者快照 | `开发中` |
+| `model_settings` | 全局 Main 运行时模型选择、闲置反思时长、版本与最后修改者快照 | `开发中` |
 | `service_settings` | 六组服务凭证密文、Key 后缀、Gemini 地址、邮件发件人与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -240,7 +242,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 
 ## 外键
 
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`tasks`、`task_messages`、`memory_files`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`tasks → users`、`task_messages → tasks`、`task_messages → messages`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`tasks`、`task_messages`、`memory_files`、`schedules`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`schedules → users`、`tasks → users`、`task_messages → tasks`、`task_messages → messages`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
 
 ## 索引
 
@@ -284,6 +286,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00039_drop_task_source_sequence.sql` | 删除冗余任务来源序号，保留按 ID 列举索引；下一项任务由模型选择 | `开发中` |
 | `00036_associate_assistant_messages_with_tasks.sql` | 旧自动消息归属原型，已由 `00041` 替代 | `历史` |
 | `00041_remove_assistant_task_binding.sql` | 移除助手消息的任务 ID 与强制归属约束；只保留任务和相关用户输入 | `开发中` |
+| `00045_add_schedules.sql` | 重新加入 `schedules` 表，一次性与周期安排共用，投递后删除或推进 `next_run_at` | `开发中` |
+| `00046_add_reflection_idle_minutes.sql` | `model_settings.reflection_idle_minutes`，闲置反思时长，默认 120 分钟 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本，也避免多实例同时迁移。

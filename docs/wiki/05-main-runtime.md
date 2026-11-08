@@ -164,6 +164,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 | `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `已实现` |
 | `search_message` | 在完整历史中按关键词搜索，参数含 `keyword` 与 `who`，搜当前用户的全部记录，见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
 | `memory` | Anthropic 风格的 `view/create/str_replace/insert/delete/rename`；读取与编辑 `/memories/memory.md` 和详细主题，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
+| `schedule` | 创建、列出、修改、删除一次性或周期定时任务；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url` | Main 的搜索和网页读取工具 | `已实现` |
 
 工具参数写在工具描述中。每次请求注入的不可见指令明确 Main 的正文就是给用户的消息、且与工具同批的正文也会展示，要求正文只写用户该读的内容、不暴露内部推理与编排。参数无效时返回工具错误，模型可修正。

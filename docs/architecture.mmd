@@ -7,7 +7,7 @@ flowchart TD
         API["API：认证 · 收发消息 · WebSocket · 只读管理"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送"]
         ROUTING["Agent 路由：临时归属 · 按容量分配<br/>实例专属通知 · 心跳与五秒补偿"]
-        DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 步骤与模型请求日志")]
+        DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 定时任务 · 步骤与模型请求日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
             MAIN["Main Runtime：messageList 上下文 · 按用户串行处理"]
@@ -15,11 +15,13 @@ flowchart TD
             SEARCH["search_message"]
             READ["read_message"]
             MEMORY["memory 工具渐进加载<br/>需要时先读 memory.md 索引 · 再读相关主题"]
+            SCHEDULE["schedule 工具<br/>一次性 / 周期 cron 定时任务"]
 
             MAIN <-->|"登记补充 / 继续当前任务"| TASKS
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
             MAIN <-->|"根索引与主题按需读写"| MEMORY
+            MAIN <-->|"创建 / 列出 / 修改 / 删除安排"| SCHEDULE
             MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
         end
 
@@ -36,6 +38,11 @@ flowchart TD
         SEARCH <-->|"按用户搜索历史"| DB
         READ <-->|"按 ID 读取"| DB
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
+        SCHEDULE <-->|"安排与回执同事务"| DB
+
+        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 闲置到期的对话"]
+        SCHEDULER <-->|"插入不可见 schedule_event / reflection 消息<br/>同事务推进或删除安排"| DB
+        SCHEDULER -->|"插入后唤醒"| MAIN
 
     end
 
