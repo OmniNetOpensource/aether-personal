@@ -14,9 +14,7 @@ import (
 // Request 是 Agent 发给任意渠道的统一请求：消息与工具保留原始 JSON，各渠道在自己的文件里翻成自家协议。
 type Request struct {
 	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
-	InputSequence int64 `json:"-"`
-	// ProviderTools 供压缩复用上次请求的供应商工具定义，避免重新选择工具集合改写前缀；不参与统一协议序列化。
-	ProviderTools []json.RawMessage `json:"-"`
+	InputSequence int64             `json:"-"`
 	Reasoning     map[string]any    `json:"reasoning,omitempty"`
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`

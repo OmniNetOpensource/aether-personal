@@ -12,10 +12,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -94,38 +93,9 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	if settings.CompactModel != "" {
 		compactModel, compactOutputLimit = settings.CompactModel, settings.CompactOutputLimit
 	}
-	// 同渠道复用原生工具定义；跨渠道只转换定义的协议格式，保留名称、说明和参数，不执行工具。
+	// 工具定义与普通请求相同，由各渠道按同一套转换发出，前缀因此与普通请求一致；tool_choice=none 只禁止调用，不删除定义。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
-	summaryRequest := modelRequest{Model: compactModel, Messages: compactMessages, MaxTokens: compactOutputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
-	if providers.ForModel(usage.RequestedModel).Service() == providers.ForModel(compactModel).Service() {
-		if err := json.Unmarshal(usage.ProviderTools, &summaryRequest.ProviderTools); err != nil {
-			return modelRequest{}, fmt.Errorf("decode previous Main tool definitions: %w", err)
-		}
-	} else if providers.ForModel(usage.RequestedModel).Service() == services.IkunGemini {
-		var toolGroups []struct {
-			Functions []struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				Parameters  json.RawMessage `json:"parametersJsonSchema"`
-			} `json:"functionDeclarations"`
-		}
-		if err := json.Unmarshal(usage.ProviderTools, &toolGroups); err != nil {
-			return modelRequest{}, fmt.Errorf("decode Gemini tool definitions: %w", err)
-		}
-		for _, group := range toolGroups {
-			for _, function := range group.Functions {
-				tool, err := json.Marshal(map[string]any{"type": "function", "function": map[string]any{"name": function.Name, "description": function.Description, "parameters": function.Parameters}})
-				if err != nil {
-					return modelRequest{}, err
-				}
-				summaryRequest.Tools = append(summaryRequest.Tools, tool)
-			}
-		}
-	} else {
-		if err := json.Unmarshal(usage.ProviderTools, &summaryRequest.Tools); err != nil {
-			return modelRequest{}, fmt.Errorf("decode previous Main tool definitions: %w", err)
-		}
-	}
+	summaryRequest := modelRequest{Model: compactModel, Messages: compactMessages, Tools: tools.Definitions(), MaxTokens: compactOutputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
 	// 先登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
 	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: compactModel})
 	if err != nil {

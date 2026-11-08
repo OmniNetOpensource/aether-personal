@@ -125,9 +125,6 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 		}
 		tools = append(tools, encoded)
 	}
-	if prepared.ProviderTools != nil {
-		tools = prepared.ProviderTools
-	}
 	body, err := json.Marshal(map[string]any{
 		"model": strings.TrimPrefix(prepared.Model, "ikun:"), "messages": messages,
 		"max_tokens": prepared.MaxTokens, "stream": true,

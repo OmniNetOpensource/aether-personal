@@ -47,10 +47,6 @@ func (openRouterProvider) PrepareRequest(ctx context.Context, credentials servic
 		messages[index], _ = json.Marshal(message)
 	}
 	prepared.Messages = messages
-	// 压缩沿用上次请求的原生工具定义；tool_choice=none 仍禁止执行工具。
-	if prepared.ProviderTools != nil {
-		prepared.Tools = prepared.ProviderTools
-	}
 	body, err := json.Marshal(prepared)
 	if err != nil {
 		return OutgoingRequest{}, err
