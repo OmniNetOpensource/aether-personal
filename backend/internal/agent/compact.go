@@ -59,7 +59,7 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 		reason = "capacity"
 	}
 	if reason == "" {
-		return buildAgentRequest(rows, model, outputLimit, taskReminder)
+		return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
 	// 否则（工具续跑）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
@@ -87,7 +87,7 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 		}
 	}
 	if through == 0 {
-		return buildAgentRequest(rows, model, outputLimit, taskReminder)
+		return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
 	}
 	// 独立模型只用于本次摘要，触发阈值和摘要后的主对话仍由 Main 模型决定。
 	compactModel, compactOutputLimit := model, outputLimit
@@ -174,5 +174,5 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return buildAgentRequest(rows, model, outputLimit, taskReminder)
+	return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
 }

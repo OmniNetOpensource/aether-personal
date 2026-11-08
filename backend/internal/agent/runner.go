@@ -349,12 +349,8 @@ func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, respo
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		n, err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: AssistantTextToUser(response.Choices[0].Message) != ""})
-		if err != nil {
+		if err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: AssistantTextToUser(response.Choices[0].Message) != ""}); err != nil {
 			return err
-		}
-		if n != 1 {
-			return errors.New("generating reply disappeared")
 		}
 		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost}); err != nil {
 			return err
@@ -390,7 +386,7 @@ func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call tool
 // executeDatabaseTool 执行与回执同一事务的工具。未登记的名字返回工具错误，让模型可以改口。
 func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Queries, call toolCall) (string, error) {
 	tool, ok := tools.ByName(call.Function.Name)
-	if !ok || tool.OutsideTransaction {
+	if !ok {
 		return "Error: tool not available: " + call.Function.Name, nil
 	}
 	return tool.Execute(ctx, r.toolDeps, queries, r.userID, call.Function.Arguments)

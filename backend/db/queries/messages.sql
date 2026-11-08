@@ -50,7 +50,7 @@ SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
 INSERT INTO messages (user_id, role, content, step_id, generating)
 VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id;
 
--- name: CompleteMainReply :execrows
+-- name: CompleteMainReply :exec
 UPDATE messages SET content = $2, generating = false, visible = $3
 WHERE id = $1 AND generating;
 
