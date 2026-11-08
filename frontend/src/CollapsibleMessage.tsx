@@ -33,13 +33,14 @@ export function CollapsibleMessage({
     return () => observer.disconnect();
   }, []);
 
+  // 首次挂载就限制未展开的高度，避免虚拟列表先量全文、再因折叠反复移动与重挂载。
   const collapsed = overflows && !expanded;
   return (
     <>
       <div
         id={bodyId}
         className={collapsed ? 'message-body-clip is-collapsed' : 'message-body-clip'}
-        style={collapsed ? { maxHeight: collapsedMessageHeight } : undefined}
+        style={!expanded ? { maxHeight: collapsedMessageHeight, overflow: 'clip' } : undefined}
         onFocusCapture={(event) => {
           // 键盘移到被裁切的链接或附件时展开正文，让获得焦点的内容始终可见。
           const focused = event.target.getBoundingClientRect();
