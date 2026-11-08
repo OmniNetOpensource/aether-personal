@@ -105,6 +105,49 @@ body {
   color: var(--text);
   white-space: pre-wrap;
 }
+/* 完整正文独立测量，只裁切外层；底部渐隐提示后面还有内容，不改变引用文本。 */
+.message-body {
+  display: flow-root;
+}
+.message-body-clip.is-collapsed {
+  overflow: clip;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 54px), transparent);
+}
+.message-collapse-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+}
+.message-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--accent-text);
+  font:
+    500 14px/24px system-ui,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+}
+.message-collapse-toggle:hover {
+  background: var(--quote-surface);
+}
+.message-collapse-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+.message-collapse-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+@media (pointer: coarse) {
+  .message-collapse-toggle {
+    min-height: 44px;
+  }
+}
 .error {
   color: var(--error);
   font-size: 15px;

@@ -128,23 +128,21 @@ export function QuoteSelection({
   );
 }
 
-// highlightQuote 校验保存位置仍与快照一致，再滚动到原文；不支持文本高亮的浏览器保留整条消息的提示。
-export function highlightQuote(body: HTMLElement, quote: MessageQuote): () => void {
+// highlightQuote 按引用范围定位长消息中的原文；不支持文本高亮时仍滚动到对应文字并提示整条消息。
+export function highlightQuote(
+  body: HTMLElement,
+  quote: MessageQuote,
+  viewport: HTMLElement,
+): () => void {
   const nodes = quoteTextNodes(body);
-  body.scrollIntoView({
-    block: 'center',
-    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
-  });
   body.classList.add('quote-target');
+  const ranges: Range[] = [];
   if (
     nodes
       .map((node) => node.data)
       .join('')
-      .slice(quote.start, quote.end) === quote.text &&
-    'highlights' in CSS &&
-    typeof Highlight !== 'undefined'
+      .slice(quote.start, quote.end) === quote.text
   ) {
-    const ranges: Range[] = [];
     let offset = 0;
     for (const node of nodes) {
       const start = Math.max(0, quote.start - offset),
@@ -157,8 +155,19 @@ export function highlightQuote(body: HTMLElement, quote: MessageQuote): () => vo
       }
       offset += node.length;
     }
+  }
+  if ('highlights' in CSS && typeof Highlight !== 'undefined') {
     CSS.highlights.set('quote-source', new Highlight(...ranges));
   }
+  // 按引用首段的矩形滚动，避免很长的正文按整条消息居中后，引用仍在屏幕外。
+  const target = ranges[0]?.getBoundingClientRect() ?? body.getBoundingClientRect();
+  viewport.scrollBy({
+    top:
+      target.top -
+      viewport.getBoundingClientRect().top -
+      (viewport.clientHeight - target.height) / 2,
+    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+  });
   return () => {
     body.classList.remove('quote-target');
     if ('highlights' in CSS) CSS.highlights.delete('quote-source');

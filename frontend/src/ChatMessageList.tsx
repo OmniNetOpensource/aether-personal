@@ -1,4 +1,4 @@
-// 本文件是聊天消息列表：用虚拟滚动只挂载视口附近的消息，保持阅读位置与引用回看，并显示 Main 的处理与失败状态。
+// 本文件是聊天消息列表：管理虚拟滚动、长消息展开与阅读位置，提供引用回看和 Main 状态提示。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject, UIEvent } from 'react';
@@ -58,11 +58,13 @@ export function ChatMessageList({
   const scrollFrame = useRef(0);
   const seenContent = useRef('');
   const pendingShift = useRef(0);
+  const resizedMessage = useRef<TopMessage | null>(null);
   const measureRowsRef = useRef<() => boolean>(() => false);
   const rememberTopMessageRef = useRef(() => {});
   const publishScrollRef = useRef(() => {});
   const [quoteError, setQuoteError] = useState('');
   const [quoteTarget, setQuoteTarget] = useState<MessageQuote | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState(() => new Set<string>());
   const [, setHeightsVersion] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -80,6 +82,7 @@ export function ChatMessageList({
     if (navigating.current) return;
     navigating.current = true;
     stickToBottom.current = false;
+    userScrolling.current = false;
     setQuoteError('');
     try {
       while (
@@ -95,6 +98,10 @@ export function ChatMessageList({
         setQuoteError('暂时找不到引用原文，请加载历史后重试');
         return;
       }
+      // 先展开原文，再交给布局阶段测量和定位；引用可能在原先被裁切的部分。
+      setExpandedMessages((current) => new Set(current).add(quote.message_id));
+      resizedMessage.current = null;
+      highlightedQuote.current = null;
       setQuoteTarget(quote);
     } finally {
       navigating.current = false;
@@ -110,6 +117,28 @@ export function ChatMessageList({
   const { starts, total } = rowOffsets(rows, heights.current);
   rowsRef.current = rows;
   startsRef.current = starts;
+
+  // 手动展开时保留原阅读位置；收起时若消息开头已在屏幕上方，就把它带回视口顶边。
+  function changeMessageExpanded(messageId: string, expanded: boolean) {
+    const viewportElement = viewport.current;
+    const element = rowElements.current.get(messageId);
+    if (viewportElement && element) {
+      const offset =
+        viewportElement.getBoundingClientRect().top - element.getBoundingClientRect().top;
+      resizedMessage.current = {
+        key: messageId,
+        fromViewportTop: expanded ? offset : Math.min(0, offset),
+      };
+    }
+    stickToBottom.current = false;
+    userScrolling.current = false;
+    setExpandedMessages((current) => {
+      const next = new Set(current);
+      if (expanded) next.add(messageId);
+      else next.delete(messageId);
+      return next;
+    });
+  }
 
   // 把已挂上的行量进高度表。视口上方的高度差先记下来，等总高度更新后再补到滚动位置上。
   function measureRows() {
@@ -135,6 +164,7 @@ export function ChatMessageList({
       }
       if (
         !stickToBottom.current &&
+        key !== resizedMessage.current?.key &&
         index >= 0 &&
         origin + currentStarts[index] < viewportElement.scrollTop
       ) {
@@ -165,6 +195,7 @@ export function ChatMessageList({
   }
   rememberTopMessageRef.current = rememberTopMessage;
 
+  // 同步虚拟列表窗口，程序定位和内容尺寸变化也走这里。
   function publishScroll() {
     const viewportElement = viewport.current;
     const innerElement = inner.current;
@@ -236,6 +267,17 @@ export function ChatMessageList({
       viewportElement.scrollTop += pendingShift.current;
       pendingShift.current = 0;
     }
+    // 等总高度更新后再恢复被点击消息的位置，避免折叠时被旧行高或自动贴底拉走。
+    if (resizedMessage.current && !quoteTarget) {
+      const { key, fromViewportTop } = resizedMessage.current;
+      const index = rows.findIndex((row) => row.key === key);
+      if (index >= 0) {
+        viewportElement.scrollTop =
+          elementOrigin(viewportElement, innerElement) + starts[index] + fromViewportTop;
+      }
+      resizedMessage.current = null;
+      pendingShift.current = 0;
+    }
     if (quoteTarget && highlightedQuote.current !== quoteTarget) {
       const index = rows.findIndex((row) => row.key === quoteTarget.message_id);
       if (index < 0) {
@@ -255,7 +297,7 @@ export function ChatMessageList({
         } else {
           clearTimeout(quoteTimer.current);
           quoteCleanup.current();
-          quoteCleanup.current = highlightQuote(body, quoteTarget);
+          quoteCleanup.current = highlightQuote(body, quoteTarget, viewportElement);
           quoteTimer.current = setTimeout(() => quoteCleanup.current(), 3000);
         }
         highlightedQuote.current = quoteTarget;
@@ -314,6 +356,11 @@ export function ChatMessageList({
     const quoteIndex = rows.findIndex((row) => row.key === quoteTarget.message_id);
     if (quoteIndex >= 0 && (quoteIndex < firstVisible || quoteIndex >= lastVisible))
       visibleIndexes.push(quoteIndex);
+  }
+  // 收起后当前 scrollTop 可能暂时指向其他行，恢复锚点前仍保留被点击的消息。
+  if (resizedMessage.current) {
+    const index = rows.findIndex((row) => row.key === resizedMessage.current?.key);
+    if (index >= 0 && !visibleIndexes.includes(index)) visibleIndexes.push(index);
   }
   visibleIndexes.sort((left, right) => left - right);
   // 同一条行的 ref 保持不变，避免每次绘制都解除测量。
@@ -408,6 +455,8 @@ export function ChatMessageList({
                     messages={messages}
                     index={row.messageIndex}
                     onQuoteNavigate={(quote) => void navigateQuote(quote)}
+                    expanded={expandedMessages.has(row.key)}
+                    onExpandedChange={(expanded) => changeMessageExpanded(row.key, expanded)}
                   />
                 )}
               </div>
@@ -424,10 +473,14 @@ function MessageEntry({
   messages,
   index,
   onQuoteNavigate,
+  expanded,
+  onExpandedChange,
 }: {
   messages: ChatMessage[];
   index: number;
   onQuoteNavigate: (quote: MessageQuote) => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
   const message = messages[index];
   const previous = messages[index - 1];
@@ -447,12 +500,16 @@ function MessageEntry({
           joinedWithPrevious={joinedWithPrevious}
           endsGroup={endsGroup}
           onQuoteNavigate={onQuoteNavigate}
+          expanded={expanded}
+          onExpandedChange={onExpandedChange}
         />
       ) : (
         <AssistantMessageBubble
           message={message}
           joinedWithPrevious={joinedWithPrevious}
           endsGroup={endsGroup}
+          expanded={expanded}
+          onExpandedChange={onExpandedChange}
         />
       )}
     </>
