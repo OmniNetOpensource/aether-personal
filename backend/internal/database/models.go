@@ -111,6 +111,18 @@ type ModelSetting struct {
 	CompactContextLength  *int64
 }
 
+type Schedule struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Title     string
+	Context   string
+	Cron      *string
+	Timezone  *string
+	NextRunAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type ServiceSetting struct {
 	ID               uuid.UUID
 	Service          string

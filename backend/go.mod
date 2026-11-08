@@ -7,6 +7,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/shopspring/decimal v1.5.0
 )
 
