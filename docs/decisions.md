@@ -117,6 +117,7 @@
 | 消息 ID | 数据库生成；`client_message_id` 只用于识别重发 | [04](wiki/04-messaging.md#消息-id-与重发) |
 | 写入顺序 | 同一用户的插入先取 `pg_advisory_xact_lock` | [04](wiki/04-messaging.md#写入顺序) |
 | 不合规则的消息 | 直接断开 WebSocket，不回错误消息 | [04](wiki/04-messaging.md#websocket) |
+| 单条消息长度 | 2026-11-08：正文与引用合计不超过 64,000 个字符（此前 32,000）；仍按字符计，不按模型上下文窗口折算 | [04](wiki/04-messaging.md#用户发消息) |
 | 重连位置 | 展示与历史翻页按行位置；`hello.last_change_cursor` 按变更序号恢复推送，补齐先占位后完成的旧回复 | [04](wiki/04-messaging.md#websocket) |
 
 ### Main 运行时

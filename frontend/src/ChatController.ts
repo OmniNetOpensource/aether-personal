@@ -425,7 +425,7 @@ export class ChatController {
     const trimmed = text.trim();
     if (
       (!trimmed && quotes.length === 0 && images.length === 0) ||
-      Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 32000 ||
+      Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 64000 ||
       !this.token
     )
       return false;

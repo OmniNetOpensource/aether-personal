@@ -19,7 +19,7 @@ import (
 )
 
 // maxMessageCharacters 是单条用户消息的字符上限，发送命令的校验以此为准。
-const maxMessageCharacters = 32000
+const maxMessageCharacters = 64000
 
 // clientFrame 是前端通过聊天 WebSocket 发来的全部命令的统一形状；
 // 后端发出的事件类型见 events.go。

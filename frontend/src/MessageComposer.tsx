@@ -102,8 +102,8 @@ export function MessageComposer({
         part.type === 'text' ? [part.text] : part.type === 'quote' ? [part.quote.text] : [],
       )
       .join('');
-    if (Array.from(text).length > 32000) {
-      setError('正文和引用合计不能超过 32,000 个字符');
+    if (Array.from(text).length > 64000) {
+      setError('正文和引用合计不能超过 64,000 个字符');
       return;
     }
     sendingRef.current = true;
