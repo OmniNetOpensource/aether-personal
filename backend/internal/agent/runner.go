@@ -60,7 +60,7 @@ func (r *Runner) newInput(sequence int64) {
 	}
 }
 
-// run 在用户独占的协程里恢复中断记录，再按持久待办循环执行；临时数据库错误返回 Manager 退避重试。
+// run 在用户独占的协程里恢复中断记录，再按持久待办循环执行；失败时落库失败位置，收尾本身出错才返回给 Manager 记录。
 func (r *Runner) run(parent context.Context) error {
 	queries := database.New(r.databasePool)
 	// 运行结束刷新其他连接的消息与思考状态，浏览器连接的生命周期不影响本次执行。
@@ -146,10 +146,6 @@ func (r *Runner) run(parent context.Context) error {
 	if loopErr != nil {
 		if parent.Err() != nil {
 			return nil
-		}
-		// 临时数据库故障保留原持久状态，交给 Manager 延迟重试本用户，不写入业务失败位置。
-		if temporaryDatabaseError(loopErr) {
-			return loopErr
 		}
 		slog.Error("agent run failed", "user_id", r.userID, "error", loopErr)
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
