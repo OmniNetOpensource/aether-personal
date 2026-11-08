@@ -30,7 +30,7 @@
 
 任务快照返回 `id`、`title`、`description`、`status` 和 `related_message_ids`。`task_messages` 只保存提出需求和后续补充的用户输入，每次登记时追加并去重；读取时按消息序号返回 ID。助手回答、进度与文件不加入关联列表，任务没有结果字段。
 
-`list_tasks` 只接收可选的 `include_closed`，始终返回最多 100 项任务的数组。`record_task_input` 返回本次变更的任务数组，`update_task` 返回更新后的单个任务；它既能在空闲时启动模型选择的待办，也能完成或暂停当前任务。登记工具的 `source_message_id` 仍用于指定本次待登记消息，不是任务记录的返回字段。
+`list_tasks` 只接收可选的 `include_closed`，始终返回最多 100 项任务的数组。`record_task_input` 返回本次变更的任务数组，`update_task` 返回更新后的单个任务；它既能在空闲时启动模型选择的待办，也能完成或暂停当前任务。2026-11-07 起（`00043_unbind_tasks_from_messages`）任务与消息解绑：删除 `task_messages` 与 `users.task_input_through_sequence`，任务快照不再返回 `related_message_ids`，`record_task_input` 也不再接收 `source_message_id`。2026-11-08 起请求组装不再删除旧历史里的这两个字段，模型照旧例多传的 `source_message_id` 由工具的普通 JSON 解码忽略，见 [05](05-main-runtime.md#agent-loop-三阶段2026-11-08)。
 
 ## 只管理任务，不绑定产物
 
@@ -80,7 +80,7 @@ Main 使用 `update_task` 变更当前任务的状态，入参只有 `task_id` �
 
 防重复靠 Runner 本地的一个签名：进行中与排队任务的 ID 与状态拼成的集合，集合没变时只提醒一次。只有任务集合发生变化（完成、启动或新登记一项）才允许再提醒，队列因此能一项接一项往下走，模型始终不更新状态时也不会无限多花模型调用、反复发送重复正文。每个被提醒的收尾至少多一次模型调用，这是该机制的预期成本。已经停下的运行不会被追溯唤醒，进程重启后停在已收尾消息上的用户仍等下一条消息，这与 `main_work` 只看消息尾部的既有语义一致。
 
-实现位于 `runner.go` 的 `unfinishedTaskSignature` 与运行循环、`context.go` 的 `buildAgentRequest`（提醒由参数传入）、`compact.go` 的 `prepareContext` 透传；没有新增迁移、SQL 或前端改动，复用已有 `ListTasks` 查询。本地 `go build ./...` 与 `go vet ./...` 通过，按仓库约定没有新增测试，未对真实模型做任务归类质量的评测。
+实现位于 `runner.go` 的 `unfinishedTaskSignature` 与运行循环、`before_request.go` 的 `buildAgentRequest`（提醒由参数传入）与 `prepareContext` 透传（2026-11-08 按三阶段重排后的位置）；没有新增迁移、SQL 或前端改动，复用已有 `ListTasks` 查询。本地 `go build ./...` 与 `go vet ./...` 通过，按仓库约定没有新增测试，未对真实模型做任务归类质量的评测。
 
 ## 实现取舍
 
