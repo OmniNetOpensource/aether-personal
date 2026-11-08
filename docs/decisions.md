@@ -106,7 +106,7 @@
 
 | 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| 整体结构 | PostgreSQL 保存全部持久状态，单进程 Manager 调度 Main，不引入 Redis。2026-11-06 曾实现多实例临时归属，同日由 `00040` 改为单进程，原方案保留为历史 | [05](wiki/05-main-runtime.md#停机与开机2026-11-09)、[12](wiki/12-agent-routing.md) |
+| 整体结构 | PostgreSQL 保存全部持久状态，单进程 Manager 调度 Main，不引入 Redis。2026-11-06 曾实现多实例临时归属，同日由 `00040` 改为单进程，原方案保留为历史。理由（2026-11-09 用户说明）是目前只有维护者一人使用，等用户量上来后再改为多实例 | [05](wiki/05-main-runtime.md#停机与开机2026-11-09)、[12](wiki/12-agent-routing.md) |
 | 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
 | 后台连接 | 2026-11-03：页面隐藏时保留 WebSocket 与自动重连，网络恢复时允许后台重连，返回前台时确保连接存在；离线或离开页面仍关闭。理由是普通页面切换不应中断消息接收或使发送中的请求失败；系统冻结或回收网页后靠重连与游标补齐恢复 | [04](wiki/04-messaging.md#websocket) |
 | 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
