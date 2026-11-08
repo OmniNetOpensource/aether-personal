@@ -109,6 +109,7 @@ type ModelSetting struct {
 	CompactModel          *string
 	CompactModelMaxTokens *int32
 	CompactContextLength  *int64
+	ReflectionIdleMinutes int32
 }
 
 type Schedule struct {

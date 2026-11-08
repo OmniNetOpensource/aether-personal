@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配配置、数据库连接池、Agent 调度、定时安排调度器与 HTTP 服务，并随退出信号优雅关闭，把各模块连成一个可运行的服务。
+// 本文件是后端进程入口：装配配置、数据库连接池、Agent 调度、定时安排与闲置反思调度器、HTTP 服务，并随退出信号优雅关闭，把各模块连成一个可运行的服务。
 
 package main
 
@@ -63,7 +63,7 @@ func main() {
 		}
 		managerDone <- err
 	}()
-	go scheduler.Run(ctx, databasePool, manager)
+	go scheduler.Run(ctx, databasePool, appConfig, manager)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

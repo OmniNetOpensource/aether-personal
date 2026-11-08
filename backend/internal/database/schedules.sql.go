@@ -42,7 +42,7 @@ type CreateScheduleParams struct {
 	NextRunAt time.Time
 }
 
-// 本文件是定时安排的查询集合：schedule 工具的增删改查，以及调度器扫描到期安排、投递触发消息并推进下一次时间（sqlc 据此生成代码）。
+// 本文件是定时触发的查询集合：schedule 工具的增删改查、调度器扫描到期安排并推进下一次时间，以及闲置反思的到期判断与触发消息写入（sqlc 据此生成代码）。
 func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (Schedule, error) {
 	row := q.db.QueryRow(ctx, createSchedule,
 		arg.UserID,
@@ -95,7 +95,7 @@ type InsertTriggerMessageParams struct {
 	Content []byte
 }
 
-// 不可见的 user 消息，由系统发出，入库即成为 Main 的新输入。
+// 定时投递与闲置反思共用：不可见的 user 消息，由系统发出，入库即成为 Main 的新输入。
 func (q *Queries) InsertTriggerMessage(ctx context.Context, arg InsertTriggerMessageParams) (int64, error) {
 	row := q.db.QueryRow(ctx, insertTriggerMessage, arg.UserID, arg.Content)
 	var sequence int64
@@ -125,6 +125,48 @@ func (q *Queries) ListDueSchedules(ctx context.Context) ([]ListDueSchedulesRow, 
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReflectionDue = `-- name: ListReflectionDue :many
+SELECT u.id AS user_id FROM users AS u
+CROSS JOIN LATERAL (
+    SELECT m.sequence, m.created_at FROM messages AS m
+    WHERE m.user_id = u.id AND m.sender = 'user' AND m.role = 'user' AND NOT m.is_summary
+    ORDER BY m.sequence DESC LIMIT 1
+) AS last_input
+WHERE ($1::uuid IS NULL OR u.id = $1::uuid)
+    AND last_input.created_at > now() - make_interval(mins => $2::int) - interval '1 day'
+    AND NOT EXISTS (SELECT 1 FROM main_work AS w WHERE w.user_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM messages AS m WHERE m.user_id = u.id
+        AND m.sequence > last_input.sequence AND m.content ->> 'name' = 'reflection')
+    AND (SELECT max(m.created_at) FROM messages AS m WHERE m.user_id = u.id) <= now() - make_interval(mins => $2::int)
+`
+
+type ListReflectionDueParams struct {
+	UserID      *uuid.UUID
+	IdleMinutes int32
+}
+
+// 闲置反思的到期条件：最近一条用户本人的消息之后还没有反思过、Main 没有活、对话最后一条消息已闲置满 idle_minutes。
+// 最近一条用户消息早于闲置时长再加一天的不算，上线或停机恢复后不给很久以前的对话补跑。user_id 为空时扫描全部用户，投递事务内按用户复查。
+func (q *Queries) ListReflectionDue(ctx context.Context, arg ListReflectionDueParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listReflectionDue, arg.UserID, arg.IdleMinutes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

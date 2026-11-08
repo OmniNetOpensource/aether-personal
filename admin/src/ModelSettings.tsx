@@ -1,4 +1,4 @@
-// 本文件是管理看板的模型配置页：分别选择 Main 与压缩模型并填写压缩阈值，保存后从下一次请求生效。
+// 本文件是管理看板的模型配置页：分别选择 Main 与压缩模型，填写压缩阈值与闲置反思时长，保存后从下一次请求或扫描生效。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,7 +27,7 @@ export function ModelSettingsPage({
 }) {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens'> | null>(null);
+  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens' | 'reflection_idle_minutes'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loadError, setLoadError] = useState(false);
@@ -49,6 +49,7 @@ export function ModelSettingsPage({
         main_model: loadedSettings.main_model,
         compact_model: loadedSettings.compact_model,
         compact_at_tokens: loadedSettings.compact_at_tokens,
+        reflection_idle_minutes: loadedSettings.reflection_idle_minutes,
       });
       setLoadError(false);
       onUpdated(`${formatTime(loadedCatalog.fetched_at)} 已更新目录`);
@@ -78,7 +79,8 @@ export function ModelSettingsPage({
   const changed =
     draft.main_model !== settings.main_model ||
     draft.compact_model !== settings.compact_model ||
-    draft.compact_at_tokens !== settings.compact_at_tokens;
+    draft.compact_at_tokens !== settings.compact_at_tokens ||
+    draft.reflection_idle_minutes !== settings.reflection_idle_minutes;
   const perMillion = (value: string) =>
     value !== '' && Number.isFinite(Number(value)) ? `$${Number(value) * 1000000}` : '未知';
 
@@ -96,6 +98,10 @@ export function ModelSettingsPage({
       setSaveError('压缩阈值需为 1000–2000000 Token 的整数。');
       return;
     }
+    if (!Number.isInteger(draft.reflection_idle_minutes) || draft.reflection_idle_minutes < 10 || draft.reflection_idle_minutes > 10080) {
+      setSaveError('反思闲置时长需为 10–10080 分钟的整数。');
+      return;
+    }
     const current = generation.current;
     setSaving(true);
     try {
@@ -109,6 +115,7 @@ export function ModelSettingsPage({
         main_model: saved.main_model,
         compact_model: saved.compact_model,
         compact_at_tokens: saved.compact_at_tokens,
+        reflection_idle_minutes: saved.reflection_idle_minutes,
       });
       notify('模型配置已应用，下一次请求开始生效。');
     } catch (error) {
@@ -121,7 +128,7 @@ export function ModelSettingsPage({
         error instanceof ApiError && error.status === 409
           ? '其他管理员已修改配置，请刷新后重新选择。'
           : error instanceof ApiError && error.status === 400
-            ? '配置无效，或模型已不可用，请检查压缩阈值与模型选择。'
+            ? '配置无效，或模型已不可用，请检查压缩阈值、反思闲置时长与模型选择。'
             : '未能确认保存结果，请刷新查看当前生效配置后重试。',
       );
     } finally {
@@ -256,6 +263,27 @@ export function ModelSettingsPage({
           <p className="muted">
             触发依据 Main 上一次成功请求的官方输入用量，并受 Main 已知容量上限约束；请选择能容纳待压缩历史的压缩模型。
           </p>
+        </section>
+        <section className="panel model-role-card compact-settings">
+          <h3>闲置反思</h3>
+          <p className="muted">
+            用户发来新消息后，对话闲置满这个时长时，Main 回看近期对话，自行整理记忆或提出用户可能没想到的观察；没有值得说的内容就不发消息。每段新对话只触发一次，由 Main 模型执行。
+          </p>
+          <div className="model-role-grid">
+            <label className="model-picker">
+              闲置时长（分钟）
+              <input
+                type="number"
+                min={10}
+                max={10080}
+                step={1}
+                required
+                value={draft.reflection_idle_minutes}
+                disabled={saving}
+                onChange={(event) => setDraft({ ...draft, reflection_idle_minutes: Number(event.target.value) })}
+              />
+            </label>
+          </div>
         </section>
         <div className="model-save-bar">
           <div>

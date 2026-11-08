@@ -13,7 +13,7 @@ import (
 const getModelSettings = `-- name: GetModelSettings :one
 
 SELECT main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length, version, updated_at, updated_by
+    compact_at_tokens, main_context_length, compact_context_length, reflection_idle_minutes, version, updated_at, updated_by
 FROM model_settings WHERE singleton = true
 `
 
@@ -25,12 +25,13 @@ type GetModelSettingsRow struct {
 	CompactAtTokens       int32
 	MainContextLength     *int64
 	CompactContextLength  *int64
+	ReflectionIdleMinutes int32
 	Version               int64
 	UpdatedAt             time.Time
 	UpdatedBy             string
 }
 
-// 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的模型配置（sqlc 据此生成代码）。
+// 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的模型配置与闲置反思时长（sqlc 据此生成代码）。
 func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, error) {
 	row := q.db.QueryRow(ctx, getModelSettings)
 	var i GetModelSettingsRow
@@ -42,6 +43,7 @@ func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, er
 		&i.CompactAtTokens,
 		&i.MainContextLength,
 		&i.CompactContextLength,
+		&i.ReflectionIdleMinutes,
 		&i.Version,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
@@ -60,9 +62,9 @@ func (q *Queries) LockModelSettings(ctx context.Context) error {
 
 const saveModelSettings = `-- name: SaveModelSettings :exec
 INSERT INTO model_settings (main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length, version, updated_by)
+    compact_at_tokens, main_context_length, compact_context_length, reflection_idle_minutes, version, updated_by)
 VALUES ($1, $2, $3, $4,
-    $5, $6, $7, 1, $8)
+    $5, $6, $7, $8, 1, $9)
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_model_max_tokens = EXCLUDED.main_model_max_tokens,
     compact_model = EXCLUDED.compact_model,
@@ -70,6 +72,7 @@ ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     compact_at_tokens = EXCLUDED.compact_at_tokens,
     main_context_length = EXCLUDED.main_context_length,
     compact_context_length = EXCLUDED.compact_context_length,
+    reflection_idle_minutes = EXCLUDED.reflection_idle_minutes,
     version = model_settings.version + 1,
     updated_at = now(), updated_by = EXCLUDED.updated_by
 `
@@ -82,6 +85,7 @@ type SaveModelSettingsParams struct {
 	CompactAtTokens       int32
 	MainContextLength     *int64
 	CompactContextLength  *int64
+	ReflectionIdleMinutes int32
 	UpdatedBy             string
 }
 
@@ -94,6 +98,7 @@ func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsPa
 		arg.CompactAtTokens,
 		arg.MainContextLength,
 		arg.CompactContextLength,
+		arg.ReflectionIdleMinutes,
 		arg.UpdatedBy,
 	)
 	return err
