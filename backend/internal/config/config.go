@@ -8,6 +8,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 )
 
 type Config struct {
@@ -24,6 +27,9 @@ type Config struct {
 	AgentCapacity        int32
 	MainModel            string
 	FrontendDir          string
+	ImageCacheDir        string
+	ImageCacheMaxBytes   int64
+	ImageCacheTTL        time.Duration
 }
 
 func Load() (Config, error) {
@@ -55,6 +61,28 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("AGENT_CAPACITY must be between 1 and DATABASE_MAX_CONNS - 4, got %q", value)
 		}
 		agentCapacity = int32(parsed)
+	}
+
+	// 磁盘缓存必须容得下一张合法图片；七天是从写入开始的绝对有效期，不随读取延长。
+	imageCacheDir := os.Getenv("IMAGE_CACHE_DIR")
+	if imageCacheDir == "" {
+		imageCacheDir = "bin/image-cache"
+	}
+	imageCacheMaxBytes := int64(1 << 30)
+	if value := os.Getenv("IMAGE_CACHE_MAX_BYTES"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < images.MaxImageBytes {
+			return Config{}, fmt.Errorf("IMAGE_CACHE_MAX_BYTES must be at least %d, got %q", images.MaxImageBytes, value)
+		}
+		imageCacheMaxBytes = parsed
+	}
+	imageCacheTTL := 7 * 24 * time.Hour
+	if value := os.Getenv("IMAGE_CACHE_TTL"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			return Config{}, fmt.Errorf("IMAGE_CACHE_TTL must be a positive duration, got %q", value)
+		}
+		imageCacheTTL = parsed
 	}
 
 	port := os.Getenv("PORT")
@@ -103,5 +131,8 @@ func Load() (Config, error) {
 		AgentCapacity:        agentCapacity,
 		MainModel:            mainModel,
 		FrontendDir:          os.Getenv("FRONTEND_DIR"),
+		ImageCacheDir:        imageCacheDir,
+		ImageCacheMaxBytes:   imageCacheMaxBytes,
+		ImageCacheTTL:        imageCacheTTL,
 	}, nil
 }

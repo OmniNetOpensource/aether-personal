@@ -13,6 +13,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,14 +36,14 @@ type Manager struct {
 }
 
 // NewManager 创建唯一的进程内调度器；并发用户共享客户端和连接池，不常驻空闲 Runner。
-func NewManager(pool *pgxpool.Pool, settings config.Config, serviceSettings *services.Store) *Manager {
+func NewManager(pool *pgxpool.Pool, settings config.Config, serviceSettings *services.Store, imageStore *images.Store) *Manager {
 	capacity := int(settings.AgentCapacity)
 	if capacity == 0 {
 		capacity = max(1, int(pool.Config().MaxConns)-4)
 	}
 	return &Manager{databasePool: pool, settings: settings, services: serviceSettings,
 		modelClient: &http.Client{Timeout: modelRequestTimeout},
-		toolDeps: tools.Dependencies{DatabasePool: pool, Services: serviceSettings,
+		toolDeps: tools.Dependencies{DatabasePool: pool, Services: serviceSettings, Images: imageStore,
 			HTTPClient: &http.Client{Timeout: 120 * time.Second}},
 		capacity: capacity, wakeSignal: make(chan struct{}, 1),
 		runners: map[uuid.UUID]*Runner{}, pending: map[uuid.UUID]struct{}{}}

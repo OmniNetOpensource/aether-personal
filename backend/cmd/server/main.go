@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配配置、数据库连接池、Agent 调度、定时安排与闲置反思调度器、HTTP 服务，并随退出信号优雅关闭，把各模块连成一个可运行的服务。
+// 本文件是后端进程入口：装配数据库、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待缓存清理和请求处理结束。
 
 package main
 
@@ -15,6 +15,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/httpapi"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,7 +55,21 @@ func main() {
 		slog.Error("initialize service encryption failed")
 		os.Exit(1)
 	}
-	manager := agent.NewManager(databasePool, appConfig, serviceSettings)
+	// 上传、工具和模型请求共享一个缓存实例；清理任务由入口启动并在退出时等待，错误也只在入口记录。
+	imageStore, err := images.NewStore(serviceSettings, appConfig.ImageCacheDir, appConfig.ImageCacheMaxBytes, appConfig.ImageCacheTTL)
+	if err != nil {
+		slog.Error("initialize image cache failed", "error", err)
+		os.Exit(1)
+	}
+	cacheDone := make(chan error, 1)
+	go func() {
+		err := imageStore.RunCacheCleanup(ctx)
+		if err != nil {
+			stop()
+		}
+		cacheDone <- err
+	}()
+	manager := agent.NewManager(databasePool, appConfig, serviceSettings, imageStore)
 	managerDone := make(chan error, 1)
 	go func() {
 		err := manager.Start(ctx)
@@ -67,7 +82,7 @@ func main() {
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, serviceSettings, manager), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
 	httpDone := make(chan struct{})
 	go func() {
 		defer close(httpDone)
@@ -82,8 +97,8 @@ func main() {
 	}
 	stop()
 	<-httpDone
-	if err := <-managerDone; err != nil {
-		slog.Error("agent manager stopped", "error", err)
+	if err := errors.Join(<-managerDone, <-cacheDone); err != nil {
+		slog.Error("background workers stopped", "error", err)
 		os.Exit(1)
 	}
 }

@@ -39,6 +39,11 @@ services:
       TURNSTILE_HOSTNAME: ${TURNSTILE_HOSTNAME:-}
       MAIN_MODEL: ${MAIN_MODEL:-}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      IMAGE_CACHE_DIR: /var/cache/aether/images
+      IMAGE_CACHE_MAX_BYTES: ${IMAGE_CACHE_MAX_BYTES:-1073741824}
+      IMAGE_CACHE_TTL: ${IMAGE_CACHE_TTL:-168h}
+    volumes:
+      - image-cache:/var/cache/aether/images
     depends_on:
       postgres: { condition: service_healthy }
     healthcheck:
@@ -130,5 +135,6 @@ services:
 
 volumes:
   postgres-data:
+  image-cache:
   caddy-data:
   caddy-config:

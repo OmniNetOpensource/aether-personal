@@ -16,7 +16,6 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -87,7 +86,7 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 // sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，本函数只负责凭证、传输与结果分类，终态日志在返回前由 finishModelCall 落库。
 func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
 	// 渠道标识留在运行时与日志里，供应商只收到自己的模型名和协议。
-	resolved, err := (images.Store{Services: r.services}).ResolveMessages(ctx, prepared.Messages)
+	resolved, err := r.toolDeps.Images.ResolveMessages(ctx, prepared.Messages)
 	if err != nil {
 		return response, false, err
 	}

@@ -10,10 +10,12 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// server 共享请求处理所需的连接池、服务配置与图片存储，所有图片入口使用同一份缓存索引。
 type server struct {
 	databasePool *pgxpool.Pool
 	queries      *database.Queries
@@ -22,10 +24,11 @@ type server struct {
 	connections  *chatConnections
 	services     *services.Store
 	agents       *agent.Manager
+	images       *images.Store
 }
 
 // NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器。
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager) http.Handler {
+func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
@@ -34,6 +37,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSett
 		connections:  newChatConnections(),
 		services:     serviceSettings,
 		agents:       agents,
+		images:       imageStore,
 	}
 	go s.listenForUserMessages()
 

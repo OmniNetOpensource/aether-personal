@@ -8,16 +8,18 @@ import (
 	"net/http"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Dependencies 是 Runner 在执行工具时注入的外部依赖：连接池供事务外工具自行查库，服务凭证与联网客户端供联网工具调用外部服务。
+// Dependencies 是 Runner 的外部依赖：连接池供工具查库，凭证与客户端供联网请求，共享图片存储负责 OSS 与磁盘缓存。
 type Dependencies struct {
 	DatabasePool *pgxpool.Pool
 	Services     *services.Store
 	HTTPClient   *http.Client
+	Images       *images.Store
 }
 
 // Tool 是一条工具登记：模型看到的定义、执行是在事务外还是与回执同一事务，以及调用哪个实现。

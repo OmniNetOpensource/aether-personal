@@ -1,4 +1,4 @@
-// 本文件提供已登录用户的图片上传入口：读取原始图片字节、写入 OSS，并返回预览链接与持久引用。
+// 本文件提供已登录用户的图片入口：通过共享存储上传到 OSS 并填充缓存，为历史签发预览链接并检查新消息的图片。
 
 package httpapi
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -43,13 +44,14 @@ func (s *server) uploadImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "图片文件名过长", http.StatusBadRequest)
 		return
 	}
-	image, err := (images.Store{Services: s.services}).Put(ctx, session.UserID, name, data)
+	image, err := s.images.Put(ctx, session.UserID, name, data)
 	if err != nil {
 		if errors.Is(err, services.ErrNotConfigured) {
 			http.Error(w, "请先在管理看板配置阿里云 OSS", http.StatusServiceUnavailable)
 			return
 		}
-		http.Error(w, "图片上传失败，请检查 OSS 配置后重试", http.StatusBadGateway)
+		slog.Error("upload image failed", "user_id", session.UserID, "error", err)
+		http.Error(w, "图片上传失败，请稍后重试", http.StatusBadGateway)
 		return
 	}
 	writeAdminJSON(w, image)
@@ -58,14 +60,13 @@ func (s *server) uploadImage(w http.ResponseWriter, r *http.Request) {
 // chatMessagesWithPreviews 为历史与实时推送签发 OSS 预览链接，签名不回写 messages。
 func (s *server) chatMessagesWithPreviews(ctx context.Context, rows []database.ListChatRowsAfterRow) []chatMessage {
 	messages := chatMessagesFromRows(rows)
-	store := images.Store{Services: s.services}
 	for index := range messages {
 		for partIndex, part := range messages[index].Parts {
 			if part.Image == nil {
 				continue
 			}
 			image := *part.Image
-			preview, err := store.Preview(ctx, image.StorageURL)
+			preview, err := s.images.Preview(ctx, image.StorageURL)
 			if err == nil {
 				image.URL = preview
 			} else {
@@ -80,12 +81,11 @@ func (s *server) chatMessagesWithPreviews(ctx context.Context, rows []database.L
 // checkMessageImages 在写入前按 OSS 真实大小核对整条消息，网络请求发生在数据库事务之外。
 func (s *server) checkMessageImages(ctx context.Context, frame *clientFrame) bool {
 	total := 0
-	store := images.Store{Services: s.services}
 	for _, part := range frame.Parts {
 		if part.Image == nil {
 			continue
 		}
-		size, mime, err := store.Inspect(ctx, part.Image.StorageURL)
+		size, mime, err := s.images.Inspect(ctx, part.Image.StorageURL)
 		if err != nil || size != part.Image.Size || mime != part.Image.MIMEType {
 			return false
 		}

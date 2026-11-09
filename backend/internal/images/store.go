@@ -1,4 +1,4 @@
-// 本文件封装聊天图片的 OSS 存储：只读写项目自己的对象，历史返回临时预览链接，模型请求临时转换为 base64。
+// 本文件封装聊天图片的 OSS 存储：上传后填入本机缓存，模型请求优先读缓存并转换为 base64，历史返回临时预览链接。
 
 package images
 
@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
@@ -32,12 +34,20 @@ type Image struct {
 	MIMEType   string `json:"mime_type"`
 }
 
-// Store 不缓存凭证，每次操作读取管理看板当前保存的配置。
-type Store struct{ Services *services.Store }
+// Store 在进程内共享磁盘缓存的索引；图片字节留在磁盘，服务凭证仍在每次操作时从看板配置读取。
+type Store struct {
+	services       *services.Store
+	cacheDirectory string
+	cacheMaxBytes  int64
+	cacheTTL       time.Duration
+	cacheMutex     sync.Mutex
+	cacheEntries   map[string]cacheEntry
+	cacheBytes     int64
+}
 
 // client 将服务配置转换成官方 SDK 客户端；连接和读取受调用方超时控制。
-func (s Store) client(ctx context.Context) (*oss.Client, services.OSSSettings, error) {
-	settings, err := s.Services.LoadOSS(ctx)
+func (s *Store) client(ctx context.Context) (*oss.Client, services.OSSSettings, error) {
+	settings, err := s.services.LoadOSS(ctx)
 	if err != nil {
 		return nil, settings, err
 	}
@@ -59,7 +69,7 @@ func ValidateBytes(data []byte) (string, error) {
 }
 
 // Put 将图片写入当前用户专属前缀，随机对象名避免同名文件覆盖。
-func (s Store) Put(ctx context.Context, userID uuid.UUID, name string, data []byte) (Image, error) {
+func (s *Store) Put(ctx context.Context, userID uuid.UUID, name string, data []byte) (Image, error) {
 	mime, err := ValidateBytes(data)
 	if err != nil {
 		return Image{}, err
@@ -75,6 +85,10 @@ func (s Store) Put(ctx context.Context, userID uuid.UUID, name string, data []by
 		return Image{}, fmt.Errorf("OSS 图片上传失败")
 	}
 	image := Image{Name: name, StorageURL: "oss://" + settings.Bucket + "/" + key, Size: len(data), MIMEType: mime}
+	// 上传成功后直接复用已有字节，下次模型请求不再把刚上传的图片下载回来。
+	if err := s.writeCachedImage(image.StorageURL, data); err != nil {
+		return Image{}, err
+	}
 	image.URL, err = s.Preview(ctx, image.StorageURL)
 	return image, err
 }
@@ -99,7 +113,7 @@ func objectKey(reference, bucket string) (string, error) {
 }
 
 // Preview 生成一天有效的私有对象链接；每次历史读取重新签名，签名不作为持久引用保存。
-func (s Store) Preview(ctx context.Context, reference string) (string, error) {
+func (s *Store) Preview(ctx context.Context, reference string) (string, error) {
 	client, settings, err := s.client(ctx)
 	if err != nil {
 		return "", err
@@ -116,7 +130,7 @@ func (s Store) Preview(ctx context.Context, reference string) (string, error) {
 }
 
 // ResolveMessages 在渠道适配之前替换 OSS 引用，OpenRouter 和 Gemini 因而拿到相同的 base64 内容。
-func (s Store) ResolveMessages(ctx context.Context, messages []json.RawMessage) ([]json.RawMessage, error) {
+func (s *Store) ResolveMessages(ctx context.Context, messages []json.RawMessage) ([]json.RawMessage, error) {
 	resolved := make([]json.RawMessage, len(messages))
 	cache := map[string]string{}
 	for index, raw := range messages {
@@ -155,19 +169,28 @@ func (s Store) ResolveMessages(ctx context.Context, messages []json.RawMessage) 
 				if err != nil {
 					return nil, err
 				}
-				result, err := client.GetObject(ctx, &oss.GetObjectRequest{Bucket: oss.Ptr(settings.Bucket), Key: oss.Ptr(key)})
-				if err != nil {
-					return nil, fmt.Errorf("OSS 图片读取失败（获取 %s）: %w", image.URL, err)
-				}
-				data, readErr := io.ReadAll(io.LimitReader(result.Body, MaxImageBytes+1))
-				result.Body.Close()
-				if readErr != nil {
-					return nil, fmt.Errorf("OSS 图片读取失败（读取 %s）: %w", image.URL, readErr)
-				}
-				mime, err := ValidateBytes(data)
+				data, err := s.readCachedImage(image.URL)
 				if err != nil {
 					return nil, err
 				}
+				// 只有未命中或过期才下载，校验成功后写入共享缓存；其他错误直接交给请求后阶段收尾。
+				if data == nil {
+					result, err := client.GetObject(ctx, &oss.GetObjectRequest{Bucket: oss.Ptr(settings.Bucket), Key: oss.Ptr(key)})
+					if err != nil {
+						return nil, fmt.Errorf("OSS 图片读取失败（获取 %s）: %w", image.URL, err)
+					}
+					data, err = io.ReadAll(io.LimitReader(result.Body, MaxImageBytes+1))
+					if err := errors.Join(err, result.Body.Close()); err != nil {
+						return nil, fmt.Errorf("OSS 图片读取失败（读取 %s）: %w", image.URL, err)
+					}
+					if _, err := ValidateBytes(data); err != nil {
+						return nil, err
+					}
+					if err := s.writeCachedImage(image.URL, data); err != nil {
+						return nil, err
+					}
+				}
+				mime := http.DetectContentType(data)
 				encoded = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
 				cache[image.URL] = encoded
 			}
@@ -180,7 +203,7 @@ func (s Store) ResolveMessages(ctx context.Context, messages []json.RawMessage) 
 }
 
 // Inspect 从 OSS 读取对象元信息，消息入口用真实大小核对总量，不信任客户端回传的 size。
-func (s Store) Inspect(ctx context.Context, reference string) (int, string, error) {
+func (s *Store) Inspect(ctx context.Context, reference string) (int, string, error) {
 	client, settings, err := s.client(ctx)
 	if err != nil {
 		return 0, "", err

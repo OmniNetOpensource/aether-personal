@@ -64,7 +64,7 @@ func readImage(ctx context.Context, deps Dependencies, userID uuid.UUID, args js
 	if err != nil {
 		return "", err
 	}
-	image, err := (images.Store{Services: deps.Services}).Put(ctx, userID, "image", data)
+	image, err := deps.Images.Put(ctx, userID, "image", data)
 	if err != nil {
 		return "", err
 	}
