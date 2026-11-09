@@ -179,7 +179,9 @@ export interface ModelSettings {
   compact_context_length: number;
   compact_output_limit: number;
   compact_at_tokens: number;
-  reflection_idle_minutes: number;
+  memory_update_idle_minutes: number;
+  recent_followup_idle_minutes: number;
+  unknown_unknowns_idle_minutes: number;
   effective_output_limit: number;
   main_model: string;
   version: number;

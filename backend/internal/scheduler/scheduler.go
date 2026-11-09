@@ -1,4 +1,4 @@
-// 本文件是后台调度器：定期扫描到期的定时安排与闲置到期的对话，把保存的上下文或反思指令作为不可见触发消息投进该用户的对话，再唤醒 Main。
+// 本文件是后台调度器：定期扫描到期的定时安排与闲置到期的对话，把保存的上下文或三种后台工作（记忆整理、近期跟进、未知的未知）的指令作为不可见触发消息投进该用户的对话，再唤醒 Main。
 
 package scheduler
 
@@ -20,11 +20,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// scanInterval 是扫描间隔，定时安排与闲置反思的触发精度就在这个量级。
+// scanInterval 是扫描间隔，定时安排与闲置后台工作的触发精度就在这个量级。
 const scanInterval = 5 * time.Second
 
-// Run 每隔 scanInterval 扫一次到期安排和到期反思并逐条投递，直到进程退出。它是调度器的最外层：
-// 失败在这里记录，没投递成功的安排或反思仍然到期，下一次扫描会再试。
+// idleWork 描述一种在对话闲置后投给 Main 的后台工作。previousName 是这段对话里必须先投过的前一种工作，
+// 空表示没有前一种，所以即使看板把时长设乱，三种工作仍按顺序运行。
+type idleWork struct {
+	name         string
+	previousName string
+	prompt       string
+	idleMinutes  int32
+}
+
+// Run 每隔 scanInterval 扫一次到期安排和到期的闲置后台工作并逐条投递，直到进程退出。它是调度器的最外层：
+// 失败在这里记录，没投递成功的安排或后台工作仍然到期，下一次扫描会再试。
 func Run(ctx context.Context, pool *pgxpool.Pool, appConfig config.Config, manager *agent.Manager) {
 	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
@@ -41,16 +50,25 @@ func Run(ctx context.Context, pool *pgxpool.Pool, appConfig config.Config, manag
 		}
 		// 闲置时长每次扫描现读看板设置，管理员修改后下一次扫描就生效。
 		settings, err := modelsettings.Load(ctx, queries, appConfig)
-		var reflections []uuid.UUID
-		if err == nil {
-			reflections, err = queries.ListReflectionDue(ctx, database.ListReflectionDueParams{IdleMinutes: settings.ReflectionIdleMinutes})
-		}
 		if err != nil && ctx.Err() == nil {
-			slog.Error("scan reflections failed", "error", err)
+			slog.Error("load idle work settings failed", "error", err)
 		}
-		for _, userID := range reflections {
-			if err := deliverReflection(ctx, pool, manager, userID, settings.ReflectionIdleMinutes); err != nil && ctx.Err() == nil {
-				slog.Error("deliver reflection failed", "user_id", userID, "error", err)
+		if err == nil {
+			works := []idleWork{
+				{name: agent.MemoryUpdateMessageName, prompt: agent.MemoryUpdatePrompt, idleMinutes: settings.MemoryUpdateIdleMinutes},
+				{name: agent.RecentFollowupMessageName, previousName: agent.MemoryUpdateMessageName, prompt: agent.RecentFollowupPrompt, idleMinutes: settings.RecentFollowupIdleMinutes},
+				{name: agent.UnknownUnknownsMessageName, previousName: agent.RecentFollowupMessageName, prompt: agent.UnknownUnknownsPrompt, idleMinutes: settings.UnknownUnknownsIdleMinutes},
+			}
+			for _, work := range works {
+				due, err := queries.ListIdleWorkDue(ctx, database.ListIdleWorkDueParams{WorkName: work.name, PreviousWorkName: work.previousName, IdleMinutes: work.idleMinutes})
+				if err != nil && ctx.Err() == nil {
+					slog.Error("scan idle work failed", "work", work.name, "error", err)
+				}
+				for _, userID := range due {
+					if err := deliverIdleWork(ctx, pool, manager, userID, work); err != nil && ctx.Err() == nil {
+						slog.Error("deliver idle work failed", "work", work.name, "user_id", userID, "error", err)
+					}
+				}
 			}
 		}
 		select {
@@ -115,21 +133,21 @@ func deliverSchedule(ctx context.Context, pool *pgxpool.Pool, manager *agent.Man
 	return nil
 }
 
-// deliverReflection 给一个闲置到期的用户投一次反思触发：在用户消息锁内按同样条件复查，
-// 扫描之后刚好来了新消息或已经反思过的用户不再投递；提交后唤醒该用户的 Main。
-func deliverReflection(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager, userID uuid.UUID, idleMinutes int32) error {
+// deliverIdleWork 给一个闲置到期的用户投一次某种后台工作的触发：在用户消息锁内按同样条件复查，
+// 扫描之后刚好来了新消息或这种工作已经投过的用户不再投递；提交后唤醒该用户的 Main。
+func deliverIdleWork(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager, userID uuid.UUID, work idleWork) error {
 	var sequence int64
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		due, err := queries.ListReflectionDue(ctx, database.ListReflectionDueParams{UserID: &userID, IdleMinutes: idleMinutes})
+		due, err := queries.ListIdleWorkDue(ctx, database.ListIdleWorkDueParams{UserID: &userID, WorkName: work.name, PreviousWorkName: work.previousName, IdleMinutes: work.idleMinutes})
 		if err != nil || len(due) == 0 {
 			return err
 		}
-		prompt := fmt.Sprintf(agent.ReflectionPrompt, idleMinutes, time.Now().UTC().Format(time.RFC3339))
-		content, err := json.Marshal(map[string]string{"role": "user", "name": agent.ReflectionMessageName, "content": prompt})
+		prompt := fmt.Sprintf(work.prompt, work.idleMinutes, time.Now().UTC().Format(time.RFC3339))
+		content, err := json.Marshal(map[string]string{"role": "user", "name": work.name, "content": prompt})
 		if err != nil {
 			return err
 		}

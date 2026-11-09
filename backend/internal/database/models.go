@@ -97,19 +97,21 @@ type ModelCall struct {
 }
 
 type ModelSetting struct {
-	ID                    uuid.UUID
-	Singleton             bool
-	MainModel             string
-	Version               int64
-	UpdatedAt             time.Time
-	UpdatedBy             string
-	MainModelMaxTokens    *int32
-	CompactAtTokens       int32
-	MainContextLength     *int64
-	CompactModel          *string
-	CompactModelMaxTokens *int32
-	CompactContextLength  *int64
-	ReflectionIdleMinutes int32
+	ID                         uuid.UUID
+	Singleton                  bool
+	MainModel                  string
+	Version                    int64
+	UpdatedAt                  time.Time
+	UpdatedBy                  string
+	MainModelMaxTokens         *int32
+	CompactAtTokens            int32
+	MainContextLength          *int64
+	CompactModel               *string
+	CompactModelMaxTokens      *int32
+	CompactContextLength       *int64
+	MemoryUpdateIdleMinutes    int32
+	RecentFollowupIdleMinutes  int32
+	UnknownUnknownsIdleMinutes int32
 }
 
 type Schedule struct {
