@@ -20,7 +20,7 @@ import (
 // fetchURLTool 登记 fetch_url：联网抓取在事务外执行，回执单独提交。
 var fetchURLTool = Tool{
 	Name:               "fetch_url",
-	Definition:         json.RawMessage(`{"type":"function","function":{"name":"fetch_url","description":"Read text content from an HTTP(S) webpage, including WeChat articles, Xiaohongshu/RedNote notes and Reddit posts. Keep the source URL when reporting findings.","parameters":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"]}}}`),
+	Definition:         json.RawMessage(`{"type":"function","function":{"name":"fetch_url","description":"Read text content from an HTTP(S) webpage, including WeChat articles, Xiaohongshu/RedNote notes and Reddit posts. Use read_image for a direct image URL. Keep the source URL when reporting findings.","parameters":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"]}}}`),
 	OutsideTransaction: true,
 	Execute: func(ctx context.Context, deps Dependencies, _ *database.Queries, _ uuid.UUID, arguments string) (string, error) {
 		client := newWebClient(deps)

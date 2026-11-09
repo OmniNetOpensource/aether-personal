@@ -98,6 +98,46 @@ type geminiFunctionCall struct {
 	Args json.RawMessage `json:"args"`
 }
 
+// geminiToolOutput 把工具回执拆成文本和图片。字符串回执只有文本；内容数组里的 image_url 必须已是 data URL。
+func geminiToolOutput(raw json.RawMessage) (string, []map[string]any, error) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, nil, nil
+	}
+	if len(raw) == 0 || raw[0] != '[' {
+		return "", nil, fmt.Errorf("unsupported Gemini tool result content")
+	}
+	var blocks []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", nil, err
+	}
+	texts := []string{}
+	media := []map[string]any{}
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				texts = append(texts, block.Text)
+			}
+		case "image_url":
+			mimeType, data, ok := strings.Cut(strings.TrimPrefix(block.ImageURL.URL, "data:"), ";base64,")
+			if !ok || !strings.HasPrefix(mimeType, "image/") {
+				return "", nil, fmt.Errorf("Gemini history requires base64 image data URLs")
+			}
+			media = append(media, map[string]any{"inlineData": map[string]string{"mimeType": mimeType, "data": data}})
+		default:
+			return "", nil, fmt.Errorf("unsupported Gemini tool result content: %s", block.Type)
+		}
+	}
+	return strings.Join(texts, "\n"), media, nil
+}
+
 // geminiRequestBody 把运行时共用消息转为 generateContent 请求，不改动数据库中的历史。
 func geminiRequestBody(prepared Request) ([]byte, error) {
 	contents := []geminiContent{}
@@ -124,13 +164,21 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 			if !exists {
 				return nil, fmt.Errorf("Gemini history has a tool result without its call")
 			}
-			part, _ := json.Marshal(map[string]any{"functionResponse": map[string]any{
-				"name": call.Name, "response": map[string]string{"output": text},
-			}})
+			output, media, err := geminiToolOutput(message.Content)
+			if err != nil {
+				return nil, err
+			}
+			// 文本放进 response.output；图片放进 functionResponse.parts，Gemini 3 起才能看见工具回执里的图。
+			functionResponse := map[string]any{"name": call.Name, "response": map[string]string{"output": output}}
 			if call.ID != "" {
-				part, _ = json.Marshal(map[string]any{"functionResponse": map[string]any{
-					"id": call.ID, "name": call.Name, "response": map[string]string{"output": text},
-				}})
+				functionResponse["id"] = call.ID
+			}
+			if len(media) > 0 {
+				functionResponse["parts"] = media
+			}
+			part, err := json.Marshal(map[string]any{"functionResponse": functionResponse})
+			if err != nil {
+				return nil, fmt.Errorf("encode Gemini tool result: %w", err)
 			}
 			content.Parts = append(content.Parts, part)
 		case "assistant", "user":

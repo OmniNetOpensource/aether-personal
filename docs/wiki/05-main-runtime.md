@@ -6,7 +6,7 @@
 
 最小对话（含 WebSocket 收发完整消息）→ 边生成边显示 → 更多工具（`read_message`、`search_message`）→ 压缩与历史检索 → Subagent。
 
-当前 `已实现` 的代码包含最小 Main 对话、联网 `search` / `fetch_url`、Web 聊天（现使用 React，移动端为 PWA）。推送完整消息与状态，不推送逐段生成的文字。
+当前 `已实现` 的代码包含最小 Main 对话、联网 `search` / `fetch_url` / `read_image`、Web 聊天（现使用 React，移动端为 PWA）。推送完整消息与状态，不推送逐段生成的文字。
 
 2026-10-22，用户调整近期实现顺序：先为 Subagent 添加联网 `search` 与网页读取工具，再制作 WhatsApp 风格的简版 Flutter 客户端，最后在本地联调。完成这些工作需要先实现 Main 派发任务、Subagent 独立运行及双方消息通信。边生成边显示和压缩仍属于完整交付范围；历史检索已于 2026-10-30 实现（范围与口径见 [02](02-data-model.md#历史检索-已实现)）。
 
@@ -187,6 +187,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 | `memory` | Anthropic 风格的 `view/create/str_replace/insert/delete/rename`；读取与编辑 `/memories/memory.md` 和详细主题，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
 | `schedule` | 创建、列出、修改、删除一次性或周期定时任务；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url` | Main 的搜索和网页读取工具 | `已实现` |
+| `read_image` | 读取一张 JPEG、PNG、GIF 或 WebP 的直接地址；字节写入该用户的 OSS，回执只留 `oss://`，发送前再转 base64 | `已实现` |
 
 工具参数写在工具描述中。每次请求注入的不可见指令明确 Main 的正文就是给用户的消息、且与工具同批的正文也会展示，要求正文只写用户该读的内容、不暴露内部推理与编排。参数无效时返回工具错误，模型可修正。
 
@@ -319,6 +320,18 @@ Parallel 返回非空 `full_content` 时使用全文，否则使用同一次响�
 核对来源为本地 Aether 的 `src/backend/chat/tools/search-tool.ts` 和 `src/backend/chat/tools/fetch-tool.ts`，以及 [Parallel Extract 文档](https://docs.parallel.ai/api-reference/extract/extract)。Go 接入代码位于 `backend/internal/agent/tools/search.go` 与 `backend/internal/agent/tools/fetch_url.go`，协议与错误测试已通过。供应商密钥只在后端读取，缺少密钥时返回明确工具错误。本地已复用 Aether 配置中的 Parallel 和 EveryInfra 密钥。
 
 2026-10-22 已从 Flutter Web 发起真实任务，验证 Main 派发两个后台 Subagent、Parallel 读取官方网页、EveryInfra 搜索和读取微信公众号文章、回传 Main 并显示结果。显式的 `make check-live` 进一步验证微信与小红书搜索、Parallel 正文提取，小红书笔记正文也已通过真实服务检查。2026-10-23 已配置 Serper，并通过真实 Google 搜索检查，返回 6 条来源链接；进一步从 Flutter Web 验证 Google 搜索、Parallel 读取官方文档、Subagent 回传 Main、Main 汇总回复的完整链路。该次任务结束后 Subagent 为 idle，执行步骤无失败、无未完成项。
+
+### read_image `已实现`
+
+2026-11-09，用户要求参考 aether-start 增加 `read_image(url)`，并明确数据库只保存图片地址，base64 只在发送时生成。
+
+工具下载一张直接的 HTTP 或 HTTPS 图片地址，不读取网页正文。地址不能带账号密码；最多跟随 3 次跳转，每一跳仍须是不带账号密码的 HTTP(S)。连接前解析域名，只拨公网地址，拒绝本机、内网和链路本地地址，也不走环境代理。单次请求 30 秒。响应不看 `Content-Type`，用现有的 `ValidateBytes` 认真实字节，只接受 PNG、JPEG、GIF 和 WebP，单张不超过 4 MB。
+
+校验通过后写入该用户的 OSS 前缀 `aether-chat/<user_id>/`。成功回执是一条原生 `tool` 消息，`content` 为两段：一段文本记下原始网址、MIME 类型和字节数，一段 `image_url` 的 `url` 是 `oss://`。失败仍存成 `Error: ...` 字符串。其他工具的回执继续是字符串。
+
+发送前仍由 `ResolveMessages` 把 `oss://` 读出并换成 data URL，OpenRouter 原样收到文本段加 `image_url`。ikun Gemini 把文本放进 `functionResponse.response.output`，把图片放进 `functionResponse.parts` 的 inline data。压缩用的 Claude 已能把内容数组里的 `image_url` 放进 `tool_result`。base64 只出现在发出的请求和模型调用日志里。聊天界面不展示工具回执，因此前端不改。
+
+固定指令和 `fetch_url` 的说明要求图片用 `read_image`。实现位于 `backend/internal/agent/tools/read_image.go`。
 
 ### 跨模型的回合结束协议（开发中）
 

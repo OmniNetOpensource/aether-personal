@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,8 +133,14 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。
+// read_image 成功时结果是内容数组：库里保存文本和 oss:// 图片段，其他工具的结果仍是字符串。
 func toolResultContent(call toolCall, result string) ([]byte, error) {
-	return json.Marshal(map[string]string{"role": "tool", "tool_call_id": call.ID, "content": result})
+	var content any = result
+	trimmed := strings.TrimSpace(result)
+	if call.Function.Name == "read_image" && strings.HasPrefix(trimmed, "[") {
+		content = json.RawMessage(trimmed)
+	}
+	return json.Marshal(map[string]any{"role": "tool", "tool_call_id": call.ID, "content": content})
 }
 
 // saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；

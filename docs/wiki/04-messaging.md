@@ -128,7 +128,7 @@ sequenceDiagram
 
 图片通过 `POST /images?name=...` 以原始字节上传，使用当前登录令牌的 Bearer 认证。后端校验真实格式与大小后写入私有 OSS Bucket 的 `aether-chat/<user_id>/<随机 UUID>.<扩展名>`。消息只保存 `oss://<bucket>/<object>` 持久引用，不保存临时签名链接。前端预览链接由后端签名，有效期一天；重新加载历史会重新签名。Bucket 保持私有与阻止公共访问，不需要浏览器跨域写入权限。
 
-后端在渠道适配前读取 OSS 图片并转为 base64 data URL，OpenRouter 与 ikun Gemini 共用这一步。普通上下文合并与压缩都保留图片段，避免把图片退化成 `[image]` 文本。模型调用日志仍按原有规则记录实际发出的请求，其中可包含图片 base64。OSS 凭证未配置时，文字与引用仍可使用，图片上传明确提示到看板配置。
+后端在渠道适配前读取 OSS 图片并转为 base64 data URL，OpenRouter 与 ikun Gemini 共用这一步。2026-11-09 起 `read_image` 抓到的图片也写入同一 OSS 前缀，工具回执只保存 `oss://`，发送时走同一次转换，详见 [05](05-main-runtime.md#read_image-已实现)。普通上下文合并与压缩都保留图片段，避免把图片退化成 `[image]` 文本。模型调用日志仍按原有规则记录实际发出的请求，其中可包含图片 base64。OSS 凭证未配置时，文字与引用仍可使用，图片上传明确提示到看板配置。
 
 OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service_settings` 的加密载荷中，沿用 AES-GCM 与独立部署主密钥。看板只回显 Bucket、地域和 Secret 末尾四位；替换凭证时同时输入 ID 和 Secret。项目专用 RAM 身份仅需要指定 Bucket 的 `aether-chat/*` 对象的 `oss:GetObject`、`oss:PutObject` 权限，策略见 `infra/oss/ram-policy.json`。
 

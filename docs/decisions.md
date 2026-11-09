@@ -152,6 +152,7 @@
 | 近期实现顺序 | 当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra，供 Main 使用 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | X（Twitter）搜索 | 2026-10-30 接入独立 `search_twitter(query, limit?, sort?)`，Main 使用看板 EveryInfra Key；默认 Top，不保证严格时间排序或全量结果；失败不自动重试，零结果正常返回，缺失计数不补零 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
+| 读取图片 | 2026-11-09 增加 `read_image(url)`：下载直接图片地址，校验后写入该用户的 OSS，回执只保存 `oss://`，发送前再转 base64。拒绝本机、内网和链路本地地址。理由是模型需要看见图片本身，同时不把 base64 写进消息表 | [05](wiki/05-main-runtime.md#read_image-已实现) |
 | 当前执行能力 | 2026-10-29 起先不考虑沙盒，已有实现删除；执行工具只保留搜索与网页读取 | [07](wiki/07-sandbox.md) |
 | 引用与多模态输入 | 2026-11-02 对齐 Aether Start，Tiptap 内混排文字、引用和图片，Enter 换行、Ctrl+Enter 发送；选区引用可回看原文，消息保留编辑顺序；输入框统一附件高度与间距，节点外壳留白避免光标重合 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
 | 图片存储 | 私有阿里云 OSS Bucket 保存图片，消息保存对象引用，后端调用模型前读取并转 base64；凭证由看板加密管理 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
