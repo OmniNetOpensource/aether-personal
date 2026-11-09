@@ -1,4 +1,4 @@
-// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据，编排自动刷新，并切换五个页面与调用详情弹窗。
+// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据，编排自动刷新，并切换运行过程、配置页面与调用详情弹窗。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -7,64 +7,63 @@ import {
   formatTime,
   setAdminToken,
   type Call,
-  type Page,
-  type QuotaItem,
   type Snapshot,
   type Timeline,
   type TimelineItem,
 } from './api.js';
-import { CallDetailDialog, CallsPage } from './Calls.js';
+import { CallDetailDialog } from './CallDetail.js';
 import { ModelSettingsPage } from './ModelSettings.js';
-import { OverviewPage } from './Overview.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
 import { TimelinePage } from './Timeline.js';
 import { Empty } from './ui.js';
 
-type Tab = 'overview' | 'calls' | 'timeline' | 'models' | 'services';
+type Tab = 'timeline' | 'models' | 'services';
+
+// TimelineFilters 区分编辑中的条件与已经提交的查询，自动刷新和翻页只使用已提交值。
+interface TimelineFilters {
+  hours: number;
+  user: string;
+  model: string;
+  outcome: string;
+}
+const defaultFilters: TimelineFilters = { hours: 24, user: '', model: '', outcome: '' };
 
 const tabs: Record<Tab, [string, string]> = {
-  overview: ['运行概览', '从用户到每一次调用，了解 Agent 正在如何工作。'],
-  calls: ['模型调用', '真实请求尝试、提供方返回用量与结果。'],
   timeline: ['运行过程', '按时间查看 Main 收到的输入、推理与工具调用。'],
   models: ['模型配置', '分别选择对话与压缩模型，从下一次请求生效。'],
   services: ['服务配置', '管理模型、邮件与联网服务的 API Key，保存后从下一次请求生效。'],
 };
-const tabGlyphs: Record<Tab, string> = { overview: '◫', calls: '↗', timeline: '⋮', models: '⇄', services: '⚙' };
+const tabGlyphs: Record<Tab, string> = { timeline: '⋮', models: '⇄', services: '⚙' };
 
 // AdminApp 是看板根组件：未登录时显示密码登录，登录后显示侧边栏外壳与当前页。
 export function AdminApp() {
   const [booting, setBooting] = useState(true);
   const [me, setMe] = useState<{ name: string } | null>(null);
   const [denied, setDenied] = useState('');
-  const [tab, setTab] = useState<Tab>('overview');
-  const [hours, setHours] = useState(24);
-  const [user, setUser] = useState('');
-  const [model, setModel] = useState('');
-  const [modelInput, setModelInput] = useState('');
-  const [outcome, setOutcome] = useState('');
+  const [tab, setTab] = useState<Tab>('timeline');
+  const [filters, setFilters] = useState(defaultFilters);
+  const [query, setQuery] = useState(defaultFilters);
+  const [knownUsers, setKnownUsers] = useState(new Map<string, string>());
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [calls, setCalls] = useState<Page<Call> | null>(null);
   const [timeline, setTimeline] = useState<(Timeline & { key: string }) | null>(null);
   const [updatedText, setUpdatedText] = useState('尚未刷新');
   const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [browsingPages, setBrowsingPages] = useState(false);
-  const [quotas, setQuotas] = useState<{ items: QuotaItem[] } | null>(null);
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [toast, setToast] = useState('');
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
 
   const controller = useRef<AbortController | null>(null);
   const generation = useRef(0);
-  const quotasAt = useRef(0);
   const browsingRef = useRef(false);
-  const tabRef = useRef<Tab>('overview');
+  const tabRef = useRef<Tab>('timeline');
   // 时间线展开状态与已加载全文跨自动刷新保留，沿用改造前 Map 的行为。
   const timelineOpen = useRef(new Map<string, boolean>());
   const timelineFull = useRef(new Map<string, TimelineItem>());
   const windowRef = useRef<{ from: string; to: string } | null>(null);
-  const filtersRef = useRef({ hours: 24, user: '', model: '', outcome: '' });
-  filtersRef.current = { hours, user, model, outcome };
+  const filtersRef = useRef(query);
+  filtersRef.current = query;
   tabRef.current = tab;
   browsingRef.current = browsingPages;
 
@@ -84,16 +83,12 @@ export function AdminApp() {
     generation.current++;
     setMe(null);
     setSnapshot(null);
-    setCalls(null);
     setTimeline(null);
     timelineOpen.current.clear();
     timelineFull.current.clear();
-    setUser('');
-    setModel('');
-    setModelInput('');
-    setOutcome('');
-    setQuotas(null);
-    quotasAt.current = 0;
+    setFilters(defaultFilters);
+    setQuery(defaultFilters);
+    setKnownUsers(new Map());
     windowRef.current = null;
     setUpdatedText('尚未刷新');
     setBrowsingPages(false);
@@ -116,10 +111,10 @@ export function AdminApp() {
     [clearData],
   );
 
+  // buildQuery 为查询与翻页共用同一时间窗口和已提交条件。
   const buildQuery = useCallback((extra: Record<string, string | null> = {}) => {
     const current = filtersRef.current;
-    const range = windowRef.current!;
-    const params = new URLSearchParams({ from: range.from, to: range.to, limit: '50' });
+    const params = new URLSearchParams(windowRef.current ?? {});
     if (current.user) params.set('user_id', current.user);
     if (current.model) params.set('model', current.model);
     if (current.outcome) params.set('outcome', current.outcome);
@@ -127,82 +122,56 @@ export function AdminApp() {
     return params.toString();
   }, []);
 
-  // loadQuotas 向后端实时查询各供应商额度；一分钟内复用上次结果，避免概览每 15 秒自动刷新都去打供应商。
-  const loadQuotas = useCallback(
-    async (force: boolean, signal: AbortSignal, current: number) => {
-      if (!force && quotasAt.current && Date.now() - quotasAt.current < 60000) return;
-      try {
-        const data = await api<{ items: QuotaItem[] }>('/admin/quotas', { signal });
-        if (current !== generation.current) return;
-        setQuotas(data);
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') return;
-        if (current !== generation.current) return;
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) accessLost(error);
-      }
-      quotasAt.current = Date.now();
-    },
-    [accessLost],
-  );
-
-  // refresh 重新读取当前页数据；newWindow 为真时按当前小时数重算时间窗口。
-  const refresh = useCallback(
-    async (newWindow = true) => {
-      if (tabRef.current === 'models' || tabRef.current === 'services') {
-        setSettingsRefreshKey((value) => value + 1);
+  // refresh 重新读取当前页数据，并按已提交的小时数重算时间窗口。
+  const refresh = useCallback(async () => {
+    if (tabRef.current === 'models' || tabRef.current === 'services') {
+      setSettingsRefreshKey((value) => value + 1);
+      return;
+    }
+    setBrowsingPages(false);
+    controller.current?.abort();
+    const abort = new AbortController();
+    controller.current = abort;
+    const current = ++generation.current;
+    const now = new Date();
+    windowRef.current = {
+      from: new Date(now.getTime() - filtersRef.current.hours * 3600000).toISOString(),
+      to: now.toISOString(),
+    };
+    setRefreshing(true);
+    try {
+      const user = filtersRef.current.user;
+      const timelineQuery = buildQuery();
+      // 选择器取未按模型或结果收窄的候选项，切换用户后仍保留已发现的用户。
+      const snapshotQuery = new URLSearchParams(windowRef.current ?? {});
+      if (user) snapshotQuery.set('user_id', user);
+      const [loadedSnapshot, list] = await Promise.all([
+        api<Snapshot>(`/admin/snapshot?${snapshotQuery}`, { signal: abort.signal }),
+        user ? api<Timeline>(`/admin/timeline?${timelineQuery}`, { signal: abort.signal }) : null,
+      ]);
+      if (current !== generation.current) return;
+      setSnapshot(loadedSnapshot);
+      setKnownUsers((previous) => {
+        const users = new Map(previous);
+        for (const item of loadedSnapshot.users.items) users.set(item.id, item.email);
+        return users;
+      });
+      setTimeline(list ? { ...list, key: user } : null);
+      setUpdatedText(`${formatTime(loadedSnapshot.generated_at)} 已更新`);
+      setLoadError('');
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      if (current !== generation.current) return;
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        accessLost(error);
         return;
       }
-      setBrowsingPages(false);
-      controller.current?.abort();
-      const abort = new AbortController();
-      controller.current = abort;
-      const current = ++generation.current;
-      if (newWindow || !windowRef.current) {
-        const now = new Date();
-        windowRef.current = {
-          from: new Date(now.getTime() - filtersRef.current.hours * 3600000).toISOString(),
-          to: now.toISOString(),
-        };
-      }
-      setRefreshing(true);
-      try {
-        const currentTab = tabRef.current;
-        const requests: Promise<unknown>[] = [
-          api<Snapshot>(`/admin/snapshot?${buildQuery()}`, { signal: abort.signal }),
-        ];
-        if (currentTab === 'calls')
-          requests.push(api<Page<Call>>(`/admin/calls?${buildQuery()}`, { signal: abort.signal }));
-        if (currentTab === 'timeline' && filtersRef.current.user)
-          requests.push(
-            api<Timeline>(`/admin/timeline?${new URLSearchParams({ user_id: filtersRef.current.user })}`, {
-              signal: abort.signal,
-            }),
-          );
-        const [loadedSnapshot, list] = await Promise.all(requests);
-        // 概览的额度面板顺带更新，但额度查询慢或失败不能拖住概览本身。
-        if (currentTab === 'overview') await loadQuotas(false, abort.signal, current);
-        if (current !== generation.current) return;
-        setSnapshot(loadedSnapshot as Snapshot);
-        if (currentTab === 'calls') setCalls(list as Page<Call>);
-        if (currentTab === 'timeline')
-          setTimeline(list ? { ...(list as Timeline), key: filtersRef.current.user } : null);
-        setUpdatedText(`${formatTime((loadedSnapshot as Snapshot).generated_at)} 已更新`);
-        setLoadError('');
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') return;
-        if (current !== generation.current) return;
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-          accessLost(error);
-          return;
-        }
-        const message = error instanceof Error ? error.message : '加载失败，请稍后重试。';
-        setLoadError(message);
-      } finally {
-        if (current === generation.current) setRefreshing(false);
-      }
-    },
-    [accessLost, buildQuery, loadQuotas],
-  );
+      const message = error instanceof Error ? error.message : '加载失败，请稍后重试。';
+      setLoadError(message);
+    } finally {
+      if (current === generation.current) setRefreshing(false);
+    }
+  }, [accessLost, buildQuery]);
 
   // 启动时若已有标签页令牌，先验证管理员身份再进看板，失效则回登录页。
   useEffect(() => {
@@ -225,18 +194,10 @@ export function AdminApp() {
   }, []);
 
   // 登录成功后首次加载，以及筛选或页签变化时重新读取（设置页自行加载）。
-  const firstLoad = useRef(true);
   useEffect(() => {
-    if (!me) return;
-    if (tab === 'models' || tab === 'services') return;
-    if (firstLoad.current) {
-      firstLoad.current = false;
-      void refresh();
-      return;
-    }
-    void refresh(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me, tab, hours, user, model, outcome]);
+    if (!me || tab !== 'timeline') return;
+    void refresh();
+  }, [me, tab, query, refresh]);
 
   // 每 15 秒自动刷新；翻页浏览、弹窗打开、设置页与输入聚焦时暂停，页面切回前台时补一次。
   useEffect(() => {
@@ -254,7 +215,8 @@ export function AdminApp() {
       void refresh();
     }, 15000);
     const visibility = () => {
-      if (!document.hidden && tabRef.current !== 'models' && !browsingRef.current) void refresh();
+      if (!document.hidden && tabRef.current === 'timeline' && !browsingRef.current && !selectedCall)
+        void refresh();
     };
     document.addEventListener('visibilitychange', visibility);
     return () => {
@@ -262,31 +224,6 @@ export function AdminApp() {
       document.removeEventListener('visibilitychange', visibility);
     };
   }, [me, refresh, selectedCall]);
-
-  // loadMoreCalls 把下一页调用追加到列表，并暂停自动刷新避免被覆盖。
-  async function loadMoreCalls(button: HTMLButtonElement) {
-    if (!calls?.next_cursor || !controller.current) return;
-    const current = generation.current;
-    const signal = controller.current.signal;
-    button.disabled = true;
-    try {
-      const response = await api<Page<Call>>(`/admin/calls?${buildQuery({ cursor: calls.next_cursor })}`, {
-        signal,
-      });
-      if (current !== generation.current || signal.aborted || !me) return;
-      setCalls({ items: [...calls.items, ...response.items], next_cursor: response.next_cursor });
-      setBrowsingPages(true);
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        accessLost(error);
-        return;
-      }
-      notify(error instanceof Error ? error.message : '加载失败，请稍后重试。');
-      button.disabled = false;
-    }
-  }
 
   // loadTimelineMessage 按条读取时间线全文与截图，存入保留 Map 后重绘。
   async function loadTimelineMessage(id: string, button: HTMLButtonElement) {
@@ -319,11 +256,15 @@ export function AdminApp() {
     button.disabled = true;
     try {
       const pageData = await api<Timeline>(
-        `/admin/timeline?${new URLSearchParams({ user_id: user, before: timeline.next_cursor })}`,
+        `/admin/timeline?${buildQuery({ before: timeline.next_cursor })}`,
         { signal },
       );
       if (current !== generation.current || signal.aborted || !me) return;
-      setTimeline({ ...timeline, items: [...pageData.items, ...timeline.items], next_cursor: pageData.next_cursor });
+      setTimeline({
+        ...timeline,
+        items: [...pageData.items, ...timeline.items],
+        next_cursor: pageData.next_cursor,
+      });
       setBrowsingPages(true);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') return;
@@ -355,13 +296,10 @@ export function AdminApp() {
   }
 
   const onSettingsUpdated = useCallback((text: string) => setUpdatedText(text), []);
-  const onSettingsLoading = useCallback(
-    (loading: boolean) => {
-      setRefreshing(loading);
-      if (!loading) setLoadError('');
-    },
-    [],
-  );
+  const onSettingsLoading = useCallback((loading: boolean) => {
+    setRefreshing(loading);
+    if (!loading) setLoadError('');
+  }, []);
 
   if (booting) return <div className="boot">正在验证管理员身份…</div>;
   if (denied)
@@ -385,13 +323,6 @@ export function AdminApp() {
     );
 
   const settingsPage = tab === 'models' || tab === 'services';
-  const timelinePage = tab === 'timeline';
-  const knownUsers = new Map<string, string>();
-  for (const item of snapshot?.users.items ?? []) knownUsers.set(item.id, item.email);
-  if (user && snapshot) {
-    const found = snapshot.users.items.find((item) => item.id === user);
-    if (found) knownUsers.set(found.id, found.email);
-  }
 
   return (
     <div className="layout">
@@ -455,21 +386,22 @@ export function AdminApp() {
             </div>
           </div>
           {!settingsPage ? (
-            <div className="filters">
-              {!timelinePage ? (
-                <label>
-                  时间范围
-                  <select value={hours} onChange={(event) => setHours(Number(event.target.value))}>
-                    <option value={24}>最近 24 小时</option>
-                    <option value={168}>最近 7 天</option>
-                    <option value={720}>最近 30 天</option>
-                  </select>
-                </label>
-              ) : null}
+            <form
+              className="filters"
+              aria-label="运行过程查询"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setQuery({ ...filters, model: filters.model.trim() });
+              }}
+            >
               <label>
                 用户
-                <select value={user} onChange={(event) => setUser(event.target.value)}>
-                  <option value="">全部用户</option>
+                <select
+                  id="user-filter"
+                  value={filters.user}
+                  onChange={(event) => setFilters({ ...filters, user: event.target.value })}
+                >
+                  <option value="">请选择用户</option>
                   {[...knownUsers].map(([id, email]) => (
                     <option key={id} value={id}>
                       {email}
@@ -477,54 +409,61 @@ export function AdminApp() {
                   ))}
                 </select>
               </label>
-              {!timelinePage ? (
-                <>
-                  <label>
-                    模型
-                    <input
-                      list="model-options"
-                      placeholder="全部模型"
-                      value={modelInput}
-                      onChange={(event) => setModelInput(event.target.value)}
-                      onBlur={() => setModel(modelInput.trim())}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') setModel(modelInput.trim());
-                      }}
-                    />
-                    <datalist id="model-options">
-                      {(snapshot?.models ?? []).map((item) => (
-                        <option key={item.model} value={item.model} />
-                      ))}
-                    </datalist>
-                  </label>
-                  <label>
-                    请求结果
-                    <select value={outcome} onChange={(event) => setOutcome(event.target.value)}>
-                      <option value="">全部结果</option>
-                      <option value="succeeded">成功</option>
-                      <option value="in_flight">请求中</option>
-                      <option value="http_error">HTTP 错误</option>
-                      <option value="transport_error">连接异常</option>
-                      <option value="invalid_response">响应异常</option>
-                      <option value="interrupted">中断</option>
-                    </select>
-                  </label>
-                </>
-              ) : null}
+              <label>
+                时间范围
+                <select
+                  value={filters.hours}
+                  onChange={(event) => setFilters({ ...filters, hours: Number(event.target.value) })}
+                >
+                  <option value={24}>最近 24 小时</option>
+                  <option value={168}>最近 7 天</option>
+                  <option value={720}>最近 30 天</option>
+                </select>
+              </label>
+              <label>
+                模型
+                <input
+                  list="model-options"
+                  placeholder="全部模型"
+                  maxLength={160}
+                  value={filters.model}
+                  onChange={(event) => setFilters({ ...filters, model: event.target.value })}
+                />
+                <datalist id="model-options">
+                  {(snapshot?.models ?? []).map((item) => (
+                    <option key={item.model} value={item.model} />
+                  ))}
+                </datalist>
+              </label>
+              <label>
+                请求结果
+                <select
+                  value={filters.outcome}
+                  onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}
+                >
+                  <option value="">全部结果</option>
+                  <option value="succeeded">成功</option>
+                  <option value="in_flight">请求中</option>
+                  <option value="http_error">HTTP 错误</option>
+                  <option value="transport_error">连接异常</option>
+                  <option value="invalid_response">响应异常</option>
+                  <option value="interrupted">中断</option>
+                </select>
+              </label>
+              <button className="button primary" type="submit" disabled={refreshing}>
+                查询
+              </button>
               <button
                 type="button"
                 className="text-button"
                 onClick={() => {
-                  setUser('');
-                  setModel('');
-                  setModelInput('');
-                  setOutcome('');
-                  setHours(24);
+                  setFilters(defaultFilters);
+                  setQuery({ ...defaultFilters });
                 }}
               >
                 重置
               </button>
-            </div>
+            </form>
           ) : null}
           {loadError && !settingsPage ? (
             <div className="load-error" role="alert">
@@ -554,31 +493,9 @@ export function AdminApp() {
               ) : (
                 <div className="loading-card">正在读取运行数据…</div>
               )
-            ) : tab === 'overview' ? (
-              <OverviewPage
-                snapshot={snapshot}
-                hours={hours}
-                quotas={quotas}
-                onRefreshQuotas={() => {
-                  if (controller.current) void loadQuotas(true, controller.current.signal, generation.current);
-                }}
-                onViewUserCalls={(userId) => {
-                  setUser(userId);
-                  setTab('calls');
-                }}
-                onViewCalls={() => setTab('calls')}
-              />
-            ) : tab === 'calls' ? (
-              <CallsPage
-                snapshot={snapshot}
-                calls={calls}
-                onLoadMore={(button) => void loadMoreCalls(button)}
-                onOpenCall={setSelectedCall}
-                notify={notify}
-              />
             ) : (
               <TimelinePage
-                user={user}
+                user={query.user}
                 snapshot={snapshot}
                 timeline={timeline}
                 openState={timelineOpen.current}
@@ -594,12 +511,14 @@ export function AdminApp() {
             <span>
               {settingsPage
                 ? '配置应用于所有用户 · 已发出的请求继续完成'
-                : timelinePage
-                  ? '最新在上 · 失败、中断与请求中的调用按开始时间插入'
-                  : '按实际请求统计 · 调用详情可查看请求与响应 JSON'}
+                : '最新在上 · 按查询条件显示输入、模型回复、工具与请求结果'}
             </span>
             <span>
-              {settingsPage ? '配置页面 / 手动刷新' : browsingPages ? '分页浏览中 / 手动刷新' : '自动刷新 / 15 秒'}
+              {settingsPage
+                ? '配置页面 / 手动刷新'
+                : browsingPages
+                  ? '分页浏览中 / 手动刷新'
+                  : '自动刷新 / 15 秒'}
             </span>
           </footer>
         </section>
@@ -666,7 +585,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
           <p>
             为用户与 Agent 的工作提供一扇窗口。
             <br />
-            从整体运行趋势，深入到每一个请求。
+            从运行过程，深入到每一个请求。
           </p>
           <div className="orbit">
             <span />

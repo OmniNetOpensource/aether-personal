@@ -23,10 +23,11 @@ const (
 	timelineTextLimit = 4000
 )
 
-// timelineCursor 指向当前页最早的一条消息：更早一页取它之前的消息，失败请求取它之前开始的。
+// timelineCursor 指向当前页最早的节点；消息与失败请求共用排序位置。
 type timelineCursor struct {
 	Sequence int64     `json:"sequence"`
 	At       time.Time `json:"at"`
+	ID       uuid.UUID `json:"id"`
 }
 
 // timelineItem 是时间线上的一个节点：type 为 message 时来自消息表，为 call 时是没有产出消息的模型请求。
@@ -166,98 +167,63 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 	return item
 }
 
-// parseTimelineUser 解析看板传来的用户 ID。
-func parseTimelineUser(r *http.Request) (uuid.UUID, bool) {
-	userID, err := uuid.Parse(r.URL.Query().Get("user_id"))
-	return userID, err == nil
-}
-
-// adminTimeline 返回一页时间线：默认最新一页，before 游标向更早翻页；首页附带每次请求注入的固定指令。
+// adminTimeline 按用户、时间、模型与结果查询运行过程，消息和失败请求使用同一游标分页。
 func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
-	userID, ok := parseTimelineUser(r)
-	if !ok {
+	filter, err := parseAdminFilters(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if filter.UserID == nil {
 		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
 	}
-	var cursor *timelineCursor
+	params := database.ListAdminTimelineParams{
+		UserID: *filter.UserID, FromAt: filter.From, ToAt: filter.To,
+		Model: filter.Model, Outcome: filter.Outcome, PageLimit: timelinePageSize + 1,
+	}
+	// 游标只携带排序位置；时间窗口与筛选值由客户端在每一页原样传回。
 	if value := r.URL.Query().Get("before"); value != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(value)
-		cursor = &timelineCursor{}
-		if len(value) > 256 || err != nil || json.Unmarshal(decoded, cursor) != nil || cursor.At.IsZero() {
+		var cursor timelineCursor
+		if len(value) > 256 || err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.At.IsZero() || cursor.ID == uuid.Nil {
 			http.Error(w, "invalid before cursor", http.StatusBadRequest)
 			return
 		}
+		params.CursorAt, params.CursorID, params.CursorSequence = &cursor.At, &cursor.ID, cursor.Sequence
 	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	tx, err := s.beginAdminRead(ctx)
+	rows, err := s.queries.ListAdminTimeline(ctx, params)
 	if err != nil {
-		internalError(w, "begin admin timeline failed", err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	queries := s.queries.WithTx(tx)
-
-	// 多取一条用来判断是否还有更早的消息；结果按 sequence 从新到旧返回。
-	messageParams := database.ListAdminTimelineMessagesParams{UserID: userID, PageLimit: timelinePageSize + 1}
-	callParams := database.ListAdminTimelineFailedCallsParams{UserID: userID}
-	if cursor != nil {
-		messageParams.BeforeSequence, callParams.ToAt = &cursor.Sequence, &cursor.At
-	}
-	messages, err := queries.ListAdminTimelineMessages(ctx, messageParams)
-	if err != nil {
-		internalError(w, "read admin timeline messages failed", err)
+		internalError(w, "read admin timeline failed", err)
 		return
 	}
 	var nextCursor *string
-	if len(messages) > timelinePageSize {
-		messages = messages[:timelinePageSize]
-		oldest := messages[len(messages)-1]
-		callParams.FromAt = &oldest.CreatedAt
-		data, _ := json.Marshal(timelineCursor{Sequence: oldest.Sequence, At: oldest.CreatedAt})
+	if len(rows) > timelinePageSize {
+		rows = rows[:timelinePageSize]
+		oldest := rows[len(rows)-1]
+		data, _ := json.Marshal(timelineCursor{Sequence: oldest.Sequence, At: oldest.OrderAt, ID: oldest.ID})
 		value := base64.RawURLEncoding.EncodeToString(data)
 		nextCursor = &value
 	}
-	slices.Reverse(messages)
-	calls, err := queries.ListAdminTimelineFailedCalls(ctx, callParams)
-	if err != nil {
-		internalError(w, "read admin timeline calls failed", err)
-		return
-	}
-	slices.Reverse(calls)
-	// 固定指令不落库，每次请求由代码注入，首页直接展示当前部署的原文。
-	var systemPrompt any
-	if cursor == nil {
-		systemPrompt = map[string]any{"text": agent.MainInstructions}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		internalError(w, "commit admin timeline failed", err)
-		return
-	}
-
-	// 消息按 sequence 排序，同一事务内的入库时间可能早于前一条，因此用不回退的时间作为合并失败请求的位置。
-	items := []timelineItem{}
-	var position time.Time
-	nextCall := 0
-	for _, message := range messages {
-		if message.CreatedAt.After(position) {
-			position = message.CreatedAt
+	// API 沿用从旧到新的返回顺序；前端统一倒序显示，加载更早记录时直接追加。
+	slices.Reverse(rows)
+	items := make([]timelineItem, 0, len(rows))
+	for _, row := range rows {
+		if row.Type == "call" {
+			items = append(items, timelineItem{Type: "call", At: row.At, Call: row.Call})
+			continue
 		}
-		for nextCall < len(calls) && calls[nextCall].StartedAt.Before(position) {
-			items = append(items, timelineItem{Type: "call", At: calls[nextCall].StartedAt, Call: calls[nextCall].Call})
-			nextCall++
-		}
-		item := timelineMessage(message.Role, message.Content, timelineTextLimit)
-		item.ID, item.Sequence, item.At = &message.ID, message.Sequence, message.CreatedAt
-		item.Sender, item.IsSummary = message.Sender, message.IsSummary
-		if len(message.Call) > 0 {
-			item.Call = message.Call
-		}
+		item := timelineMessage(row.Role, row.Content, timelineTextLimit)
+		item.ID, item.Sequence, item.At = &row.ID, row.Sequence, row.At
+		item.Sender, item.IsSummary, item.Call = row.Sender, row.IsSummary, row.Call
 		items = append(items, item)
 	}
-	for _, call := range calls[nextCall:] {
-		items = append(items, timelineItem{Type: "call", At: call.StartedAt, Call: call.Call})
+	// 固定指令由代码注入，首页展示当前部署的原文，不作为筛选后的历史消息。
+	var systemPrompt any
+	if r.URL.Query().Get("before") == "" {
+		systemPrompt = map[string]any{"text": agent.MainInstructions}
 	}
 	writeAdminJSON(w, map[string]any{"items": items, "next_cursor": nextCursor, "system_prompt": systemPrompt})
 }

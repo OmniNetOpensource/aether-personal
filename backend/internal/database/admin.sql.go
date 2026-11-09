@@ -275,102 +275,106 @@ func (q *Queries) ListAdminCalls(ctx context.Context, arg ListAdminCallsParams) 
 	return items, nil
 }
 
-const listAdminTimelineFailedCalls = `-- name: ListAdminTimelineFailedCalls :many
-SELECT c.started_at, jsonb_build_object('id',c.id,'step_id',c.step_id,
- 'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
- 'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
- 'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
- 'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text)::jsonb AS call
-FROM model_calls c
-WHERE c.user_id = $1 AND c.outcome <> 'succeeded'
- AND ($2::timestamptz IS NULL OR c.started_at >= $2::timestamptz)
- AND ($3::timestamptz IS NULL OR c.started_at < $3::timestamptz)
-ORDER BY c.started_at DESC LIMIT 200
-`
-
-type ListAdminTimelineFailedCallsParams struct {
-	UserID uuid.UUID
-	FromAt *time.Time
-	ToAt   *time.Time
-}
-
-type ListAdminTimelineFailedCallsRow struct {
-	StartedAt time.Time
-	Call      []byte
-}
-
-// 没有产出消息的请求（失败、中断、进行中）只存在于调用日志，按开始时间插入时间线。
-func (q *Queries) ListAdminTimelineFailedCalls(ctx context.Context, arg ListAdminTimelineFailedCallsParams) ([]ListAdminTimelineFailedCallsRow, error) {
-	rows, err := q.db.Query(ctx, listAdminTimelineFailedCalls, arg.UserID, arg.FromAt, arg.ToAt)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListAdminTimelineFailedCallsRow
-	for rows.Next() {
-		var i ListAdminTimelineFailedCallsRow
-		if err := rows.Scan(&i.StartedAt, &i.Call); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAdminTimelineMessages = `-- name: ListAdminTimelineMessages :many
-SELECT m.id, m.sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
- CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,
-  'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
+const listAdminTimeline = `-- name: ListAdminTimeline :many
+WITH user_messages AS MATERIALIZED (
+ SELECT m.id, m.user_id, m.sequence, m.role, m.content, m.sender, m.step_id, m.is_summary, m.created_at, m.client_message_id, m.summary_through_sequence, m.search_text, m.visible, m.generating, m.chat_updated_sequence, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
+ FROM messages m WHERE m.user_id = $5::uuid AND NOT m.generating
+), calls AS MATERIALIZED (
+ SELECT c.id, c.step_id, c.user_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence, jsonb_build_object('id',c.id,'step_id',c.step_id,
+  'requested_model',c.requested_model,'response_model',c.response_model,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
   'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
-  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text) END::jsonb AS call
-FROM messages m LEFT JOIN LATERAL (
- SELECT id, step_id, user_id, requested_model, response_model, provider_generation_id, outcome, http_status, started_at, finished_at, duration_ms, input_tokens, output_tokens, cost, tool_names, failure_kind, request_body, response_body, response_truncated, purpose, compact_reason, context_tokens_before, context_tokens_after, summary_through_sequence FROM model_calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
- ORDER BY mc.started_at DESC LIMIT 1
-) c ON true
-WHERE m.user_id = $1
- AND ($2::bigint IS NULL OR m.sequence < $2::bigint)
-ORDER BY m.sequence DESC LIMIT $3::integer
+  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text) AS payload
+ FROM model_calls c WHERE c.user_id = $5::uuid
+  AND ($6::text IS NULL OR c.requested_model = $6::text)
+  AND ($7::text IS NULL OR c.outcome = $7::text)
+), nodes AS (
+ SELECT m.id, m.sequence::bigint AS sequence, m.created_at AS at, m.order_at,
+  m.role, m.content, m.sender, m.is_summary, 'message'::text AS type, c.payload AS call
+ FROM user_messages m LEFT JOIN LATERAL (
+  SELECT mc.payload FROM calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
+  ORDER BY mc.started_at DESC, mc.id DESC LIMIT 1
+ ) c ON true
+ WHERE m.created_at >= $8::timestamptz AND m.created_at < $9::timestamptz
+  AND ($6::text IS NULL AND $7::text IS NULL OR EXISTS (
+   SELECT 1 FROM calls mc WHERE mc.step_id = m.step_id OR (
+    -- 用户输入没有 step_id，关联从收到输入到下一条模型回复所经历的请求尝试。
+    m.step_id IS NULL AND mc.started_at >= m.created_at
+    AND mc.started_at <= coalesce((
+     SELECT coalesce((SELECT max(request.started_at) FROM model_calls request WHERE request.step_id = reply.step_id), reply.created_at)
+     FROM user_messages reply WHERE reply.sequence > m.sequence AND reply.role = 'assistant'
+     ORDER BY reply.sequence LIMIT 1
+    ), 'infinity'::timestamptz)
+   )
+  ))
+ UNION ALL
+ SELECT c.id, 0::bigint, c.started_at, c.started_at,
+  ''::text, '{}'::jsonb, NULL::text, false, 'call'::text, c.payload
+ FROM calls c WHERE c.outcome <> 'succeeded'
+  AND c.started_at >= $8::timestamptz AND c.started_at < $9::timestamptz
+)
+SELECT id, sequence, at, order_at::timestamptz AS order_at, role, content, sender, is_summary, type, call::jsonb AS call
+FROM nodes
+WHERE $1::timestamptz IS NULL
+ OR (order_at, sequence, id) < ($1::timestamptz, $2::bigint, $3::uuid)
+ORDER BY order_at DESC, sequence DESC, id DESC LIMIT $4::integer
 `
 
-type ListAdminTimelineMessagesParams struct {
-	UserID         uuid.UUID
-	BeforeSequence *int64
+type ListAdminTimelineParams struct {
+	CursorAt       *time.Time
+	CursorSequence int64
+	CursorID       *uuid.UUID
 	PageLimit      int32
+	UserID         uuid.UUID
+	Model          *string
+	Outcome        *string
+	FromAt         time.Time
+	ToAt           time.Time
 }
 
-type ListAdminTimelineMessagesRow struct {
+type ListAdminTimelineRow struct {
 	ID        uuid.UUID
 	Sequence  int64
+	At        time.Time
+	OrderAt   time.Time
 	Role      string
 	Content   []byte
 	Sender    *string
 	IsSummary bool
-	CreatedAt time.Time
+	Type      string
 	Call      []byte
 }
 
-// 按 sequence 从新到旧取一页消息；模型输出附上产生它的那次成功请求。
-func (q *Queries) ListAdminTimelineMessages(ctx context.Context, arg ListAdminTimelineMessagesParams) ([]ListAdminTimelineMessagesRow, error) {
-	rows, err := q.db.Query(ctx, listAdminTimelineMessages, arg.UserID, arg.BeforeSequence, arg.PageLimit)
+// 消息与未产出消息的请求共用游标，只有失败请求的筛选结果也能完整翻页。
+func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelineParams) ([]ListAdminTimelineRow, error) {
+	rows, err := q.db.Query(ctx, listAdminTimeline,
+		arg.CursorAt,
+		arg.CursorSequence,
+		arg.CursorID,
+		arg.PageLimit,
+		arg.UserID,
+		arg.Model,
+		arg.Outcome,
+		arg.FromAt,
+		arg.ToAt,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListAdminTimelineMessagesRow
+	var items []ListAdminTimelineRow
 	for rows.Next() {
-		var i ListAdminTimelineMessagesRow
+		var i ListAdminTimelineRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Sequence,
+			&i.At,
+			&i.OrderAt,
 			&i.Role,
 			&i.Content,
 			&i.Sender,
 			&i.IsSummary,
-			&i.CreatedAt,
+			&i.Type,
 			&i.Call,
 		); err != nil {
 			return nil, err

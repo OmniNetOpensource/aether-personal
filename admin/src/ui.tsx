@@ -1,4 +1,4 @@
-// 本文件是管理看板的共用小组件：状态徽章、面板、空状态、指标卡、ID 复制与长文本折叠，各页面拼装时复用。
+// 本文件是管理看板的共用小组件：状态徽章、面板、空状态、ID 复制与长文本折叠，各页面拼装时复用。
 
 import { useRef, useState, type ReactNode } from 'react';
 import { outcomeLabels } from './api.js';
@@ -42,27 +42,6 @@ export function Panel({
       </div>
       {children}
     </section>
-  );
-}
-
-// MetricCard 是概览顶部的一张数字卡片。
-export function MetricCard({
-  label,
-  value,
-  note,
-  className = '',
-}: {
-  label: string;
-  value: string;
-  note: string;
-  className?: string;
-}) {
-  return (
-    <article className={`metric-card ${className}`}>
-      <div className="metric-label">{label}</div>
-      <strong className="metric-value">{value}</strong>
-      <p className="metric-note">{note}</p>
-    </article>
   );
 }
 
@@ -159,33 +138,5 @@ export function Foldable({
       </summary>
       <pre className="timeline-text">{text}</pre>
     </details>
-  );
-}
-
-// DataTable 是看板各列表共用的表格外壳。
-export function DataTable({ headers, children }: { headers: string[]; children: ReactNode }) {
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th key={header}>{header}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-// Identity 是表格里「名称 + ID」的两行单元格。
-export function Identity({ name, id }: { name: string; id: string }) {
-  return (
-    <div className="identity">
-      <strong>{name}</strong>
-      <small>{id}</small>
-    </div>
   );
 }

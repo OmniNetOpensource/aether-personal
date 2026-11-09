@@ -136,34 +136,50 @@ SELECT c.id,c.started_at,jsonb_build_object('id',c.id,'step_id',c.step_id,'user_
 -- name: GetAdminCallDetail :one
 SELECT request_body, response_body, response_truncated FROM model_calls WHERE id = $1;
 
--- name: ListAdminTimelineMessages :many
--- 按 sequence 从新到旧取一页消息；模型输出附上产生它的那次成功请求。
-SELECT m.id, m.sequence, m.role, m.content, m.sender, m.is_summary, m.created_at,
- CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'step_id',c.step_id,
-  'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
+-- name: ListAdminTimeline :many
+-- 消息与未产出消息的请求共用游标，只有失败请求的筛选结果也能完整翻页。
+WITH user_messages AS MATERIALIZED (
+ SELECT m.*, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
+ FROM messages m WHERE m.user_id = sqlc.arg(user_id)::uuid AND NOT m.generating
+), calls AS MATERIALIZED (
+ SELECT c.*, jsonb_build_object('id',c.id,'step_id',c.step_id,
+  'requested_model',c.requested_model,'response_model',c.response_model,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
   'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
-  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text) END::jsonb AS call
-FROM messages m LEFT JOIN LATERAL (
- SELECT * FROM model_calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
- ORDER BY mc.started_at DESC LIMIT 1
-) c ON true
-WHERE m.user_id = sqlc.arg(user_id)
- AND (sqlc.narg(before_sequence)::bigint IS NULL OR m.sequence < sqlc.narg(before_sequence)::bigint)
-ORDER BY m.sequence DESC LIMIT sqlc.arg(page_limit)::integer;
-
--- name: ListAdminTimelineFailedCalls :many
--- 没有产出消息的请求（失败、中断、进行中）只存在于调用日志，按开始时间插入时间线。
-SELECT c.started_at, jsonb_build_object('id',c.id,'step_id',c.step_id,
- 'requested_model',c.requested_model,'response_model',c.response_model,'provider_generation_id',c.provider_generation_id,
- 'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,'failure_kind',c.failure_kind,
- 'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
- 'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text)::jsonb AS call
-FROM model_calls c
-WHERE c.user_id = sqlc.arg(user_id) AND c.outcome <> 'succeeded'
- AND (sqlc.narg(from_at)::timestamptz IS NULL OR c.started_at >= sqlc.narg(from_at)::timestamptz)
- AND (sqlc.narg(to_at)::timestamptz IS NULL OR c.started_at < sqlc.narg(to_at)::timestamptz)
-ORDER BY c.started_at DESC LIMIT 200;
+  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text) AS payload
+ FROM model_calls c WHERE c.user_id = sqlc.arg(user_id)::uuid
+  AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
+  AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
+), nodes AS (
+ SELECT m.id, m.sequence::bigint AS sequence, m.created_at AS at, m.order_at,
+  m.role, m.content, m.sender, m.is_summary, 'message'::text AS type, c.payload AS call
+ FROM user_messages m LEFT JOIN LATERAL (
+  SELECT mc.payload FROM calls mc WHERE m.role = 'assistant' AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
+  ORDER BY mc.started_at DESC, mc.id DESC LIMIT 1
+ ) c ON true
+ WHERE m.created_at >= sqlc.arg(from_at)::timestamptz AND m.created_at < sqlc.arg(to_at)::timestamptz
+  AND (sqlc.narg(model)::text IS NULL AND sqlc.narg(outcome)::text IS NULL OR EXISTS (
+   SELECT 1 FROM calls mc WHERE mc.step_id = m.step_id OR (
+    -- 用户输入没有 step_id，关联从收到输入到下一条模型回复所经历的请求尝试。
+    m.step_id IS NULL AND mc.started_at >= m.created_at
+    AND mc.started_at <= coalesce((
+     SELECT coalesce((SELECT max(request.started_at) FROM model_calls request WHERE request.step_id = reply.step_id), reply.created_at)
+     FROM user_messages reply WHERE reply.sequence > m.sequence AND reply.role = 'assistant'
+     ORDER BY reply.sequence LIMIT 1
+    ), 'infinity'::timestamptz)
+   )
+  ))
+ UNION ALL
+ SELECT c.id, 0::bigint, c.started_at, c.started_at,
+  ''::text, '{}'::jsonb, NULL::text, false, 'call'::text, c.payload
+ FROM calls c WHERE c.outcome <> 'succeeded'
+  AND c.started_at >= sqlc.arg(from_at)::timestamptz AND c.started_at < sqlc.arg(to_at)::timestamptz
+)
+SELECT id, sequence, at, order_at::timestamptz AS order_at, role, content, sender, is_summary, type, call::jsonb AS call
+FROM nodes
+WHERE sqlc.narg(cursor_at)::timestamptz IS NULL
+ OR (order_at, sequence, id) < (sqlc.narg(cursor_at)::timestamptz, sqlc.arg(cursor_sequence)::bigint, sqlc.narg(cursor_id)::uuid)
+ORDER BY order_at DESC, sequence DESC, id DESC LIMIT sqlc.arg(page_limit)::integer;
 
 -- name: GetAdminTimelineMessage :one
 SELECT role, content FROM messages WHERE id = $1;

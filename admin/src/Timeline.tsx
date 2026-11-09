@@ -30,7 +30,7 @@ export interface TimelineViewProps {
 export function TimelinePage(props: TimelineViewProps) {
   const { user, snapshot, timeline } = props;
   if (!user)
-    return <Empty title="选择一个用户" description="在上方选择用户，查看该用户 Main 的完整运行过程。" />;
+    return <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 的运行过程。" />;
   if (!timeline || timeline.key !== user)
     return <div className="loading-card">正在读取运行过程…</div>;
   const summary = snapshot.agents.items[0];
@@ -44,7 +44,7 @@ export function TimelinePage(props: TimelineViewProps) {
   return (
     <Panel
       title={`Main · ${email}`}
-      description="最新在上，按消息顺序倒序排列；失败、中断与请求中的调用按开始时间插入。待读消息不显示。"
+      description="最新在上；按查询条件显示消息与请求，工具结果并入对应调用。"
       right={summary ? <Pill status={summary.status} /> : null}
     >
       <ol className="timeline">
@@ -70,7 +70,7 @@ export function TimelinePage(props: TimelineViewProps) {
           }
           return <InputNode key={item.id ?? index} item={item} {...props} />;
         })}
-        {!timeline.items.length ? <li className="timeline-empty">Main 还没有已读取的消息。</li> : null}
+        {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
         {timeline.next_cursor ? (
           <li className="timeline-more">
             <button type="button" className="button" onClick={(event) => props.onLoadEarlier(event.currentTarget)}>

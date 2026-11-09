@@ -1,4 +1,4 @@
-// 本文件是管理看板的模型调用页与调用详情：列表按游标加载更多，详情弹窗读取单次请求的实际请求与响应 JSON。
+// 本文件展示运行过程中的模型调用详情，按需加载实际请求与响应 JSON。
 
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -8,84 +8,10 @@ import {
   formatMoney,
   formatNumber,
   formatTime,
-  shortModel,
   type Call,
   type CallDetail,
-  type Page,
-  type Snapshot,
 } from './api.js';
-import { MetricCards } from './Overview.js';
-import { DataTable, Empty, Identity, Panel, Pill, RequestIds } from './ui.js';
-
-// CallsPage 渲染请求日志表；加载更多由上层把下一页追加进 calls 后回传。
-export function CallsPage({
-  snapshot,
-  calls,
-  onLoadMore,
-  onOpenCall,
-  notify,
-}: {
-  snapshot: Snapshot;
-  calls: Page<Call> | null;
-  onLoadMore: (button: HTMLButtonElement) => void;
-  onOpenCall: (call: Call) => void;
-  notify: (message: string) => void;
-}) {
-  return (
-    <>
-      <MetricCards snapshot={snapshot} />
-      {!calls ? (
-        <div className="loading-card">正在读取调用记录…</div>
-      ) : !calls.items.length ? (
-        <Empty title="没有符合条件的调用" description="新日志不会根据历史步骤回填。可调整时间范围后重试。" />
-      ) : (
-        <>
-          <Panel title="请求日志" description="每次重试单独计数 · 中断代表结果未知">
-            <DataTable
-              headers={['开始时间', '请求 ID', '用户 / Agent', '模型', '用途', '结果', '输入 / 输出 Token', '费用', '耗时', '']}
-            >
-              {calls.items.map((call) => (
-                <tr key={call.id}>
-                  <td>{formatTime(call.started_at)}</td>
-                  <td>
-                    <RequestIds id={call.id} notify={notify} />
-                  </td>
-                  <td>
-                    <Identity name={call.email ?? ''} id="Main" />
-                  </td>
-                  <td>
-                    <span className="model-name">{shortModel(call.requested_model)}</span>
-                  </td>
-                  <td>{call.purpose === 'compact' ? '压缩' : 'Agent'}</td>
-                  <td>
-                    <Pill status={call.outcome} />
-                  </td>
-                  <td>{`${call.input_tokens == null ? '未知' : formatNumber(call.input_tokens)} / ${call.output_tokens == null ? '未知' : formatNumber(call.output_tokens)}`}</td>
-                  <td>{formatMoney(call.cost)}</td>
-                  <td>{formatDuration(call.duration_ms)}</td>
-                  <td>
-                    <button type="button" className="text-button" onClick={() => onOpenCall(call)}>
-                      详情 →
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </DataTable>
-          </Panel>
-          {calls.next_cursor ? (
-            <button
-              type="button"
-              className="button load-more"
-              onClick={(event) => onLoadMore(event.currentTarget)}
-            >
-              加载更多调用
-            </button>
-          ) : null}
-        </>
-      )}
-    </>
-  );
-}
+import { Pill, RequestIds } from './ui.js';
 
 // CallDetailDialog 是模型调用详情弹窗：顶部先展示元数据，再按调用 ID 单独加载请求与响应正文。
 export function CallDetailDialog({
@@ -141,7 +67,10 @@ export function CallDetailDialog({
   const fields: [string, React.ReactNode][] = [
     ['用途', call.purpose === 'compact' ? '上下文压缩' : 'Agent 推理'],
     ['压缩原因', compactReasons[call.compact_reason ?? ''] || '—'],
-    ['压缩前 Token（上次官方用量）', call.context_tokens_before == null ? '—' : formatNumber(call.context_tokens_before)],
+    [
+      '压缩前 Token（上次官方用量）',
+      call.context_tokens_before == null ? '—' : formatNumber(call.context_tokens_before),
+    ],
     ['摘要覆盖序号', call.summary_through_sequence ?? '—'],
     ['用户', call.email],
     ['Agent', 'Main'],
@@ -248,7 +177,9 @@ function PayloadSection({
         </p>
       ) : (
         <>
-          {rawText != null ? <p className="data-note">提供方返回的正文不是有效 JSON，以下展示原始文本。</p> : null}
+          {rawText != null ? (
+            <p className="data-note">提供方返回的正文不是有效 JSON，以下展示原始文本。</p>
+          ) : null}
           <pre className="json-code" tabIndex={0} aria-label={label}>
             {rawText ?? JSON.stringify(value, null, 2)}
           </pre>
