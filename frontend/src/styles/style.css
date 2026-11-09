@@ -1,6 +1,7 @@
 /* 本文件是聊天应用的全局样式：定义页面布局、消息气泡、输入框与登录页等全部界面外观。 */
 @import './palette.css';
 
+/* 页面外壳跟随可视视口，并给按钮、输入和焦点一个统一的起点。 */
 :root {
   font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: var(--text);
@@ -9,12 +10,69 @@
 * {
   box-sizing: border-box;
 }
+html,
 body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--forest);
+}
+body {
+  font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 18px;
   line-height: 28px;
   color: var(--text);
 }
+#root {
+  position: fixed;
+  top: var(--app-top, 0);
+  left: 0;
+  width: 100%;
+  height: var(--app-height, 100dvh);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+p,
+h1,
+h2,
+pre,
+blockquote {
+  margin: 0;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  border: 0;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+button.link {
+  background: transparent;
+}
+
+/* 连接尚未就绪时占满剩余高度，避免外壳先塌成一条。 */
 .loading {
+  flex: 1;
+  min-height: 0;
   background: var(--forest);
   width: 100%;
   height: 100%;
@@ -25,6 +83,11 @@ body {
 .muted {
   color: var(--text-muted);
 }
+.loading .muted {
+  color: var(--on-forest-muted);
+}
+
+/* 消息列表在输入框背后滚动，底部留白等于输入框实测高度。 */
 .chat-page {
   position: relative;
   width: 100%;
@@ -38,6 +101,10 @@ body {
   flex: 1;
   width: 100%;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: none;
+  scrollbar-color: var(--forest-border) transparent;
 }
 /* 回底入口悬浮在输入框上方，沿用输入框实测高度，避免随消息滚走或被键盘遮挡。 */
 .scroll-to-bottom {
@@ -68,7 +135,16 @@ body {
   height: 24px;
 }
 .message-content {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
   padding: 16px 32px calc(22px + var(--composer-height, 90px));
+}
+@media (max-width: 699px) {
+  .message-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }
 .date {
   font-size: 13px;
@@ -77,6 +153,41 @@ body {
   text-align: center;
   margin-top: 12px;
   margin-bottom: 24px;
+}
+.chat-page .date {
+  color: var(--on-forest-muted);
+}
+.error {
+  color: var(--error);
+  font-size: 15px;
+}
+.chat-page .error {
+  color: var(--on-forest-error);
+}
+.history-error {
+  padding: 8px;
+  background: transparent;
+  text-align: left;
+}
+.load-older {
+  display: block;
+  margin: 0 auto 18px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--on-forest-muted);
+  font-size: 14px;
+}
+/* 行绝对定位后仍要包住气泡和日期的外边距，后面的行才不会叠上来。 */
+.message-virtual {
+  position: relative;
+  width: 100%;
+}
+.message-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flow-root;
 }
 .message-row {
   display: flex;
@@ -129,6 +240,10 @@ body {
   border-bottom-left-radius: 21px;
   border-bottom-right-radius: 6px;
 }
+.user-text,
+.markdown {
+  overflow-wrap: anywhere;
+}
 .user-body {
   color: var(--text);
   white-space: pre-wrap;
@@ -176,85 +291,6 @@ body {
     min-height: 44px;
   }
 }
-.error {
-  color: var(--error);
-  font-size: 15px;
-}
-.composer-padding {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: transparent;
-  pointer-events: none;
-  padding: 10px 26px 20px;
-  padding-bottom: max(20px, env(safe-area-inset-bottom));
-}
-.composer {
-  background: var(--surface);
-  display: flex;
-  flex-direction: row;
-  align-items: flex-end;
-  pointer-events: auto;
-  padding: 3px 5px 3px 4px;
-  border: 1px solid var(--line-strong);
-  border-radius: 25px;
-}
-.message-input {
-  box-sizing: border-box;
-  flex: 1;
-  min-width: 0;
-  height: auto;
-  min-height: 48px;
-  max-height: 160px;
-  font-size: 18px;
-  line-height: 28px;
-  color: var(--text);
-  padding: 10px 14px;
-  background: transparent;
-}
-.send-button {
-  width: 42px;
-  height: 42px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--gold);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.send-arrow {
-  width: 24px;
-  height: 24px;
-  display: block;
-  color: var(--on-gold);
-}
-.attach-button,
-.send-button {
-  margin-bottom: 3px;
-}
-.attach-button {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-muted);
-}
-.attach-button:hover {
-  background: var(--surface-muted);
-  color: var(--accent-text);
-}
-.attach-button svg {
-  width: 24px;
-  height: 24px;
-}
-.composer-error {
-  margin: 0 0 8px;
-  pointer-events: auto;
-}
 .thinking {
   display: flex;
   flex-direction: row;
@@ -298,281 +334,6 @@ body {
     transform: translateY(-3px);
   }
 }
-.link {
-  color: var(--accent-text);
-  text-decoration: underline;
-}
-.login-page {
-  width: 100%;
-  height: 100%;
-  background: var(--forest);
-}
-.login-center {
-  min-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-.login-card {
-  width: 430px;
-  max-width: 100%;
-  padding: 36px;
-  border-radius: 28px;
-  background: var(--surface);
-  box-shadow: 0 14px 40px var(--shadow);
-  display: flex;
-  flex-direction: column;
-}
-.mark {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  overflow: hidden;
-}
-.login-title {
-  font-size: 30px;
-  line-height: 45px;
-  font-weight: 600;
-  letter-spacing: -0.8px;
-  margin-top: 28px;
-}
-.login-subtitle {
-  color: var(--text-muted);
-  font-size: 17px;
-  line-height: 28px;
-  margin-top: 10px;
-  margin-bottom: 30px;
-}
-.login-input {
-  width: 100%;
-  height: 60px;
-  background: var(--canvas);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 18px;
-  margin-bottom: 16px;
-  font-size: 17px;
-}
-.login-error {
-  margin-bottom: 16px;
-}
-.login-button {
-  width: 100%;
-  height: 50px;
-  margin-top: 8px;
-  background: var(--forest);
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.change-email {
-  padding-top: 16px;
-  align-self: center;
-}
-.history-error {
-  padding: 8px;
-}
-@media (max-width: 699px) {
-  .message-content {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-  .composer-padding {
-    padding-left: 14px;
-    padding-right: 14px;
-    padding-bottom: max(14px, env(safe-area-inset-bottom));
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .dot {
-    animation: none;
-  }
-}
-
-.loading .muted,
-.chat-page .date {
-  color: var(--on-forest-muted);
-}
-.chat-page .error {
-  color: var(--on-forest-error);
-}
-.login-input:focus {
-  border-color: var(--forest-border);
-}
-.login-input::placeholder {
-  color: var(--text-muted);
-}
-
-html,
-body {
-  margin: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: var(--forest);
-}
-body {
-  font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-}
-#root {
-  position: fixed;
-  top: var(--app-top, 0);
-  left: 0;
-  width: 100%;
-  height: var(--app-height, 100dvh);
-  display: flex;
-  flex-direction: column;
-  padding-top: env(safe-area-inset-top);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
-}
-p,
-h1,
-h2,
-pre,
-blockquote {
-  margin: 0;
-}
-button,
-input,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-button {
-  border: 0;
-  cursor: pointer;
-}
-button:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-[tabindex]:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 3px;
-}
-.login-input:focus-visible {
-  outline-color: var(--accent-text);
-}
-button.link {
-  background: transparent;
-}
-.messages {
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  overflow-anchor: none;
-  scrollbar-color: var(--forest-border) transparent;
-}
-.message-content {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-}
-/* 行绝对定位后仍要包住气泡和日期的外边距，后面的行才不会叠上来。 */
-.message-virtual {
-  position: relative;
-  width: 100%;
-}
-.message-virtual-row {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flow-root;
-}
-.user-text,
-.markdown {
-  overflow-wrap: anywhere;
-}
-.composer-padding {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-}
-.message-input {
-  display: block;
-  border: 0;
-  outline: 0;
-  resize: none;
-  overflow-y: auto;
-  font-family: inherit;
-}
-.message-input:focus-visible {
-  outline: 0;
-}
-.send-button:disabled {
-  background: var(--surface-muted);
-  opacity: 1;
-}
-.send-button:disabled .send-arrow {
-  color: var(--text-muted);
-}
-.history-error {
-  background: transparent;
-  text-align: left;
-}
-.loading {
-  flex: 1;
-  min-height: 0;
-}
-.login-page {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-.login-button {
-  color: var(--on-forest);
-  font-size: 17px;
-  font-weight: 600;
-}
-.login-title {
-  margin-top: 28px;
-}
-.login-subtitle {
-  margin-top: 10px;
-  margin-bottom: 30px;
-}
-.login-input {
-  font-size: 18px;
-}
-.change-email {
-  margin-top: 16px;
-  padding: 0;
-}
-.app-button {
-  padding: 7px 12px;
-  border-radius: 10px;
-  background: var(--forest-hover);
-  color: var(--on-forest);
-  font-size: 14px;
-  white-space: nowrap;
-}
-.connection-status {
-  font-size: 14px;
-  color: var(--on-forest-muted);
-}
-.load-older {
-  display: block;
-  margin: 0 auto 18px;
-  padding: 8px 12px;
-  background: transparent;
-  color: var(--on-forest-muted);
-  font-size: 14px;
-}
-@media (max-width: 699px) {
-  .login-center {
-    padding: 18px;
-  }
-  .login-card {
-    padding: 28px;
-  }
-}
 
 /* 引用作为独立快照展示，正文选区入口与回看高亮共用消息位置。 */
 .quote-toolbar {
@@ -586,15 +347,6 @@ button.link {
   white-space: nowrap;
   box-shadow: 0 2px 12px #0004;
 }
-.sent-quote blockquote {
-  margin: 0;
-  padding-left: 10px;
-  border-left: 3px solid currentColor;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 14px;
-  line-height: 1.5;
-}
 .sent-quote {
   display: block;
   width: 100%;
@@ -606,8 +358,15 @@ button.link {
   margin-bottom: 8px;
 }
 .sent-quote blockquote {
+  margin: 0;
   max-height: 150px;
   overflow: auto;
+  padding-left: 10px;
+  border-left: 3px solid currentColor;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
 }
 .quote-target {
   outline: 2px solid var(--gold);
@@ -619,55 +378,106 @@ button.link {
   color: #17251b;
 }
 
-/* 图片缩略图用于草稿与消息，原生 dialog 负责完整图片与焦点返回。 */
-.image-thumbnail {
-  display: block;
-  padding: 0;
-  border-radius: 10px;
-  overflow: hidden;
-  background: transparent;
-}
-.image-thumbnail img {
-  display: block;
-  width: 180px;
-  height: 140px;
-  object-fit: contain;
-}
-.message-images {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 4px 0 8px;
-}
-.image-preview {
-  max-width: 96vw;
-  max-height: 94dvh;
-  padding: 36px 8px 8px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text);
-}
-.image-preview::backdrop {
-  background: #000b;
-}
-.image-preview > img {
-  display: block;
-  max-width: 90vw;
-  max-height: 82dvh;
-  object-fit: contain;
-}
-.image-preview-close {
+/* 输入框浮在消息列表上。multimodal-composer 与 composer 是同一个元素，后面的方向、内边距和圆角覆盖前面的。 */
+.composer-padding {
   position: absolute;
-  top: 4px;
-  right: 6px;
-  width: 30px;
-  height: 30px;
-  font-size: 24px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
   background: transparent;
-  color: inherit;
+  pointer-events: none;
+  padding: 10px 26px 20px;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
 }
-
+@media (max-width: 699px) {
+  .composer-padding {
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+  }
+}
+.composer {
+  background: var(--surface);
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  pointer-events: auto;
+  padding: 3px 5px 3px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 25px;
+}
+.message-input {
+  display: block;
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  min-height: 48px;
+  max-height: 160px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 28px;
+  color: var(--text);
+  padding: 10px 14px;
+  background: transparent;
+}
+.message-input:focus-visible {
+  outline: 0;
+}
+.send-button {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  margin-bottom: 3px;
+  border-radius: 50%;
+  background: var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.send-arrow {
+  width: 24px;
+  height: 24px;
+  display: block;
+  color: var(--on-gold);
+}
+.send-button:disabled {
+  background: var(--surface-muted);
+  opacity: 1;
+}
+.send-button:disabled .send-arrow {
+  color: var(--text-muted);
+}
+.attach-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 3px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+}
+.attach-button:hover {
+  background: var(--surface-muted);
+  color: var(--accent-text);
+}
+.attach-button svg {
+  width: 24px;
+  height: 24px;
+}
+.composer-error {
+  margin: 0 0 8px;
+  pointer-events: auto;
+}
 /* 输入框以 4px 为间距单位，统一正文、附件节点和工具栏的对齐与触控空间。 */
 .multimodal-composer {
   --composer-chip-size: 44px;
@@ -887,7 +697,173 @@ button.link {
     visibility: hidden;
   }
 }
+
+/* 登录卡片在森林绿页面里居中，窄屏只减小卡片和外边的留白。 */
+.login-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  height: 100%;
+  background: var(--forest);
+}
+.login-center {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 430px;
+  max-width: 100%;
+  padding: 36px;
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow: 0 14px 40px var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 699px) {
+  .login-center {
+    padding: 18px;
+  }
+  .login-card {
+    padding: 28px;
+  }
+}
+.mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  overflow: hidden;
+}
+.login-title {
+  font-size: 30px;
+  line-height: 45px;
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  margin-top: 28px;
+}
+.login-subtitle {
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 28px;
+  margin-top: 10px;
+  margin-bottom: 30px;
+}
+.login-input {
+  width: 100%;
+  height: 60px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+.login-input:focus {
+  border-color: var(--forest-border);
+}
+.login-input:focus-visible {
+  outline-color: var(--accent-text);
+}
+.login-input::placeholder {
+  color: var(--text-muted);
+}
+.login-error {
+  margin-bottom: 16px;
+}
+.login-button {
+  width: 100%;
+  height: 50px;
+  margin-top: 8px;
+  background: var(--forest);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-forest);
+  font-size: 17px;
+  font-weight: 600;
+}
+.link {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+.change-email {
+  align-self: center;
+  margin-top: 16px;
+  padding: 0;
+}
+
+/* 新版本下载完成后，在页面上给出显式更新入口。 */
+.app-button {
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: var(--forest-hover);
+  color: var(--on-forest);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.connection-status {
+  font-size: 14px;
+  color: var(--on-forest-muted);
+}
+
+/* 图片缩略图用于草稿与消息，原生 dialog 负责完整图片与焦点返回。 */
+.image-thumbnail {
+  display: block;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: transparent;
+}
+.image-thumbnail img {
+  display: block;
+  width: 180px;
+  height: 140px;
+  object-fit: contain;
+}
+.message-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 8px;
+}
+.image-preview {
+  max-width: 96vw;
+  max-height: 94dvh;
+  padding: 36px 8px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.image-preview::backdrop {
+  background: #000b;
+}
+.image-preview > img {
+  display: block;
+  max-width: 90vw;
+  max-height: 82dvh;
+  object-fit: contain;
+}
+.image-preview-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  font-size: 24px;
+  background: transparent;
+  color: inherit;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
   .multimodal-composer,
   .chip-remove,
   .rich-message-input {

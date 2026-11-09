@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/coder/websocket"
@@ -33,6 +35,9 @@ type clientFrame struct {
 	Code             string         `json:"code"`
 	TurnstileToken   string         `json:"turnstile_token"`
 	Before           *uuid.UUID     `json:"before"`
+	Keyword          string         `json:"keyword"`
+	MessageID        uuid.UUID      `json:"message_id"`
+	Direction        string         `json:"direction"`
 	ClientMessageID  uuid.UUID      `json:"client_message_id"`
 	Text             string         `json:"text"`
 	Parts            []messagePart  `json:"parts"`
@@ -309,6 +314,56 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if err := relay.send(ctx, historyEvent{Type: "history", RequestID: frame.RequestID, chatMessages: page}); err != nil {
+					return
+				}
+			case "search_messages", "load_message_context":
+				// 搜索与原文读取只处理当前连接的登录用户，失败按请求回执交给页面展示。
+				if frame.RequestID == "" {
+					connection.Close(websocket.StatusPolicyViolation, "missing history request id")
+					return
+				}
+				frame.Keyword = strings.TrimSpace(frame.Keyword)
+				failure := ""
+				if !authenticated {
+					failure = requestFailedUnauthorized
+				} else if frame.Type == "search_messages" && (frame.Keyword == "" || utf8.RuneCountInString(frame.Keyword) > 200) {
+					failure = requestFailedInvalidRequest
+				} else if frame.Type == "load_message_context" && (frame.MessageID == uuid.Nil || (frame.Direction != "around" && frame.Direction != "older" && frame.Direction != "newer")) {
+					failure = requestFailedInvalidRequest
+				}
+				if failure != "" {
+					if err := relay.send(ctx, requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: failure}); err != nil {
+						return
+					}
+					continue
+				}
+				var response any
+				var err error
+				if frame.Type == "search_messages" {
+					before := uuid.Max
+					if frame.Before != nil {
+						before = *frame.Before
+					}
+					var result searchResultsEvent
+					result, err = s.searchChatMessages(ctx, userID, frame.Keyword, before)
+					result.RequestID = frame.RequestID
+					response = result
+				} else {
+					var result messageContextEvent
+					result, err = s.messageContext(ctx, userID, frame.MessageID, frame.Direction)
+					result.RequestID = frame.RequestID
+					response = result
+				}
+				if err != nil {
+					failure = requestFailedInternal
+					if errors.Is(err, pgx.ErrNoRows) {
+						failure = requestFailedNotFound
+					} else {
+						slog.Error("read chat history failed", "user_id", userID, "command", frame.Type, "error", err)
+					}
+					response = requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: failure}
+				}
+				if err := relay.send(ctx, response); err != nil {
 					return
 				}
 			case "request_code", "verify_code", "dev_login":

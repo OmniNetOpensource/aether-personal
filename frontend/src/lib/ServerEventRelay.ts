@@ -10,6 +10,13 @@ export type ClientCommand =
   | { type: 'verify_code'; request_id: string; email: string; code: string }
   | { type: 'dev_login'; request_id: string }
   | { type: 'load_history'; request_id: string; before?: string }
+  | { type: 'search_messages'; request_id: string; keyword: string; before?: string }
+  | {
+      type: 'load_message_context';
+      request_id: string;
+      message_id: string;
+      direction: 'around' | 'older' | 'newer';
+    }
   | { type: 'logout'; request_id: string }
   | {
       type: 'send_message';

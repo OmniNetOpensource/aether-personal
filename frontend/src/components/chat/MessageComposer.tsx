@@ -2,11 +2,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { uploadImages } from './messageAttachments.js';
-import type { MessagePart, MessageQuote } from './messageAttachments.js';
+import { uploadImages } from '../../lib/messageAttachments.js';
+import type { MessagePart, MessageQuote } from '../../lib/messageAttachments.js';
 import { RichMessageInput } from './RichMessageInput.js';
 import type { RichMessageInputHandle } from './RichMessageInput.js';
-import type { ChatController } from './ChatController.js';
+import type { ChatController } from '../../lib/ChatController.js';
 
 // MessageComposerHandle 供消息列表把选区引用插入当前光标处。
 export interface MessageComposerHandle {

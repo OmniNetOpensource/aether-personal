@@ -2,13 +2,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject, UIEvent } from 'react';
-import { AssistantMessageBubble } from './AssistantMessageBubble.js';
 import { AssistantWorkingStatus } from './AssistantWorkingStatus.js';
-import type { ChatController, ChatMessage } from './ChatController.js';
-import { MessageTimeSeparator, sameDay } from './MessageTimeSeparator.js';
+import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
-import type { MessageQuote } from './messageAttachments.js';
-import { UserMessageBubble } from './UserMessageBubble.js';
+import type { MessageQuote } from '../../lib/messageAttachments.js';
+import { ChatMessageEntry } from './ChatMessageEntry.js';
 
 // 没量过的行先占这么高；短消息会在第一次出现时改成真实高度。
 const estimatedRowHeight = { status: 64, message: 96, thinking: 48, failed: 48 };
@@ -33,12 +31,15 @@ export function ChatMessageList({
   controller,
   stickToBottom,
   onQuote,
+  latestRequest,
 }: {
   controller: ChatController;
   onQuote: (quote: MessageQuote) => void;
   stickToBottom: RefObject<boolean>;
+  latestRequest: number;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
+  const lastLatestRequest = useRef(latestRequest);
   const content = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   const userScrolling = useRef(false);
@@ -236,6 +237,13 @@ export function ChatMessageList({
       element.focus({ preventScroll: true });
     }
   }
+
+  // 从搜索的历史窗口回到最新聊天时，复用列表自己的回底与取消引用定位逻辑。
+  useLayoutEffect(() => {
+    if (lastLatestRequest.current === latestRequest) return;
+    lastLatestRequest.current = latestRequest;
+    scrollToBottom();
+  }, [latestRequest]);
 
   useLayoutEffect(() => {
     const observer = new ResizeObserver(() => {
@@ -480,7 +488,7 @@ export function ChatMessageList({
                       回复失败，请再发一条消息重试。
                     </p>
                   ) : (
-                    <MessageEntry
+                    <ChatMessageEntry
                       messages={messages}
                       index={row.messageIndex}
                       onQuoteNavigate={(quote) => void navigateQuote(quote)}
@@ -515,62 +523,6 @@ export function ChatMessageList({
         </button>
       )}
     </>
-  );
-}
-
-// MessageEntry 渲染一条消息及其时间分隔；是否与前后连成一组要看完整列表，不能只看视口里的邻居。
-function MessageEntry({
-  messages,
-  index,
-  onQuoteNavigate,
-  expanded,
-  onExpandedChange,
-}: {
-  messages: ChatMessage[];
-  index: number;
-  onQuoteNavigate: (quote: MessageQuote) => void;
-  expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-}) {
-  const message = messages[index];
-  const previous = messages[index - 1];
-  const next = messages[index + 1];
-  const showTime =
-    !previous ||
-    !sameDay(previous.createdAt, message.createdAt) ||
-    Math.abs(message.createdAt.getTime() - previous.createdAt.getTime()) >= 30 * 60000;
-  const joinedWithPrevious = Boolean(previous && sameGroup(previous, message));
-  const endsGroup = !(next && sameGroup(message, next));
-  return (
-    <>
-      {showTime && <MessageTimeSeparator createdAt={message.createdAt} />}
-      {message.isUser ? (
-        <UserMessageBubble
-          message={message}
-          joinedWithPrevious={joinedWithPrevious}
-          endsGroup={endsGroup}
-          onQuoteNavigate={onQuoteNavigate}
-          expanded={expanded}
-          onExpandedChange={onExpandedChange}
-        />
-      ) : (
-        <AssistantMessageBubble
-          message={message}
-          joinedWithPrevious={joinedWithPrevious}
-          endsGroup={endsGroup}
-          expanded={expanded}
-          onExpandedChange={onExpandedChange}
-        />
-      )}
-    </>
-  );
-}
-
-function sameGroup(a: ChatMessage, b: ChatMessage) {
-  return (
-    a.isUser === b.isUser &&
-    sameDay(a.createdAt, b.createdAt) &&
-    Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) < 120000
   );
 }
 

@@ -2,8 +2,8 @@
 
 import { ImagePreview } from './ImagePreview.js';
 import { CollapsibleMessage } from './CollapsibleMessage.js';
-import type { MessageQuote } from './messageAttachments.js';
-import type { ChatMessage } from './ChatController.js';
+import type { MessageQuote } from '../../lib/messageAttachments.js';
+import type { ChatMessage } from '../../lib/ChatController.js';
 
 // UserMessageBubble 共用整条正文的折叠容器，展开后仍可回看引用与预览图片。
 export function UserMessageBubble({

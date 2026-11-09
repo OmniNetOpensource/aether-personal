@@ -14,7 +14,7 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock.js';
-import { safeLink } from './platform.js';
+import { safeLink } from '../../lib/platform.js';
 import 'katex/dist/katex.min.css';
 import './markdown.css';
 

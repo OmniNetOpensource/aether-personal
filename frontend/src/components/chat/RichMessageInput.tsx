@@ -6,8 +6,8 @@ import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ImagePreview } from './ImagePreview.js';
-import { messagePartSchema } from './messageAttachments.js';
-import type { MessagePart } from './messageAttachments.js';
+import { messagePartSchema } from '../../lib/messageAttachments.js';
+import type { MessagePart } from '../../lib/messageAttachments.js';
 
 // editorDocument 将结构化内容转换为编辑器节点，换行单独保留为 hardBreak。
 function editorDocument(parts: MessagePart[]): JSONContent {

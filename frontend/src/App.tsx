@@ -1,10 +1,10 @@
 // 本文件是聊天应用组件：随页面生命周期持有聊天控制器，切换登录与聊天界面，并处理可视视口和前后台重连。
 
 import { useEffect, useState } from 'react';
-import { ChatController } from './ChatController.js';
-import { ChatPage } from './ChatPage.js';
-import { LoginPage } from './LoginPage.js';
-import { PwaControls } from './PwaControls.js';
+import { ChatController } from './lib/ChatController.js';
+import { ChatPage } from './components/chat/ChatPage.js';
+import { LoginPage } from './components/login/LoginPage.js';
+import { PwaControls } from './components/PwaControls.js';
 
 // 每次 effect 启动创建独立控制器，兼容 Strict Mode 的清理重跑和路由重挂载。
 export function App() {

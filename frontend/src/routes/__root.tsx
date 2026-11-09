@@ -1,7 +1,7 @@
 // 本文件定义 TanStack Start 的 HTML 外壳，集中维护页面元信息、PWA 清单、全局样式与脚本注入。
 
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router';
-import '../style.css';
+import '../styles/style.css';
 
 export const Route = createRootRoute({
   head: () => ({

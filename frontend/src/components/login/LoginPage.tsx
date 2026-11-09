@@ -1,7 +1,7 @@
 // 本文件收集邮箱与验证码，生产发码前完成 Turnstile 安全验证；dev 保留一键登录。
 
 import { useEffect, useRef, useState } from 'react';
-import type { ChatController } from './ChatController.js';
+import type { ChatController } from '../../lib/ChatController.js';
 
 // Turnstile 由 Cloudflare 官方脚本提供，页面只持有公开 site key 与一次性令牌。
 interface TurnstileAPI {

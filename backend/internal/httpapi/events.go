@@ -25,6 +25,8 @@ const (
 	requestFailedInternal             = "internal"
 	requestFailedVerificationRequired = "verification_required"
 	requestFailedLoginUnavailable     = "login_unavailable"
+	requestFailedInvalidRequest       = "invalid_request"
+	requestFailedNotFound             = "not_found"
 )
 
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
@@ -60,6 +62,23 @@ type historyEvent struct {
 	chatMessages
 }
 
+// searchResultsEvent 与正常历史分开传递，结果分页不会推进聊天的历史断点。
+type searchResultsEvent struct {
+	Type       string          `json:"type"`
+	RequestID  string          `json:"request_id"`
+	Results    []chatSearchHit `json:"results"`
+	NextBefore *uuid.UUID      `json:"next_before,omitempty"`
+}
+
+// messageContextEvent 提供独立历史窗口；两侧是否还有记录由多取的一行判断。
+type messageContextEvent struct {
+	Type          string `json:"type"`
+	RequestID     string `json:"request_id"`
+	HasMoreBefore bool   `json:"has_more_before"`
+	HasMoreAfter  bool   `json:"has_more_after"`
+	chatMessages
+}
+
 type messagesEvent struct {
 	ChangeCursor int64  `json:"change_cursor,string"`
 	Type         string `json:"type"`
@@ -78,7 +97,7 @@ type loggedOutEvent struct {
 	RequestID string `json:"request_id"`
 }
 
-// requestFailedEvent 只用于登录与翻页这类用户可重试的请求；
+// requestFailedEvent 用于登录、翻页与搜索这类用户可重试的请求；
 // send_message 不合规则仍按既有约定直接断开连接，不走这个事件。
 type requestFailedEvent struct {
 	Type      string `json:"type"`

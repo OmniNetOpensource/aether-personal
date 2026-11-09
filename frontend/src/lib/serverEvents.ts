@@ -33,7 +33,17 @@ export const requestFailedCodeSchema = z.enum([
   'internal',
   'verification_required',
   'login_unavailable',
+  'invalid_request',
+  'not_found',
 ]);
+
+// 搜索只携带列表片段；上下文窗口复用完整聊天消息结构。
+export const chatSearchHitSchema = z.object({
+  id: z.uuid(),
+  sender: z.enum(['user', 'main']),
+  created_at: z.iso.datetime({ offset: true }),
+  excerpt: z.string(),
+});
 
 export const serverEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -55,6 +65,18 @@ export const serverEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('code_sent'), request_id: z.uuid() }),
   chatPageSchema.extend({ type: z.literal('history'), request_id: z.uuid() }),
+  z.object({
+    type: z.literal('search_results'),
+    request_id: z.uuid(),
+    results: z.array(chatSearchHitSchema),
+    next_before: z.uuid().optional(),
+  }),
+  chatPageSchema.extend({
+    type: z.literal('message_context'),
+    request_id: z.uuid(),
+    has_more_before: z.boolean(),
+    has_more_after: z.boolean(),
+  }),
   chatPageSchema.extend({
     type: z.literal('messages'),
     change_cursor: z.string().regex(/^\d+$/).optional(),
@@ -73,3 +95,4 @@ export const serverEventSchema = z.discriminatedUnion('type', [
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 export type ChatPage = z.infer<typeof chatPageSchema>;
 export type RequestFailedCode = z.infer<typeof requestFailedCodeSchema>;
+export type ChatSearchHit = z.infer<typeof chatSearchHitSchema>;

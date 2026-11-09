@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { RefObject } from 'react';
-import type { MessageQuote } from './messageAttachments.js';
+import type { MessageQuote } from '../../lib/messageAttachments.js';
 
 // quoteTextNodes 排除代码工具栏与公式隐藏文本，保证记录的是用户看见的原文。
 function quoteTextNodes(root: Element): Text[] {

@@ -1,7 +1,7 @@
 // 本文件为草稿与历史消息提供同一个图片预览：缩略图点击后打开原图，支持 Escape 和关闭按钮。
 
 import { useEffect, useRef, useState } from 'react';
-import type { MessageImage } from './messageAttachments.js';
+import type { MessageImage } from '../../lib/messageAttachments.js';
 
 // ImagePreview 使用原生模态对话框管理焦点，使键盘与触摸用户都能查看附件。
 export function ImagePreview({ image }: { image: MessageImage }) {

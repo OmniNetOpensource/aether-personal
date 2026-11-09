@@ -1,4 +1,4 @@
-// 本文件是聊天业务控制器：管理登录状态、消息列表、图片上传与消息发送，并驱动服务器事件中转，是前端聊天状态的唯一来源。
+// 本文件是聊天业务控制器：管理登录、实时消息、发送与上传，并通过事件中转提供独立的历史搜索和上下文读取。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
@@ -16,6 +16,18 @@ export interface ChatMessage {
   isUser: boolean;
   createdAt: Date;
   position: string;
+}
+
+// chatMessageFromRow 在服务器消息进入界面时统一转换时间和多段内容，正常聊天与历史窗口共用。
+export function chatMessageFromRow(row: ChatPage['messages'][number]): ChatMessage {
+  return {
+    id: row.id,
+    text: row.text,
+    parts: row.parts ?? (row.text ? [{ type: 'text', text: row.text }] : []),
+    isUser: row.sender === 'user',
+    createdAt: new Date(row.created_at),
+    position: row.position,
+  };
 }
 
 export class RequestError extends Error {
@@ -44,6 +56,10 @@ function requestFailedMessage(code: RequestFailedCode): string {
       return '已经登录';
     case 'internal':
       return '服务暂时不可用，请稍后重试';
+    case 'invalid_request':
+      return '请输入 1 至 200 个字符的搜索词';
+    case 'not_found':
+      return '找不到这条历史消息';
   }
 }
 
@@ -224,6 +240,8 @@ export class ChatController {
         return;
       }
       case 'code_sent':
+      case 'search_results':
+      case 'message_context':
         this.resolvePendingRequest(event.request_id, event);
         break;
       case 'history':
@@ -374,6 +392,30 @@ export class ChatController {
     }
   }
 
+  // searchMessages 不把搜索结果并入正常列表，也不推进重连或历史游标。
+  async searchMessages(keyword: string, before?: string) {
+    const event = await this.sendRequest({
+      type: 'search_messages',
+      request_id: crypto.randomUUID(),
+      keyword,
+      ...(before ? { before } : {}),
+    });
+    if (event.type !== 'search_results') throw new Error('搜索返回了错误的事件类型');
+    return event;
+  }
+
+  // loadMessageContext 按原消息定位或向一侧翻页，独立历史窗口由调用方持有。
+  async loadMessageContext(messageID: string, direction: 'around' | 'older' | 'newer') {
+    const event = await this.sendRequest({
+      type: 'load_message_context',
+      request_id: crypto.randomUUID(),
+      message_id: messageID,
+      direction,
+    });
+    if (event.type !== 'message_context') throw new Error('历史消息返回了错误的事件类型');
+    return event;
+  }
+
   // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻。
   private mergeHistory(page: ChatPage) {
     const first = page.messages[0]?.position;
@@ -388,14 +430,7 @@ export class ChatController {
   // merge 把服务器发来的一页消息并入列表：同一 ID 覆盖旧值，再按服务器位置排序。
   private merge(page: ChatPage) {
     for (const row of page.messages) {
-      const message: ChatMessage = {
-        id: row.id,
-        text: row.text,
-        parts: row.parts ?? (row.text ? [{ type: 'text', text: row.text }] : []),
-        isUser: row.sender === 'user',
-        createdAt: new Date(row.created_at),
-        position: row.position,
-      };
+      const message = chatMessageFromRow(row);
       const index = this.messages.findIndex((existing) => existing.id === row.id);
       if (index < 0) this.messages.push(message);
       else this.messages[index] = message;
