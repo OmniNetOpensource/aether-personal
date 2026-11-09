@@ -38,19 +38,19 @@ export function QuoteSelection({
       const selected = window.getSelection();
       if (!selected || selected.isCollapsed || selected.rangeCount === 0) return setSelection(null);
       const range = selected.getRangeAt(0);
-      const startElement =
-        range.startContainer instanceof Element
-          ? range.startContainer
-          : range.startContainer.parentElement;
-      const endElement =
-        range.endContainer instanceof Element
-          ? range.endContainer
-          : range.endContainer.parentElement;
-      const body = startElement?.closest('[data-quote-body]');
+      const element = container.current;
+      if (!element) return setSelection(null);
+      // 整段选择的终点可能落在正文外；按实际选中的文字判断归属，忽略段尾空白。
+      const selectedNodes = quoteTextNodes(element).filter((node) => {
+        if (!range.intersectsNode(node)) return false;
+        const start = range.startContainer === node ? range.startOffset : 0;
+        const end = range.endContainer === node ? range.endOffset : node.length;
+        return node.data.slice(start, end).trim().length > 0;
+      });
+      const body = selectedNodes[0]?.parentElement?.closest('[data-quote-body]');
       if (
         !body ||
-        body !== endElement?.closest('[data-quote-body]') ||
-        !container.current?.contains(body)
+        selectedNodes.some((node) => node.parentElement?.closest('[data-quote-body]') !== body)
       )
         return setSelection(null);
       const messageId = body.getAttribute('data-message-id');
