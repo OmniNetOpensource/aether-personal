@@ -24,7 +24,7 @@
 ```mermaid
 flowchart LR
     APP["第一层：TanStack Start Web App<br/>移动端 PWA"]
-    subgraph BACKEND["第二层：Go 后端（多台对等、无状态）"]
+    subgraph BACKEND["第二层：Go 后端（单进程）"]
         API["API<br/>HTTP + WebSocket"]
         RUNTIME["Agent 运行时<br/>Main"]
     end
@@ -141,7 +141,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 关键设计
 
-**共享持久状态，按用户维护临时执行归属。** 任意后端接收 WebSocket；Agent 运行期间按路由定向通知，无健康归属时按可用名额比例分配。消息、任务与记忆在 PostgreSQL，用户执行锁与分配 ID 保护单处执行和结果提交。启动、重连与五秒补偿恢复遗漏工作，不引入 Redis。详见 [12 Agent 多实例路由](12-agent-routing.md)，本地开发中，未部署。
+**持久状态在 PostgreSQL，单进程调度 Main。** 消息、任务与记忆都在 PostgreSQL。后端只运行一个进程：消息提交或定时投递后，进程内的 `Manager` 直接唤醒该用户的 Runner，同一用户同一时间只有一个 Runner；启动时读一次持久待办恢复工作，不引入 Redis。理由是目前只有维护者一人使用，单进程足够，用户量上来后再考虑多实例，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
 
 **一切通信都是消息。** 用户与 Main 只通过消息联系，Main 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）。
 
@@ -209,8 +209,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
-| `DATABASE_MAX_CONNS` | 默认 20，最小 5；池外另有聊天与 Agent 两条 LISTEN 连接 |
-| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制每实例用户执行名额 |
+| `DATABASE_MAX_CONNS` | 默认 20，最小 5；池外另有一条聊天推送的 LISTEN 连接 |
+| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制同时运行 Main 的用户数，超出的按唤醒顺序排队 |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
 | `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
 
@@ -228,7 +228,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 - 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
 - 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
-- 目前只部署一台后端，但代码按多台的要求编写。
+- 只部署一个后端进程，Main 调度在进程内完成，不支持同时运行多个后端实例。
 
 ## 模型服务与费用
 

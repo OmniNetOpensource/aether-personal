@@ -20,22 +20,21 @@
 
 ## 整体结构
 
-2026-11-06 起采用「共享持久状态 + 临时执行归属」：接入实例保存输入，数据库按用户归属定向通知执行者；无健康归属时按实例容量分配，全部满载时保留数据库待办。运行结束释放归属，实例失效后可接管。完整设计、理由与本地验证见 [12 Agent 多实例路由](12-agent-routing.md)。这取代此前所有实例收到通知后全量扫描、抢用户锁的调度方式。
+后端是单进程：同一个进程既接收 WebSocket，也运行 Main。理由是目前只有维护者一人使用，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
 
-- 所有后端都可接收任意用户的 WebSocket；执行实例可以不同，用户连接不必迁移。
-- 消息、任务、记忆和轨迹在 PostgreSQL，`agent_routes` 只记录当前执行者，不承载唯一的业务状态。
-- 有归属的新输入直接发送实例专属通知，无归属发送 `agent_pending` 请求分配；聊天广播 `user_messages` 只用于推送，不再触发全局执行扫描。
-- 用户执行锁仍保证同一用户单处运行；分配 ID 和提交时的路由行锁阻止过期执行者提交业务结果。
-- 不引入 Redis 或单独事件表。通知负责及时性，启动和五秒补偿负责找回遗漏。
+- 消息、任务、记忆和轨迹都在 PostgreSQL，进程内不保存唯一的业务状态。
+- 用户消息提交后，WebSocket 处理代码直接调用进程内的 `Manager.Wake` 唤醒该用户的 Main；启动时读一次持久待办恢复工作。
+- 数据库通知 `user_messages` 只用于聊天推送，不触发 Main 运行。
+- 不引入 Redis 或单独事件表。
 
 ## 一条消息的完整路径
 
 ```mermaid
 sequenceDiagram
     participant App
-    participant WS as 后端 A：WebSocket
+    participant WS as 后端：WebSocket
     participant DB as PostgreSQL
-    participant Runner as 后端 A 或 B：Main 运行时
+    participant Runner as 后端：Main 运行时
     participant Model as OpenRouter
 
     App->>WS: hello {token?, last_change_cursor?}
@@ -44,8 +43,8 @@ sequenceDiagram
     WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
     WS-->>App: messages {这条用户消息, main_thinking}
     WS-->>App: delivered {client_message_id}
-    DB-->>WS: 定向 Agent 通知（无归属则先分配）
-    Runner->>DB: 取得 Main 锁并核对分配 ID，读取上下文与任务
+    WS->>Runner: Manager.Wake（进程内直接唤醒）
+    Runner->>DB: 读取上下文
     Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
@@ -60,7 +59,7 @@ sequenceDiagram
 3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存。
 4. 先把这条消息推给当前连接，再在同一连接上回复 `delivered`。顺序反过来时，输入框清空与消息出现在列表之间会有一瞬间两边都看不到这条消息。App 收到 `delivered` 即发送成功，输入框清空；15 秒未收到或连接断开即发送失败，输入框显示错误并保留内容，再按发送就用同一个 `client_message_id` 重发。
 5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
-6. 唤醒该用户的 Main：尝试获取锁，获取到则运行；获取不到说明已有机器在运行，到此为止。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
+6. 调用 `Manager.Wake` 唤醒该用户的 Main：该用户还没有 Runner 就新建一个；已经有 Runner 在运行时只留下待唤醒标记，等它结束后再检查一次。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
 
 ## WebSocket
 
@@ -71,7 +70,7 @@ sequenceDiagram
 - 后端每 30 秒发送心跳 ping；连接断开时前端自动重连，重连时仍先发 `hello`。
 - 2026-11-03，用户确认切换标签页或把浏览器切到后台时保持连接：页面隐藏不再主动关闭 WebSocket，也不暂停自动重连；网络恢复时即使页面仍在后台也尝试重连，返回前台时确保连接存在。选择理由是普通页面切换不应中断实时收消息，也不应让发送中的请求直接失败。真正离线或离开页面时仍关闭连接，恢复网络或返回页面后重连；手机系统冻结或回收网页时无法保证连接持续存活，断开后的消息仍按变更游标补齐。
 - 不合规则的 `send_message`（缺 `client_message_id`、内容全空、正文与引用超过 64,000 字符，或图片引用不属于当前用户）直接断开连接，原因 `invalid send_message`。正常使用的前端不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露。登录与历史翻页是用户可重试的请求，其失败通过 `request_failed` 事件按 `request_id` 回复，不关闭连接。
-- 多台后端时，WebSocket 连接绑定在某一台机器上，由 NOTIFY 唤醒持有该用户连接的机器去查表推送。连接未登录时不注册唤醒，登录成功后才绑定用户。
+- 收到该用户的 NOTIFY 时，后端唤醒这个用户的所有连接去查表推送。连接未登录时不注册唤醒，登录成功后才绑定用户。
 
 前端发往后端的命令：
 
@@ -170,7 +169,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
 - 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
 - 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
-- 每台机器用一条专用连接 `LISTEN user_messages`，断线重连后让本机所有聊天连接补查。Agent Manager 使用另一条专用连接接收执行通知，启动、重连和每五秒补查归属与遗漏待办，见 [12](12-agent-routing.md)。
+- 后端用一条专用连接 `LISTEN user_messages`，断线重连后让所有聊天连接补查。
 
 ## 助手消息宽度
 
@@ -207,23 +206,23 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 ## 写入顺序
 
-`id` 与 `sequence` 都在执行插入语句时分配，提交后才能被查到。两台机器同时写入同一用户的消息时，先分配到编号的可能后提交；连接若已把推送位置更新到较大的编号，较小的那条会被永远跳过。
+`id` 与 `sequence` 都在执行插入语句时分配，提交后才能被查到。即使只有一个进程，WebSocket、Runner 与定时调度器也可能同时写入同一用户的消息，先分配到编号的事务可能后提交；连接若已把推送位置更新到较大的编号，较小的那条会被永远跳过。
 
 因此，往某个用户的消息列表插入消息时，在同一事务中先执行 `pg_advisory_xact_lock`（按用户区分）再插入，提交时自动释放。同一用户的写入因此排队进行，先分配编号的一定先提交，按“位置之后”查询不会漏。每次只排队几毫秒，不同用户互不影响。
 
 UUIDv7 的时间来自数据库服务器时钟；时钟被人为往回调时，新 `id` 可能小于旧 `id`。服务器时钟同步通常是逐渐校准，风险可接受。
 
-消息和执行锁的区别（另有只覆盖容量分配短事务的调度锁，见 [12](12-agent-routing.md)）：
+写入锁与 Main 的串行执行是两回事：
 
-| 锁 | 范围 | 作用 |
+| 机制 | 范围 | 作用 |
 | --- | --- | --- |
 | 写入锁 `pg_advisory_xact_lock('messages:<user_id>')` | 单个插入事务，提交时自动释放 | 同一用户的插入排队，保证 `id` 顺序与提交顺序一致 |
-| Main 锁 `pg_try_advisory_lock('main:<user_id>')` | Main 运行全程，结束后手动释放 | 同一用户的 Main 同一时间只在一台机器上运行；机器崩溃时数据库自动释放 |
+| Manager 的 Runner 登记 | Main 运行全程，Runner 结束后注销 | 同一用户同一时间只有一个 Runner；登记在进程内存，进程退出即消失，见 [05](05-main-runtime.md#停机与开机2026-11-09) |
 
 ## 暂不采用、以后再评估
 
 - 将“连接服务器”与“agent worker”拆成两组机器（LangGraph 的做法）：代码按两种角色分开编写，目前在同一进程中运行。
-- 用租约代替 advisory lock：当前心跳决定路由有效性，但仍保留 advisory lock 作为执行互斥；接管须等待旧数据库会话释放。
+- 多实例部署：需要跨进程保证同一用户只在一处运行，并在进程失效后接管，等用户量上来后再设计。
 - 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
 
 `待确认`：边生成边显示的推送方式；各平台的 WebSocket 连接恢复行为；其他平台的连接与部署验收。

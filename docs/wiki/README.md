@@ -11,7 +11,7 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 | [01 总体架构](01-overview.md) | 项目定位、语义澄清、三层结构与各组件状态、工程组织、技术栈、配置、托管与部署 |
 | [02 数据模型](02-data-model.md) | 数据表、消息列表（`messageList`）的排序规则、压缩与检索、外键、索引、迁移、sqlc |
 | [03 认证](03-auth.md) | 邮箱验证码登录、登录令牌、滑动过期、发信 |
-| [04 消息与实时通信](04-messaging.md) | 无状态多实例结构、WebSocket 协议、消息状态、推送、重发、写入顺序 |
+| [04 消息与实时通信](04-messaging.md) | 单进程整体结构、WebSocket 协议、消息状态、推送、重发、写入顺序 |
 | [05 Main 运行时](05-main-runtime.md) | 实现顺序、运行循环、工具、模型、系统提示词、失败处理 |
 | [06 Main 职责实验](06-main-role-experiment.md) | B 架构选择、正式提示词任务重放与历史 A/B 证据 |
 | [07 Linux 沙盒工作环境](07-sandbox.md) | 2026-10-29 起不在当前范围；已有实现已删除 |
@@ -19,7 +19,6 @@ aether-personal 是以维护者自用为主的开源 personal agent：首先供�
 | [09 Web 生产部署](09-deployment.md) | Cloudflare 静态资源与代理、Docker 应用主机、迁移、备份与公众上线条件 |
 | [10 Schedule 与闲置反思](10-schedules.md) | 2026-11-08 重新加入：定时任务工具、调度器与闲置反思 |
 | [11 需求队列](11-tasks.md) | 持久化需求与补充、登记阶段、每用户单任务执行、排队与恢复 |
-| [12 Agent 多实例路由](12-agent-routing.md) | 临时执行归属、按容量分配、定向通知、心跳接管与排空 |
 
 ## 状态标注
 

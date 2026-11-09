@@ -125,7 +125,7 @@ make db-down   # 停止本地 PostgreSQL
 | `ADMIN_PASSWORD_HASH` | 管理看板密码哈希，用 `python3 scripts/set-admin-password.py` 设置；留空关闭管理入口。见 [08](docs/wiki/08-admin-observability.md) |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式（dev 文本，prod JSON） |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
-| `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；运行时为普通请求预留 4 条连接，每个运行中的 Main 占一条；另有一条独立 LISTEN 连接 |
+| `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；同时运行 Main 的用户数默认不超过该值减 4（可用 `AGENT_CAPACITY` 调小）；另有一条聊天推送用的 LISTEN 连接 |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
 | `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |

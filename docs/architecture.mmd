@@ -6,7 +6,7 @@ flowchart TD
     subgraph L2["第二层：Go 后端"]
         API["API：认证 · 收发消息 · WebSocket · 只读管理"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送"]
-        ROUTING["Agent 路由：临时归属 · 按容量分配<br/>实例专属通知 · 心跳与五秒补偿"]
+        MANAGER["Manager：单进程调度<br/>提交后直接唤醒 · 启动时恢复待办 · 每用户一个 Runner"]
         DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 定时任务 · 步骤与模型请求日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
@@ -29,9 +29,9 @@ flowchart TD
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 对外消息与事件"| MESSAGES
         MESSAGES <-->|"保存与读取消息"| DB
-        MESSAGES -->|"输入提交后按归属通知 / 无归属请求分配"| ROUTING
-        ROUTING <-->|"实例心跳 / 分配 ID / 用户执行容量"| DB
-        ROUTING -->|"取得用户执行锁并核对归属"| MAIN
+        MESSAGES -->|"输入提交后唤醒"| MANAGER
+        MANAGER -->|"启动时读取 main_work"| DB
+        MANAGER -->|"按容量启动该用户的 Runner"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
 
         TASKS <-->|"任务、相关用户输入与登记位置 / 回执同事务"| DB
@@ -42,7 +42,7 @@ flowchart TD
 
         SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 闲置到期的对话"]
         SCHEDULER <-->|"插入不可见 schedule_event / reflection 消息<br/>同事务推进或删除安排"| DB
-        SCHEDULER -->|"插入后唤醒"| MAIN
+        SCHEDULER -->|"插入后唤醒"| MANAGER
 
     end
 
