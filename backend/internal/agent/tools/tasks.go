@@ -1,4 +1,4 @@
-// 本文件提供需求登记、列表读取、模型选择与任务状态工具；登记不切换当前任务，全部变更在同一事务中提交。
+// 本文件提供需求登记、列表读取、模型选择与任务状态工具；登记不切换当前任务，进行中的任务可以改回排队以便先做另一项，全部变更在同一事务中提交。
 
 package tools
 
@@ -17,21 +17,21 @@ import (
 // listTasksTool 返回当前用户的任务列表，供 Main 判断新输入属于哪个已有目标。
 var listTasksTool = Tool{
 	Name:       "list_tasks",
-	Definition: json.RawMessage(`{"type":"function","function":{"name":"list_tasks","description":"Read this user's tasks. By default returns the first 100 open tasks, in-progress first, then queued, then waiting. List order is only for display, not execution priority. When no task is in progress, read this list and choose the next queued task yourself based on the user's requests and the conversation. Set include_closed to also list completed and cancelled tasks. Tasks are current records; old tool results and summaries may be stale.","parameters":{"type":"object","additionalProperties":false,"properties":{"include_closed":{"type":"boolean","default":false}}}}}`),
+	Definition: json.RawMessage(`{"type":"function","function":{"name":"list_tasks","description":"Read this user's tasks. By default returns the first 100 open tasks, in-progress first, then queued, then waiting. List order is only for display, not execution priority. When no task is in progress, read this list and choose the queued task that should be done first based on the user's requests and the conversation. Set include_closed to also list completed and cancelled tasks. Tasks are current records; old tool results and summaries may be stale.","parameters":{"type":"object","additionalProperties":false,"properties":{"include_closed":{"type":"boolean","default":false}}}}}`),
 	Execute:    executeListTasks,
 }
 
 // recordTaskInputTool 原子登记一个用户请求包含的全部目标和补充，全部变更一次提交。
 var recordTaskInputTool = Tool{
 	Name:       "record_task_input",
-	Definition: json.RawMessage(`{"type":"function","function":{"name":"record_task_input","description":"Register a new user request before doing its work. Include ALL goals in this request: create a queued task for each new goal, or revise the existing task for additions/corrections to that same goal. Supply the COMPLETE updated title and description, preserving earlier constraints. A new goal never cancels or switches the in-progress task. Existing task status is preserved unless the user asks to cancel, pause (waiting, explaining why to the user in the same reply), or resume (queued). Do not revive closed tasks unless explicitly asked; a new follow-up goal can be a new task. Empty changes is only for a request containing no task change. One request may update several tasks and create several new ones. Use tool calls only during registration; do not write assistant text or answer a newly queued goal.","parameters":{"type":"object","additionalProperties":false,"properties":{"changes":{"type":"array","maxItems":20,"items":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string","description":"Omit for a new task; otherwise the exact existing task ID."},"title":{"type":"string","maxLength":200},"description":{"type":"string","maxLength":32000},"status":{"type":"string","enum":["queued","waiting","cancelled"],"description":"Only for an existing task and only when the user changes its lifecycle; omit to preserve its status."}},"required":["title","description"]}}},"required":["changes"]}}}`),
+	Definition: json.RawMessage(`{"type":"function","function":{"name":"record_task_input","description":"Register a new user request before doing its work. Include ALL goals in this request: create a queued task for each new goal, or revise the existing task for additions/corrections to that same goal. Supply the COMPLETE updated title and description, preserving earlier constraints. A new goal never cancels, switches, or defers the in-progress task; deferring it back to queued is update_task, not this tool. Existing task status is preserved unless the user asks to cancel, pause (waiting, explaining why to the user in the same reply), or resume (queued). Do not revive closed tasks unless explicitly asked; a new follow-up goal can be a new task. Empty changes is only for a request containing no task change. One request may update several tasks and create several new ones. Use tool calls only during registration; do not write assistant text or answer a newly queued goal.","parameters":{"type":"object","additionalProperties":false,"properties":{"changes":{"type":"array","maxItems":20,"items":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string","description":"Omit for a new task; otherwise the exact existing task ID."},"title":{"type":"string","maxLength":200},"description":{"type":"string","maxLength":32000},"status":{"type":"string","enum":["queued","waiting","cancelled"],"description":"Only for an existing task and only when the user changes its lifecycle; omit to preserve its status."}},"required":["title","description"]}}},"required":["changes"]}}}`),
 	Execute:    executeRecordTaskInput,
 }
 
 // updateTaskTool 让模型选定待执行任务，或变更当前任务状态；后端只约束单任务执行，不决定选择顺序。
 var updateTaskTool = Tool{
 	Name:       "update_task",
-	Definition: json.RawMessage(`{"type":"function","function":{"name":"update_task","description":"Set status=in_progress on one queued task YOU choose, only when no task is in progress and every new user request has been registered. Read list_tasks first. Starting a task must be the only tool call in its batch, with no assistant text; begin work and user-facing text on the next turn. Other status changes apply ONLY to the in-progress task. Set completed when the requested work is finished, in a separate tool-only batch before delivering the result; this changes task status only and does not bind or register any output. Waiting requires a concrete blocker, with any necessary clarification explained in the same reply's assistant text. After a task ends, read list_tasks and choose the next queued task yourself; creation order and task ID do not define priority. Never switch away from an in-progress task just because a new request arrives. Do not work on another goal in this reply, or mark it complete. Cancellation requested by the user is handled when registering their input.","parameters":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["in_progress","completed","waiting"]}},"required":["task_id","status"]}}}`),
+	Definition: json.RawMessage(`{"type":"function","function":{"name":"update_task","description":"Set status=in_progress on one queued task YOU choose, only when no task is in progress and every new user request has been registered. Read list_tasks first. Starting a task must be the only tool call in its batch, with no assistant text; begin work and user-facing text on the next turn. Other status changes apply ONLY to the in-progress task. Set completed when the requested work is finished, in a separate tool-only batch before delivering the result; this changes task status only and does not bind or register any output. Waiting requires a concrete blocker, with any necessary clarification explained in the same reply's assistant text. Set queued on the in-progress task when you decide another queued task should be done first. That deferral is its own tool-only batch, and the later start is a separate tool-only batch, because calls in one batch run together. Do not defer only because a new request arrived. After the current task ends or is deferred, read list_tasks and choose the queued task that should be done first; creation order and task ID do not define priority. Do not work on another goal in this reply, or mark it complete. Cancellation requested by the user is handled when registering their input.","parameters":{"type":"object","additionalProperties":false,"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["in_progress","completed","waiting","queued"]}},"required":["task_id","status"]}}}`),
 	Execute:    executeUpdateTask,
 }
 
@@ -143,7 +143,7 @@ func executeRecordTaskInput(ctx context.Context, _ Dependencies, queries *databa
 	return string(result), err
 }
 
-// executeUpdateTask 根据模型给出的 ID 启动待办或更新当前任务；SQL 阻止任务抢占和提前完成未执行项。
+// executeUpdateTask 根据模型给出的 ID 启动待办、完成或暂停当前任务，或把当前任务改回排队；SQL 仍保证没有进行中任务时才能启动另一项。
 func executeUpdateTask(ctx context.Context, _ Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error) {
 	var input struct {
 		TaskID uuid.UUID `json:"task_id"`
@@ -152,15 +152,15 @@ func executeUpdateTask(ctx context.Context, _ Dependencies, queries *database.Qu
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return "Error: arguments must be JSON with a valid task UUID", nil
 	}
-	if input.TaskID == uuid.Nil || (input.Status != "in_progress" && input.Status != "completed" && input.Status != "waiting") {
-		return "Error: task_id and status (in_progress/completed/waiting) are required", nil
+	if input.TaskID == uuid.Nil || (input.Status != "in_progress" && input.Status != "completed" && input.Status != "waiting" && input.Status != "queued") {
+		return "Error: task_id and status (in_progress/completed/waiting/queued) are required", nil
 	}
 	affected, err := queries.UpdateTaskStatus(ctx, database.UpdateTaskStatusParams{UserID: userID, ID: input.TaskID, Status: input.Status})
 	if err != nil {
 		return "", err
 	}
 	if affected == 0 {
-		return "Error: finish or pause only the active task; starting requires a queued task and no active task", nil
+		return "Error: completed, waiting, and queued apply only to the active task; starting requires a queued task and no active task", nil
 	}
 	row, err := queries.GetTask(ctx, database.GetTaskParams{UserID: userID, ID: input.TaskID})
 	if err != nil {

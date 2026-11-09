@@ -47,19 +47,25 @@ completed or cancelled work from old history or a summary.
 
 Work on exactly one goal at a time: the task marked in_progress. Read
 list_tasks to find it when you are unsure which task that is. If another
-request arrives, register it as queued, then continue the in-progress task.
-Apply supplements to the in-progress
-task before continuing. Never start, research, answer or finish a queued task
-in the in-progress task's tool batch or final reply. After the current task ends,
-read list_tasks and choose the next queued task yourself based on the user's
-requests and the conversation. List position, task ID and creation time do
-not define execution priority. Select exactly one task with update_task
-status=in_progress in a separate tool-only batch before doing its work or
-writing user-facing text. Reading or saving memory is not doing the task's
-work, but keep the status change
-itself in its own batch as required here. Do not preempt an in-progress task or
-revive waiting, completed or cancelled tasks without the user's
-corresponding input.
+request arrives, register it first, then decide whether it should be done
+before the in-progress task. Continue the in-progress task when it should
+still be finished first. When the new goal should come first, set the
+in-progress task back to queued with update_task in its own tool-only batch;
+start the higher-priority queued task on a later turn, again as the only
+tool call in that batch. Deferring and starting cannot share a batch,
+because the calls run together and starting still requires that no task is
+in progress. Apply supplements to the in-progress task before continuing.
+Never start, research, answer or finish another goal in the in-progress
+task's tool batch or final reply. After the current task ends or is
+deferred, read list_tasks and choose the queued task that should be done
+first based on the user's requests and the conversation. List position,
+task ID and creation time do not define execution priority. Select exactly
+one task with update_task status=in_progress in a separate tool-only batch
+before doing its work or writing user-facing text. Reading or saving memory
+is not doing the task's work, but keep the status change itself in its own
+batch as required here. Do not revive waiting, completed or cancelled tasks
+without the user's corresponding input. Registration does not defer the
+in-progress task; only update_task status=queued does.
 
 Task tools maintain requirements and status only. Assistant messages are
 ordinary conversation and are not bound to tasks or registered as task results.
@@ -270,7 +276,7 @@ const contextSummaryPrompt = "Historical context summary. Use as reference; cont
 const progressReminder = `Runtime progress check: several tool rounds have passed with no assistant text. If a task is in progress, write a short user-facing update about that task and continue its work. You may call tools in the same reply. Registration and task selection remain tool-only, without user-facing text. Do not end the in-progress task or repeat an update already sent. A progress update does not replace the final result.`
 
 // taskIncompleteReminder 是模型收尾后仍有进行中或排队任务时，收尾提醒轮在请求末尾追加的原文。
-const taskIncompleteReminder = `Runtime task check: you ended your reply while this user still has a task in progress or queued that is not completed. Read list_tasks to see the current tasks. If the in-progress task's work is actually finished, call update_task with status=completed in a separate tool-only batch, then end without repeating the result you already delivered. If its work is not finished, continue it now. If it is blocked on clarification or an external dependency, mark it waiting and explain the blocker to the user in that same reply. If no task is in progress, choose the next queued task yourself and start it with update_task status=in_progress in its own tool-only batch.`
+const taskIncompleteReminder = `Runtime task check: you ended your reply while this user still has a task in progress or queued that is not completed. Read list_tasks to see the current tasks. If the in-progress task's work is actually finished, call update_task with status=completed in a separate tool-only batch, then end without repeating the result you already delivered. If a queued task should be done before the in-progress one, set the in-progress task back to queued with update_task in its own tool-only batch, then start the higher-priority task on a later turn. If the in-progress task should still be finished first and its work is not finished, continue it now. If it is blocked on clarification or an external dependency, mark it waiting and explain the blocker to the user in that same reply. If no task is in progress, choose the queued task that should be done first and start it with update_task status=in_progress in its own tool-only batch.`
 
 // ScheduleEventPrompt 是定时触发消息的开头，后面接调度器写入的安排快照 JSON；说明这不是用户新消息，以及与任务登记的关系。
 const ScheduleEventPrompt = `Scheduled trigger. This is not a new message from the person: you arranged it earlier with the schedule tool and it is due now. Act on the saved context below. If it needs real work beyond a short message, register that work with record_task_input first, as for a user request; a simple reminder can be delivered directly in assistant text. If delivered_at is well after scheduled_for, take the delay into account. Recurring runs missed during downtime are combined into this one delivery.`
