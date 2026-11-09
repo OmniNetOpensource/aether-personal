@@ -157,12 +157,12 @@ func (s Store) ResolveMessages(ctx context.Context, messages []json.RawMessage) 
 				}
 				result, err := client.GetObject(ctx, &oss.GetObjectRequest{Bucket: oss.Ptr(settings.Bucket), Key: oss.Ptr(key)})
 				if err != nil {
-					return nil, fmt.Errorf("OSS 图片读取失败")
+					return nil, fmt.Errorf("OSS 图片读取失败（获取 %s）: %w", image.URL, err)
 				}
 				data, readErr := io.ReadAll(io.LimitReader(result.Body, MaxImageBytes+1))
 				result.Body.Close()
 				if readErr != nil {
-					return nil, fmt.Errorf("OSS 图片读取失败")
+					return nil, fmt.Errorf("OSS 图片读取失败（读取 %s）: %w", image.URL, readErr)
 				}
 				mime, err := ValidateBytes(data)
 				if err != nil {
