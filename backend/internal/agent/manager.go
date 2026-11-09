@@ -18,9 +18,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// 正常退出给正在运行的任务十五秒收尾。
-const agentDrainTimeout = 15 * time.Second
-
 // Manager 共享进程依赖，用同一把互斥锁登记 Runner 和待唤醒用户，防止空闲退出时漏掉新输入。
 type Manager struct {
 	databasePool *pgxpool.Pool
@@ -74,7 +71,8 @@ func (m *Manager) signal() {
 	}
 }
 
-// Start 恢复数据库待办并消费进程内唤醒；退出时停止创建 Runner，给已有执行十五秒完成，再取消并等待收尾。
+// Start 恢复数据库待办并消费进程内唤醒。退出信号取消正在运行的 Runner，等它们退出后返回；
+// 没写完的步骤留在数据库里，下次启动从原处继续。
 func (m *Manager) Start(ctx context.Context) error {
 	users, err := database.New(m.databasePool).ListMainWork(ctx)
 	if err != nil {
@@ -86,38 +84,17 @@ func (m *Manager) Start(ctx context.Context) error {
 	for _, user := range users {
 		m.Wake(user.UserID, user.InputSequence)
 	}
-	runtimeCtx, cancelRuntime := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelRuntime()
-	shutdown := ctx.Done()
-	var drainTimer *time.Timer
-	var drainDeadline <-chan time.Time
 	for {
 		select {
-		case <-shutdown:
-			shutdown = nil
-			drainTimer = time.NewTimer(agentDrainTimeout)
-			drainDeadline = drainTimer.C
-		case <-drainDeadline:
-			goto finished
+		case <-ctx.Done():
+			m.running.Wait()
+			return nil
 		case <-m.wakeSignal:
 			if ctx.Err() == nil {
-				m.startPending(runtimeCtx)
+				m.startPending(ctx)
 			}
 		}
-		m.mutex.Lock()
-		empty := len(m.runners) == 0
-		m.mutex.Unlock()
-		if ctx.Err() != nil && empty {
-			break
-		}
 	}
-finished:
-	if drainTimer != nil {
-		drainTimer.Stop()
-	}
-	cancelRuntime()
-	m.running.Wait()
-	return nil
 }
 
 // startPending 按首次唤醒顺序分配本地名额；活跃用户的补充标记留到注销，等待用户不会被它阻塞。

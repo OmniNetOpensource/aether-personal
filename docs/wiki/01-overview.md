@@ -192,7 +192,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 - `GET /healthz` 每次请求 ping 数据库，正常返回 `200 ok`，失败返回 `503`。
 - 连接池不预先连接数据库，数据库状态由 `/healthz` 反映。但 Agent 调度启动时要读一次持久待办，此时数据库不可用则进程退出，由部署的重启策略拉起（2026-11-08 起），见 [05](05-main-runtime.md#停机与开机2026-11-09)。
 - 等待数据库就绪由编排层负责：dev compose 使用 `pg_isready` 健康检查，`make db-up` 带 `--wait`，数据库可连接后才返回；生产 compose 中后端使用 `depends_on: condition: service_healthy` 等待数据库。
-- 收到停止信号后，HTTP 服务最多等待 5 秒关闭，正在运行的 Agent 最多再跑 15 秒，超时即取消；未完成的执行步骤保留在数据库，重启后恢复，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
+- 收到停止信号后，HTTP 服务最多等待 5 秒关闭，正在运行的 Agent 随信号取消；未完成的执行步骤保留在数据库，重启后恢复，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
 - dev compose 固定项目名 `aether-personal-dev`，避免与其他目录名为 `dev` 的 compose 项目冲突。
 - `.env` 位于 `backend/`，由 Makefile 加载并传给 compose；仓库提供 `backend/.env.example`。
 - 已验证：数据库正常时 `/healthz` 返回 200，停止数据库后返回 503，缺少 `APP_ENV` 时启动报错退出。
