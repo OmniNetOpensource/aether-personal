@@ -62,7 +62,18 @@ export function ChatMessageList({
     navigation.current = null;
     setQuoteTarget(null);
     clearHighlight.current();
-    list.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+    if (messages.length === 0) return;
+    // 先挂载末条消息，等它量完高度再对齐实际页底。用户开始上翻或回看引用时让出滚动控制。
+    list.current?.scrollIntoView({
+      index: messages.length - 1,
+      calculateViewLocation: () => ({ index: 'LAST', align: 'end' }),
+      done: () => {
+        const element = viewport.current;
+        if (element && !browsingHistory.current && !navigation.current) {
+          element.scrollTop = element.scrollHeight;
+        }
+      },
+    });
     if (document.activeElement?.classList.contains('scroll-to-bottom')) {
       viewport.current?.focus({ preventScroll: true });
     }
@@ -242,7 +253,10 @@ export function ChatMessageList({
           className="scroll-to-bottom"
           aria-label="滚动到底部"
           title="滚动到底部"
-          onPointerDown={(event) => event.preventDefault()}
+          onPointerDown={(event) => {
+            // 鼠标按下时保留输入焦点；WebKit 需要触摸的默认行为才能随后发出 click。
+            if (event.pointerType === 'mouse') event.preventDefault();
+          }}
           onClick={scrollToBottom}
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">

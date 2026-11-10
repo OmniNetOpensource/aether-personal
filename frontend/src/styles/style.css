@@ -245,6 +245,10 @@ button.link {
 .message-body {
   display: flow-root;
 }
+/* 让公式中绝对定位的辅助文本也受正文裁切，避免折叠后撑长滚动区域。 */
+.message-body-clip {
+  position: relative;
+}
 .message-body-clip.is-collapsed {
   overflow: clip;
   mask-image: linear-gradient(to bottom, #000 calc(100% - 54px), transparent);
