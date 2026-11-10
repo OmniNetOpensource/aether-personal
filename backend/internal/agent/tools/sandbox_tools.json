@@ -1,0 +1,291 @@
+[
+  {
+    "description": "Execute a shell command. Sessions are managed automatically.",
+    "inputSchema": {
+      "properties": {
+        "cmd": {
+          "description": "Shell command to execute",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Absolute working directory. The response reports the directory the session ended in; pass it back on the next call to keep state in sync.",
+          "type": "string"
+        },
+        "new_session": {
+          "description": "Run in a fresh session instead of the shared default one",
+          "type": "boolean"
+        },
+        "preserve_symlinks": {
+          "description": "Accepted for 1.x compatibility and not acted on: this daemon starts each command in the directory as given",
+          "type": "boolean"
+        },
+        "timeout": {
+          "description": "Timeout in seconds (default 30)",
+          "type": "integer"
+        },
+        "truncate": {
+          "description": "Truncate large output (default true); false returns it whole",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cmd"
+      ],
+      "type": "object"
+    },
+    "name": "sandbox_execute_bash"
+  },
+  {
+    "description": "Execute code in Python or JavaScript runtime.",
+    "inputSchema": {
+      "properties": {
+        "code": {
+          "description": "Code to execute",
+          "type": "string"
+        },
+        "language": {
+          "description": "Programming language ('python', 'javascript')",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Execution timeout in seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "name": "sandbox_execute_code"
+  },
+  {
+    "description": "Unified file system operations tool for agents: read, write, replace, search, find, list, grep, glob.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "read | write | replace | search | find | list | grep | glob",
+          "type": "string"
+        },
+        "append": {
+          "description": "Append instead of overwriting on write",
+          "type": "boolean"
+        },
+        "case_insensitive": {
+          "description": "Case-insensitive grep",
+          "type": "boolean"
+        },
+        "content": {
+          "description": "Content for write, old_str for replace, or the regex for search",
+          "type": "string"
+        },
+        "context_after": {
+          "description": "Lines of trailing grep context",
+          "type": "integer"
+        },
+        "context_before": {
+          "description": "Lines of leading grep context",
+          "type": "integer"
+        },
+        "encoding": {
+          "description": "utf-8 | base64 | raw",
+          "type": "string"
+        },
+        "end_line": {
+          "description": "Line to stop before",
+          "type": "integer"
+        },
+        "exclude": {
+          "description": "Globs to skip for grep/glob",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "file_types": {
+          "description": "Extension filter for list",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files_only": {
+          "description": "Return only files from glob",
+          "type": "boolean"
+        },
+        "fixed_strings": {
+          "description": "Treat the grep pattern as a literal",
+          "type": "boolean"
+        },
+        "include": {
+          "description": "File globs to search in for grep",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include_metadata": {
+          "description": "Include file metadata in glob",
+          "type": "boolean"
+        },
+        "max_results": {
+          "description": "Result cap for grep/glob",
+          "type": "integer"
+        },
+        "path": {
+          "description": "File or directory path",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Pattern for find/grep/glob (glob syntax or regex)",
+          "type": "string"
+        },
+        "recursive": {
+          "description": "Recurse for find/list/grep",
+          "type": "boolean"
+        },
+        "show_hidden": {
+          "description": "Include hidden entries",
+          "type": "boolean"
+        },
+        "start_line": {
+          "description": "First line to read (0-based)",
+          "type": "integer"
+        },
+        "sudo": {
+          "description": "Own created files as root",
+          "type": "boolean"
+        },
+        "target": {
+          "description": "new_str for replace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "sandbox_file_operations"
+  },
+  {
+    "description": "File editor with the str_replace_editor grammar: view, create, str_replace, insert, undo_edit.",
+    "inputSchema": {
+      "properties": {
+        "command": {
+          "description": "view | create | str_replace | insert | undo_edit",
+          "type": "string"
+        },
+        "file_text": {
+          "description": "File content for create",
+          "type": "string"
+        },
+        "insert_line": {
+          "description": "Line number to insert at",
+          "type": "integer"
+        },
+        "new_str": {
+          "description": "Replacement string, or inserted text",
+          "type": "string"
+        },
+        "old_str": {
+          "description": "Original string to replace",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path to operate on",
+          "type": "string"
+        },
+        "replace_mode": {
+          "description": "ALL | FIRST | LAST; omitted requires a unique match",
+          "type": "string"
+        },
+        "view_range": {
+          "description": "Line range for view, [start, end]",
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "command",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "sandbox_str_replace_editor"
+  },
+  {
+    "description": "Get sandbox environment information, version and home directory.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "sandbox_get_context"
+  },
+  {
+    "description": "Get installed packages by language.",
+    "inputSchema": {
+      "properties": {
+        "language": {
+          "description": "python | nodejs; omit for python",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "sandbox_get_packages"
+  },
+  {
+    "description": "Load a skill by name, or list all available skills when name is omitted.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "Skill to load; omit to list every available skill",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "sandbox_load_skill"
+  },
+  {
+    "description": "Get information about browser, like cdp url, viewport size, etc.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "browser_get_info"
+  },
+  {
+    "description": "Capture a full display screenshot, including every browser tab — unlike the page screenshot, which captures only the active tab.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "browser_gui_screenshot"
+  },
+  {
+    "description": "Execute a browser action on the current display. `action_type` decides the other fields. Action types: MOVE_TO, MOVE_REL, CLICK, MOUSE_DOWN, MOUSE_UP, RIGHT_CLICK, DOUBLE_CLICK, DRAG_TO, DRAG_REL, SCROLL, TYPING, PRESS, KEY_DOWN, KEY_UP, HOTKEY, WAIT, SET_CLIPBOARD, WINDOW_ACTIVATE, WINDOW_MINIMIZE, NODE_FOCUS, NODE_INVOKE, NODE_SET_VALUE.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "Action object: `action_type` plus the fields that action type needs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "browser_gui_execute_action"
+  }
+]

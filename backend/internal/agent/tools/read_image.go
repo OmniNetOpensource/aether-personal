@@ -23,6 +23,7 @@ var readImageTool = Tool{
 	Name:               "read_image",
 	Definition:         json.RawMessage(`{"type":"function","function":{"name":"read_image","description":"Read the visual content of one direct HTTP(S) JPEG, PNG, GIF, or WebP URL. Returns the image itself, not webpage text. Use fetch_url for pages.","parameters":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string","description":"The direct image URL"}},"required":["url"]}}}`),
 	OutsideTransaction: true,
+	ContentArray:       true,
 	Execute: func(ctx context.Context, deps Dependencies, _ *database.Queries, userID uuid.UUID, arguments string) (string, error) {
 		return readImage(ctx, deps, userID, json.RawMessage(arguments))
 	},

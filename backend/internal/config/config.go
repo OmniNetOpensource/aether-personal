@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 )
 
 type Config struct {
+	Sandbox              sandbox.Config
 	AdminPasswordSalt    []byte
 	AdminPasswordKey     []byte
 	ServiceEncryptionKey []byte
@@ -85,6 +87,24 @@ func Load() (Config, error) {
 		imageCacheTTL = parsed
 	}
 
+	// 沙箱可暂不配置；一旦调用工具，运行时检查地域、模板和 VPC 是否完整。
+	sandboxTimeout := 10 * time.Minute
+	if value := os.Getenv("SANDBOX_TIMEOUT"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed < time.Minute || parsed > time.Hour {
+			return Config{}, fmt.Errorf("SANDBOX_TIMEOUT must be between 1m and 1h")
+		}
+		sandboxTimeout = parsed
+	}
+	var switches []string
+	for _, value := range strings.Split(os.Getenv("SANDBOX_VSWITCH_IDS"), ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			switches = append(switches, value)
+		}
+	}
+	sandboxConfig := sandbox.Config{Region: strings.TrimSpace(os.Getenv("SANDBOX_REGION")), Template: strings.TrimSpace(os.Getenv("SANDBOX_TEMPLATE")),
+		VPCID: strings.TrimSpace(os.Getenv("SANDBOX_VPC_ID")), SecurityGroupID: strings.TrimSpace(os.Getenv("SANDBOX_SECURITY_GROUP_ID")), VSwitchIDs: switches, Timeout: sandboxTimeout}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -118,6 +138,7 @@ func Load() (Config, error) {
 	}
 
 	return Config{
+		Sandbox:              sandboxConfig,
 		AppEnv:               appEnv,
 		AdminPasswordSalt:    adminPasswordSalt,
 		AdminPasswordKey:     adminPasswordKey,

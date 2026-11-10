@@ -246,5 +246,18 @@ func (s *server) adminTimelineMessage(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "read admin timeline message failed", err)
 		return
 	}
-	writeAdminJSON(w, timelineMessage(message.Role, message.Content, 0))
+	item := timelineMessage(message.Role, message.Content, 0)
+	// 库内图片是私有 OSS 引用；展开时重新签名，避免把过期链接持久化。
+	for index, reference := range item.Images {
+		if !strings.HasPrefix(reference, "oss://") {
+			continue
+		}
+		preview, err := s.images.Preview(ctx, reference)
+		if err != nil {
+			internalError(w, "sign timeline image failed", err)
+			return
+		}
+		item.Images[index] = preview
+	}
+	writeAdminJSON(w, item)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,7 @@ type Dependencies struct {
 	Services     *services.Store
 	HTTPClient   *http.Client
 	Images       *images.Store
+	Sandbox      *sandbox.Store
 }
 
 // Tool 是一条工具登记：模型看到的定义、执行是在事务外还是与回执同一事务，以及调用哪个实现。
@@ -28,11 +30,15 @@ type Tool struct {
 	Definition json.RawMessage
 	// OutsideTransaction 为 true 时在事务外执行，回执单独提交。默认与回执在同一事务里提交。
 	OutsideTransaction bool
-	Execute            func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
+	// Ordered 在同一批次中按模型给出的顺序执行，适用于共享电脑状态的操作。
+	Ordered bool
+	// ContentArray 表示成功结果使用文字和图片组成的内容数组。
+	ContentArray bool
+	Execute      func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
 }
 
 // all 是工具的唯一登记表，顺序即发给模型的顺序。新增工具时在这里登记，并同步 admin.sql 里的已知工具名。
-var all = []Tool{listTasksTool, recordTaskInputTool, updateTaskTool, searchMessageTool, readMessageTool, memoryTool, scheduleTool, searchTool, searchTwitterTool, fetchURLTool, readImageTool}
+var all = append([]Tool{listTasksTool, recordTaskInputTool, updateTaskTool, searchMessageTool, readMessageTool, memoryTool, scheduleTool, searchTool, searchTwitterTool, fetchURLTool, readImageTool}, sandboxTools()...)
 
 // Definitions 返回全部工具的定义，顺序与登记表一致。
 func Definitions() []json.RawMessage {

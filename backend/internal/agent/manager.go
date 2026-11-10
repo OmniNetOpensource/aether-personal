@@ -14,6 +14,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,7 +45,8 @@ func NewManager(pool *pgxpool.Pool, settings config.Config, serviceSettings *ser
 	return &Manager{databasePool: pool, settings: settings, services: serviceSettings,
 		modelClient: &http.Client{Timeout: modelRequestTimeout},
 		toolDeps: tools.Dependencies{DatabasePool: pool, Services: serviceSettings, Images: imageStore,
-			HTTPClient: &http.Client{Timeout: 120 * time.Second}},
+			HTTPClient: &http.Client{Timeout: 120 * time.Second},
+			Sandbox:    sandbox.New(pool, serviceSettings, imageStore, settings.Sandbox)},
 		capacity: capacity, wakeSignal: make(chan struct{}, 1),
 		runners: map[uuid.UUID]*Runner{}, pending: map[uuid.UUID]struct{}{}}
 }

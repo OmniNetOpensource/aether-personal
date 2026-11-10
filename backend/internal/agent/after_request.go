@@ -22,7 +22,7 @@ import (
 // afterRequest 是请求后阶段的入口：err 是本轮在请求前或请求阶段遇到的错误，为空表示拿到了完整回复。
 // 返回值告诉循环主体下一步：本轮完成、原样重来一轮，或结束本次运行；只有失败收尾本身出错才返回错误。
 func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through int64, stepID, replyID uuid.UUID, response chatResponse, retryable bool, err error) (roundEnd, error) {
-	// 成功：回复与步骤同一事务落库，再并行执行回复里的工具；回执齐全后由下一轮按消息尾部继续回复。
+	// 成功：回复与步骤同一事务落库，再执行回复里的工具；回执齐全后由下一轮按消息尾部继续回复。
 	if err == nil {
 		retry.reset()
 		if err := r.saveReply(ctx, stepID, replyID, response); err != nil {
@@ -93,32 +93,49 @@ func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, respo
 	})
 }
 
-// executeToolCalls 并行执行尚无回执的工具，每个调用仅在保存结果时使用连接池；请求后阶段执行刚保存的回复里的工具，
-// 请求前阶段补跑进程中断时没跑完的那批。数据库工具与回执同事务提交；外部调用中断后可能重跑，已保存的回执不会重复执行。
+// executeToolCalls 并行执行独立工具，电脑操作则在一个协程里按模型原始顺序执行。
+// 请求前阶段也复用它补跑缺少回执的调用；外部操作中断后可能重跑，回执保存成功后不会重复执行。
 func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls []toolCall) error {
-	// 全部工具同时开工，每个协程只写自己下标的结果槽，等待结束后按调用顺序取第一个硬错误。
 	toolErrors := make([]error, len(calls))
-	var waitGroup sync.WaitGroup
-	for index, call := range calls {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			// 联网工具在事务外执行，失败转成工具错误回执存下来，让模型下一轮自己修正；批次被取消时不存回执，整批按中断处理。
-			if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
-				result, err := tool.Execute(ctx, r.toolDeps, nil, r.userID, call.Function.Arguments)
-				if err != nil {
-					if ctx.Err() != nil {
-						toolErrors[index] = err
-						return
-					}
-					result = "Error: " + err.Error()
+	// 每个执行单元独占自己的结果槽，数据库连接仅在短事务期间使用。
+	execute := func(index int) {
+		call := calls[index]
+		if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
+			result, err := tool.Execute(ctx, r.toolDeps, nil, r.userID, call.Function.Arguments)
+			if err != nil {
+				if ctx.Err() != nil {
+					toolErrors[index] = err
+					return
 				}
-				toolErrors[index] = r.saveToolResult(ctx, stepID, call, result)
-				return
+				result = "Error: " + err.Error()
 			}
-			// 其余工具与回执在同一事务里提交。未登记的名字也走这里，回执说明该工具不可用。
-			toolErrors[index] = r.executeDatabaseToolAndSaveResult(ctx, stepID, call)
-		}()
+			toolErrors[index] = r.saveToolResult(ctx, stepID, call, result)
+			return
+		}
+		toolErrors[index] = r.executeDatabaseToolAndSaveResult(ctx, stepID, call)
+	}
+	var waitGroup sync.WaitGroup
+	ordered := make([]int, 0, len(calls))
+	for index, call := range calls {
+		if tool, ok := tools.ByName(call.Function.Name); ok && tool.Ordered {
+			ordered = append(ordered, index)
+			continue
+		}
+		waitGroup.Go(func() { execute(index) })
+	}
+	// 先保留原始下标再启动唯一电脑队列；不能用多个协程抢锁，否则执行顺序仍不确定。
+	if len(ordered) > 0 {
+		waitGroup.Go(func() {
+			for _, index := range ordered {
+				if ctx.Err() != nil {
+					return
+				}
+				execute(index)
+				if toolErrors[index] != nil {
+					return
+				}
+			}
+		})
 	}
 	waitGroup.Wait()
 	if ctx.Err() != nil {
@@ -133,11 +150,11 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。
-// read_image 成功时结果是内容数组：库里保存文本和 oss:// 图片段，其他工具的结果仍是字符串。
+// 带 ContentArray 的工具成功时保存文本与 oss:// 图片段，工具错误和普通回执仍是字符串。
 func toolResultContent(call toolCall, result string) ([]byte, error) {
 	var content any = result
 	trimmed := strings.TrimSpace(result)
-	if call.Function.Name == "read_image" && strings.HasPrefix(trimmed, "[") {
+	if tool, ok := tools.ByName(call.Function.Name); ok && tool.ContentArray && strings.HasPrefix(trimmed, "[") {
 		content = json.RawMessage(trimmed)
 	}
 	return json.Marshal(map[string]any{"role": "tool", "tool_call_id": call.ID, "content": content})
