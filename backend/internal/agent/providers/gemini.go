@@ -272,11 +272,8 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 		_ = json.Unmarshal(raw, &tool)
 		declarations = append(declarations, map[string]any{"name": tool.Function.Name, "description": tool.Function.Description, "parametersJsonSchema": tool.Function.Parameters})
 	}
-	// 目录有最大输出能力时用满；未知时省略参数，让供应商使用模型自身的默认额度。
+	// 省略输出额度参数，普通回复与压缩都由供应商决定额度。
 	generation := map[string]any{}
-	if prepared.MaxTokens > 0 {
-		generation["maxOutputTokens"] = prepared.MaxTokens
-	}
 	// 对齐 Aether 的推理强度；压缩和动态摘要沿用共用请求指定的低强度。
 	model := strings.TrimPrefix(prepared.Model, "ikun:")
 	if strings.HasPrefix(model, "gemini-3") || strings.HasPrefix(model, "gemini-4") {

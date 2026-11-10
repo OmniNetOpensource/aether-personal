@@ -5,7 +5,6 @@ package modelsettings
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
@@ -13,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Settings 分别记录主对话与压缩的模型能力：OpenRouter 省略输出额度，ikun 模型使用已知最大值；空压缩模型表示跟随 Main。
+// Settings 分别记录主对话与压缩的模型及输入容量；输出额度统一由供应商决定，空压缩模型表示跟随 Main。
 // 三个 IdleMinutes 是用户最近一条消息之后多久，调度器依次投记忆整理、近期跟进与未知的未知触发。
 type Settings struct {
 	CompactAtTokens            int32      `json:"compact_at_tokens"`
@@ -21,8 +20,6 @@ type Settings struct {
 	RecentFollowupIdleMinutes  int32      `json:"recent_followup_idle_minutes"`
 	UnknownUnknownsIdleMinutes int32      `json:"unknown_unknowns_idle_minutes"`
 	MainContextLength          int64      `json:"main_context_length"`
-	EffectiveOutputLimit       int32      `json:"effective_output_limit"`
-	CompactOutputLimit         int32      `json:"compact_output_limit"`
 	CompactContextLength       int64      `json:"compact_context_length"`
 	CompactModel               string     `json:"compact_model"`
 	MainModel                  string     `json:"main_model"`
@@ -51,14 +48,6 @@ func Load(ctx context.Context, queries *database.Queries, defaults config.Config
 		}
 		if row.CompactContextLength != nil {
 			result.CompactContextLength = *row.CompactContextLength
-		}
-		// Claude 的 max_tokens 为必填项，使用目录最大值；OpenRouter 仍省略额度参数。
-		if strings.HasPrefix(result.CompactModel, "ikun:") && row.CompactModelMaxTokens != nil {
-			result.CompactOutputLimit = *row.CompactModelMaxTokens
-		}
-		// OpenRouter 省略 max_tokens，避免目录最大输出量与当前输入相加超过总上下文容量。
-		if strings.HasPrefix(row.MainModel, "ikun:gemini-") && row.MainModelMaxTokens != nil {
-			result.EffectiveOutputLimit = *row.MainModelMaxTokens
 		}
 		result.UpdatedAt, result.UpdatedBy, result.Source = &row.UpdatedAt, &row.UpdatedBy, "database"
 	}

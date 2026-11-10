@@ -78,7 +78,7 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	if err != nil {
 		return modelRequest{}, err
 	}
-	model, outputLimit, capacity := settings.MainModel, settings.EffectiveOutputLimit, settings.MainContextLength
+	model, capacity := settings.MainModel, settings.MainContextLength
 	rows, err := queries.ListAgentContextRows(ctx, r.userID)
 	if err != nil {
 		return modelRequest{}, err
@@ -107,7 +107,7 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 		reason = "capacity"
 	}
 	if reason == "" {
-		return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
+		return buildAgentRequest(rows, model, taskReminder), nil
 	}
 	// 待压缩范围：消息尾部连续的一段非摘要 user 消息里有用户发来的消息时，这段是还没回复的新输入，保留原文，只压它之前的历史；
 	// 否则（工具续跑）全部压缩。按序号取尾部，所以保留的消息序号都大于摘要覆盖位置。
@@ -135,16 +135,16 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 		}
 	}
 	if through == 0 {
-		return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
+		return buildAgentRequest(rows, model, taskReminder), nil
 	}
 	// 独立模型只用于本次摘要，触发阈值和摘要后的主对话仍由 Main 模型决定。
-	compactModel, compactOutputLimit := model, outputLimit
+	compactModel := model
 	if settings.CompactModel != "" {
-		compactModel, compactOutputLimit = settings.CompactModel, settings.CompactOutputLimit
+		compactModel = settings.CompactModel
 	}
 	// 工具定义与普通请求相同，由各渠道按同一套转换发出，前缀因此与普通请求一致；tool_choice=none 只禁止调用，不删除定义。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
-	summaryRequest := modelRequest{Model: compactModel, Messages: compactMessages, Tools: tools.Definitions(), MaxTokens: compactOutputLimit, ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
+	summaryRequest := modelRequest{Model: compactModel, Messages: compactMessages, Tools: tools.Definitions(), ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
 	// 先登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
 	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: compactModel})
 	if err != nil {
@@ -193,7 +193,7 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return buildAgentRequest(rows, model, outputLimit, taskReminder), nil
+	return buildAgentRequest(rows, model, taskReminder), nil
 }
 
 // silentToolRoundsBeforeReminder 是从最近一条用户消息或 Main 的可见正文算起，连续多少轮只调工具后插入一次进度提醒。
@@ -287,7 +287,7 @@ func buildRequestMessages(rows []database.ListAgentContextRowsRow) []json.RawMes
 
 // buildAgentRequest 组装固定指令与历史，并附上全部工具定义打包成完整请求。
 // taskReminder 为 true 时这一轮由收尾提醒触发，在历史末尾追加一条任务提醒请模型先核对任务状态。
-func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, outputLimit int32, taskReminder bool) modelRequest {
+func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, taskReminder bool) modelRequest {
 	messages := buildRequestMessages(rows)
 	// 任务提醒只存在于这一轮请求里，不落库、不改写已有历史，历史前缀保持逐字不变。
 	if taskReminder {
@@ -298,7 +298,7 @@ func buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, ou
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
 	}
-	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions(), MaxTokens: outputLimit}
+	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: tools.Definitions()}
 }
 
 // buildCompactRequestMessages 复用普通请求的固定指令和历史前缀，包括已读取的工具结果，只在末尾追加压缩要求。

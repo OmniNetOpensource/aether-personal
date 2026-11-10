@@ -161,11 +161,7 @@ export function ModelSettingsPage({
         <div className="eyebrow teal">MODEL ROUTING</div>
         <h2>选择对话与压缩模型</h2>
         <p>应用于所有用户。配置保存后立即生效，服务重启后继续保留；正在执行的请求会正常完成。</p>
-        <p>
-          {settings.effective_output_limit > 0
-            ? `输出使用模型最大额度：${formatNumber(settings.effective_output_limit)} Token（包含推理 Token）。`
-            : '输出额度由供应商决定，应用不发送输出限制参数。'}
-        </p>
+        <p>输出额度由供应商决定，应用不发送输出限制参数。</p>
         <div className="model-config-meta">
           <span className="pill">{settings.source === 'database' ? '已保存' : '部署默认'}</span>
           <span>

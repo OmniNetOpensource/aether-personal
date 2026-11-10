@@ -110,10 +110,6 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 			messages = append(messages, content)
 		}
 	}
-	// Claude 要求显式 max_tokens，使用模型目录的最大输出能力，不为摘要另设小额度。
-	if prepared.MaxTokens <= 0 {
-		return OutgoingRequest{}, fmt.Errorf("Claude model maximum output tokens are not configured")
-	}
 	tools := []json.RawMessage{}
 	for _, raw := range prepared.Tools {
 		var tool struct {
@@ -132,10 +128,11 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 		}
 		tools = append(tools, encoded)
 	}
+	// ikun 允许省略 max_tokens，由渠道决定输出额度；Main 与压缩共用此行为。
 	// Main 使用模型默认推理设置并允许工具；压缩沿用统一请求给出的低强度与禁用工具设置。
 	bodyFields := map[string]any{
 		"model": strings.TrimPrefix(prepared.Model, "ikun:"), "messages": messages,
-		"max_tokens": prepared.MaxTokens, "stream": true,
+		"stream": true,
 	}
 	if len(tools) > 0 {
 		choice := "auto"
