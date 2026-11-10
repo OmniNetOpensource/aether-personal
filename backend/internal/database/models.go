@@ -114,6 +114,16 @@ type ModelSetting struct {
 	UnknownUnknownsIdleMinutes int32
 }
 
+type SandboxWorkspace struct {
+	UserID          uuid.UUID
+	ServerAddr      string
+	RoleArn         string
+	SandboxID       *string
+	TokenCiphertext []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
 type Schedule struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
