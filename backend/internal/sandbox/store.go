@@ -70,7 +70,8 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 	var token string
 	if workspace.SandboxID != nil {
 		instance, err = client.ConnectSandbox(ctx, *workspace.SandboxID, seconds)
-		var missing *e2b.SandboxNotFoundError
+		// ConnectSandbox 把控制面 404 返回为 NotFoundError；这里只将实例不存在视为重建条件。
+		var missing *e2b.NotFoundError
 		if err != nil && !errors.As(err, &missing) {
 			return nil, "", err
 		}
