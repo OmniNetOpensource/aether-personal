@@ -11,13 +11,10 @@ export function ChatPage({ controller }: { controller: ChatController }) {
   const composer = useRef<MessageComposerHandle | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [latestRequest, setLatestRequest] = useState(0);
-  // 只有人已经停在底部时才跟着新内容走。发送本身不把正在看更早消息的人拉回去。
-  const stickToBottom = useRef(true);
   return (
     <main className="chat-page">
       <ChatMessageList
         controller={controller}
-        stickToBottom={stickToBottom}
         latestRequest={latestRequest}
         onQuote={(quote) => {
           composer.current?.insertQuote(quote);

@@ -134,17 +134,22 @@ button.link {
   width: 24px;
   height: 24px;
 }
-.message-content {
+/* 行内收住气泡外边距，Virtuoso 量到的高度包含消息间距。 */
+.chat-list-row,
+.chat-list-header,
+.chat-list-footer {
+  display: flow-root;
   width: 100%;
   max-width: 1040px;
   margin: 0 auto;
-  padding: 16px 32px calc(22px + var(--composer-height, 90px));
+  padding-inline: 32px;
 }
+.chat-list-header { padding-top: 16px; }
+.chat-list-footer { padding-bottom: calc(22px + var(--composer-height, 90px)); }
 @media (max-width: 699px) {
-  .message-content {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
+  .chat-list-row,
+  .chat-list-header,
+  .chat-list-footer { padding-inline: 16px; }
 }
 .date {
   font-size: 13px;
@@ -176,18 +181,6 @@ button.link {
   background: transparent;
   color: var(--on-forest-muted);
   font-size: 14px;
-}
-/* 行绝对定位后仍要包住气泡和日期的外边距，后面的行才不会叠上来。 */
-.message-virtual {
-  position: relative;
-  width: 100%;
-}
-.message-virtual-row {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flow-root;
 }
 .message-row {
   display: flex;
