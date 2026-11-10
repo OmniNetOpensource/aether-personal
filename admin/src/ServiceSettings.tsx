@@ -1,4 +1,4 @@
-// 本文件是管理看板的服务配置页：各渠道与工具服务独立保存凭证，完整 Key 只用于当次提交、不回显。
+// 本文件是管理看板配置页的服务凭证部分：各渠道与工具服务独立保存凭证，完整 Key 只用于当次提交、不回显。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {

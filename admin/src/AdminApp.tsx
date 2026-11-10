@@ -17,7 +17,7 @@ import { ServiceSettingsPage } from './ServiceSettings.js';
 import { TimelinePage } from './Timeline.js';
 import { Empty } from './ui.js';
 
-type Tab = 'timeline' | 'models' | 'services';
+type Tab = 'timeline' | 'settings';
 
 // TimelineFilters 区分编辑中的条件与已经提交的查询，自动刷新和翻页只使用已提交值。
 interface TimelineFilters {
@@ -30,10 +30,9 @@ const defaultFilters: TimelineFilters = { hours: 24, user: '', model: '', outcom
 
 const tabs: Record<Tab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 收到的输入、推理与工具调用。'],
-  models: ['模型配置', '分别选择对话与压缩模型，从下一次请求生效。'],
-  services: ['服务配置', '管理模型、邮件与联网服务的 API Key，保存后从下一次请求生效。'],
+  settings: ['配置', '选择对话与压缩模型，并管理模型、邮件与联网服务的凭证。'],
 };
-const tabGlyphs: Record<Tab, string> = { timeline: '⋮', models: '⇄', services: '⚙' };
+const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
 
 // AdminApp 是看板根组件：未登录时显示密码登录，登录后显示侧边栏外壳与当前页。
 export function AdminApp() {
@@ -53,6 +52,8 @@ export function AdminApp() {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [toast, setToast] = useState('');
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [serviceLoading, setServiceLoading] = useState(false);
 
   const controller = useRef<AbortController | null>(null);
   const generation = useRef(0);
@@ -124,7 +125,7 @@ export function AdminApp() {
 
   // refresh 重新读取当前页数据，并按已提交的小时数重算时间窗口。
   const refresh = useCallback(async () => {
-    if (tabRef.current === 'models' || tabRef.current === 'services') {
+    if (tabRef.current === 'settings') {
       setSettingsRefreshKey((value) => value + 1);
       return;
     }
@@ -205,8 +206,7 @@ export function AdminApp() {
     const timer = setInterval(() => {
       if (
         document.hidden ||
-        tabRef.current === 'models' ||
-        tabRef.current === 'services' ||
+        tabRef.current === 'settings' ||
         browsingRef.current ||
         selectedCall ||
         document.querySelector('input:focus')
@@ -296,8 +296,13 @@ export function AdminApp() {
   }
 
   const onSettingsUpdated = useCallback((text: string) => setUpdatedText(text), []);
-  const onSettingsLoading = useCallback((loading: boolean) => {
-    setRefreshing(loading);
+  // 模型与凭证各自报告加载；刷新按钮等到两段都结束，避免先完成的一段把状态清掉。
+  const onModelLoading = useCallback((loading: boolean) => {
+    setModelLoading(loading);
+    if (!loading) setLoadError('');
+  }, []);
+  const onServiceLoading = useCallback((loading: boolean) => {
+    setServiceLoading(loading);
     if (!loading) setLoadError('');
   }, []);
 
@@ -322,7 +327,8 @@ export function AdminApp() {
       />
     );
 
-  const settingsPage = tab === 'models' || tab === 'services';
+  const settingsPage = tab === 'settings';
+  const pageBusy = settingsPage ? modelLoading || serviceLoading : refreshing;
 
   return (
     <div className="layout">
@@ -348,7 +354,7 @@ export function AdminApp() {
           ))}
         </nav>
         <div className="sidebar-note">
-          <span className="live-dot" /> 管理员工作空间<p>调用观测与模型配置</p>
+          <span className="live-dot" /> 管理员工作空间<p>调用观测与配置</p>
         </div>
         <div className="account">
           <div className="avatar">{me.name.charAt(0).toUpperCase()}</div>
@@ -380,8 +386,8 @@ export function AdminApp() {
             </div>
             <div className="refresh-group">
               <span id="updated">{browsingPages ? '分页浏览中 / 手动刷新' : `${updatedText}`}</span>
-              <button type="button" className="button" disabled={refreshing} onClick={() => void refresh()}>
-                {refreshing ? '↻ 更新中' : '↻ 刷新'}
+              <button type="button" className="button" disabled={pageBusy} onClick={() => void refresh()}>
+                {pageBusy ? '↻ 更新中' : '↻ 刷新'}
               </button>
             </div>
           </div>
@@ -450,7 +456,7 @@ export function AdminApp() {
                   <option value="interrupted">中断</option>
                 </select>
               </label>
-              <button className="button primary" type="submit" disabled={refreshing}>
+              <button className="button primary" type="submit" disabled={pageBusy}>
                 查询
               </button>
               <button
@@ -471,22 +477,25 @@ export function AdminApp() {
             </div>
           ) : null}
           <div aria-live="polite">
-            {tab === 'models' ? (
-              <ModelSettingsPage
-                refreshKey={settingsRefreshKey}
-                onUpdated={onSettingsUpdated}
-                onAccessLost={accessLost}
-                onLoadingChange={onSettingsLoading}
-                notify={notify}
-              />
-            ) : tab === 'services' ? (
-              <ServiceSettingsPage
-                refreshKey={settingsRefreshKey}
-                onUpdated={onSettingsUpdated}
-                onAccessLost={accessLost}
-                onLoadingChange={onSettingsLoading}
-                notify={notify}
-              />
+            {tab === 'settings' ? (
+              <>
+                <ModelSettingsPage
+                  refreshKey={settingsRefreshKey}
+                  onUpdated={onSettingsUpdated}
+                  onAccessLost={accessLost}
+                  onLoadingChange={onModelLoading}
+                  notify={notify}
+                />
+                <div className="settings-services">
+                  <ServiceSettingsPage
+                    refreshKey={settingsRefreshKey}
+                    onUpdated={onSettingsUpdated}
+                    onAccessLost={accessLost}
+                    onLoadingChange={onServiceLoading}
+                    notify={notify}
+                  />
+                </div>
+              </>
             ) : !snapshot ? (
               loadError ? (
                 <Empty title="暂时没有读取到数据" description="恢复连接后点击右上角刷新。" />
@@ -595,7 +604,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
           </div>
         </div>
         <div className="login-foot">
-          ADMIN CONSOLE <span>调用观测 · 模型配置</span>
+          ADMIN CONSOLE <span>调用观测 · 配置</span>
         </div>
       </div>
       <div className="login-form-wrap">
@@ -622,7 +631,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
           <button className="button primary" type="submit" disabled={submitting}>
             进入看板 <span>→</span>
           </button>
-          <p className="login-note">查看模型调用、请求与响应 JSON，并管理模型配置。</p>
+          <p className="login-note">查看模型调用、请求与响应 JSON，并管理模型与服务配置。</p>
         </form>
       </div>
     </main>

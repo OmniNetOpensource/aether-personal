@@ -1,4 +1,4 @@
-/* 本文件是管理看板的全局样式：定义看板布局、调用观测、模型选择与服务凭证配置的界面外观。 */
+/* 本文件是管理看板的全局样式：定义看板布局、调用观测，以及同一配置页上模型选择与服务凭证的界面外观。 */
 :root {
   color-scheme: light;
   --forest: #204b32;
@@ -1440,7 +1440,10 @@ dialog::backdrop {
 
 .compact-settings { margin-top:22px; }
 
-/* 服务配置沿用模型卡片的布局，状态与操作保持可见，长接口地址不撑开页面。 */
+/* 配置页下半部分是服务凭证，与上方模型表单分开保存，用分隔线标明两段。 */
+.settings-services { margin-top: 36px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+/* 服务凭证沿用模型卡片的布局，状态与操作保持可见，长接口地址不撑开页面。 */
 .service-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .service-heading h3 { font-size:18px; font-weight:550; }
 .service-status { padding:5px 9px; border-radius:5px; font-size:11px; color:var(--text-muted); background:var(--surface-muted); }
