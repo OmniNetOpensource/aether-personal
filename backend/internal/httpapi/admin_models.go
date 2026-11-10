@@ -22,7 +22,6 @@ import (
 )
 
 type adminModel struct {
-	CompactOnly         bool   `json:"compact_only"`
 	MaxCompletionTokens *int32 `json:"max_completion_tokens"`
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
@@ -196,7 +195,7 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	catalog := s.availableModels(ctx)
 	models := catalog.Items
-	// 两种用途各自校验：Claude 当前只做压缩，空压缩模型明确表示跟随 Main。
+	// 两种用途均从实时目录选择；空压缩模型明确表示跟随 Main。
 	for _, selected := range []struct {
 		id      string
 		compact bool
@@ -205,7 +204,7 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		if slices.ContainsFunc(models, func(model adminModel) bool {
-			return model.ID == selected.id && (selected.compact || !model.CompactOnly)
+			return model.ID == selected.id
 		}) {
 			continue
 		}

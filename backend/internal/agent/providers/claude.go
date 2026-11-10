@@ -1,4 +1,4 @@
-// 本文件通过 ikun 的 Claude 原生 Messages 接口生成压缩摘要，转换历史文本、图片和工具轨迹，并记录完整流式用量。
+// 本文件适配 ikun Claude 原生 Messages 接口，供 Main 与压缩共用；保留原生内容和思考签名，转换工具调用并记录流式用量。
 
 package providers
 
@@ -13,7 +13,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
-// claudeProvider 仅用于上下文压缩；看板不会把这些模型提供给 Main。
+// claudeProvider 承接 ikun Claude 的普通对话与上下文压缩。
 type claudeProvider struct{}
 
 // Matches 认领带 ikun 渠道前缀的 Claude 模型。
@@ -28,18 +28,25 @@ type claudeMessage struct {
 	Content []json.RawMessage `json:"content"`
 }
 
-// PrepareRequest 只变换协议，不改写历史正文；工具轨迹作为摘要材料，禁止生成新的工具调用。
+// PrepareRequest 转换共用消息与工具定义；同模型的原生内容完整回传，只有压缩请求禁用工具。
 func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
 	messages := []claudeMessage{}
 	for _, raw := range prepared.Messages {
 		var message struct {
-			Role       string            `json:"role"`
-			Content    json.RawMessage   `json:"content"`
-			ToolCalls  []historyToolCall `json:"tool_calls"`
-			ToolCallID string            `json:"tool_call_id"`
+			Role          string            `json:"role"`
+			Content       json.RawMessage   `json:"content"`
+			ToolCalls     []historyToolCall `json:"tool_calls"`
+			ToolCallID    string            `json:"tool_call_id"`
+			ClaudeContent []json.RawMessage `json:"claude_content"`
+			ClaudeModel   string            `json:"claude_model"`
 		}
 		if err := json.Unmarshal(raw, &message); err != nil {
 			return OutgoingRequest{}, fmt.Errorf("decode message for Claude: %w", err)
+		}
+		// 同一模型直接回传原生块，保住思考签名和正文、工具的交错顺序；其他模型的历史只转换共用字段。
+		if message.Role == "assistant" && message.ClaudeModel == prepared.Model && len(message.ClaudeContent) > 0 {
+			messages = append(messages, claudeMessage{Role: "assistant", Content: message.ClaudeContent})
+			continue
 		}
 		content := claudeMessage{Role: message.Role, Content: []json.RawMessage{}}
 		// 共用内容只有文本和已解析为 base64 的图片，不向供应商传 Gemini 原生签名。
@@ -125,12 +132,23 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 		}
 		tools = append(tools, encoded)
 	}
-	body, err := json.Marshal(map[string]any{
+	// Main 使用模型默认推理设置并允许工具；压缩沿用统一请求给出的低强度与禁用工具设置。
+	bodyFields := map[string]any{
 		"model": strings.TrimPrefix(prepared.Model, "ikun:"), "messages": messages,
 		"max_tokens": prepared.MaxTokens, "stream": true,
-		"tools": tools, "tool_choice": map[string]string{"type": "none"},
-		"output_config": map[string]string{"effort": "low"},
-	})
+	}
+	if len(tools) > 0 {
+		choice := "auto"
+		if string(prepared.ToolChoice) == `"none"` {
+			choice = "none"
+		}
+		bodyFields["tools"] = tools
+		bodyFields["tool_choice"] = map[string]string{"type": choice}
+	}
+	if effort, ok := prepared.Reasoning["effort"].(string); ok {
+		bodyFields["output_config"] = map[string]string{"effort": effort}
+	}
+	body, err := json.Marshal(bodyFields)
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
@@ -145,26 +163,43 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
-// HasOutput 忽略思考和心跳；压缩不会建立用户可见的回复占位。
+// HasOutput 在首段正文或工具调用到达时占位；思考与心跳仍允许新输入取消请求。
 func (claudeProvider) HasOutput(payload []byte) bool {
 	var event struct {
+		Type         string `json:"type"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content_block"`
 		Delta struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"delta"`
 	}
-	return json.Unmarshal(payload, &event) == nil && event.Delta.Type == "text_delta" && strings.TrimSpace(event.Delta.Text) != ""
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	return (event.Type == "content_block_start" && (event.ContentBlock.Type == "tool_use" || (event.ContentBlock.Type == "text" && strings.TrimSpace(event.ContentBlock.Text) != ""))) ||
+		(event.Type == "content_block_delta" && event.Delta.Type == "text_delta" && strings.TrimSpace(event.Delta.Text) != "")
 }
 
-// DecodeStream 只接受完整结束的摘要，保留输入、缓存命中和输出用量；流被截断时不保存半份摘要。
-func (claudeProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool, error) {
+// claudeStreamBlock 累积一个内容块；原始字段保留供应商元数据，四个 Builder 分别承接对应的流式增量。
+type claudeStreamBlock struct {
+	fields                           map[string]json.RawMessage
+	text, thinking, signature, input strings.Builder
+}
+
+// DecodeStream 按内容块拼回正文、思考签名与工具参数，原生块用于下一轮完整续接，共用字段供运行时执行与看板读取。
+func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Response, bool, error) {
 	var response Response
-	var text strings.Builder
+	// 原始字段保留供应商附加元数据；增量用 Builder 累积，避免每个分片都复制整段正文或签名。
+	var blocks []*claudeStreamBlock
 	var stopReason string
 	var stopped bool
 	for _, payload := range payloads {
 		var event struct {
 			Type    string `json:"type"`
+			Index   int    `json:"index"`
 			Message struct {
 				ID    string `json:"id"`
 				Model string `json:"model"`
@@ -172,16 +207,17 @@ func (claudeProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool
 					Input         *int32 `json:"input_tokens"`
 					CacheRead     int32  `json:"cache_read_input_tokens"`
 					CacheCreation int32  `json:"cache_creation_input_tokens"`
+					Output        *int32 `json:"output_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
-			ContentBlock struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content_block"`
-			Delta struct {
-				Type       string `json:"type"`
-				Text       string `json:"text"`
-				StopReason string `json:"stop_reason"`
+			ContentBlock map[string]json.RawMessage `json:"content_block"`
+			Delta        struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
+				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage struct {
 				Output *int32 `json:"output_tokens"`
@@ -196,6 +232,7 @@ func (claudeProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool
 		switch event.Type {
 		case "message_start":
 			response.ID, response.Model = event.Message.ID, event.Message.Model
+			response.Usage.CompletionTokens = event.Message.Usage.Output
 			if usage := event.Message.Usage; usage.Input != nil {
 				total := int64(*usage.Input) + int64(usage.CacheRead) + int64(usage.CacheCreation)
 				if total < 0 || total > 2147483647 {
@@ -205,15 +242,34 @@ func (claudeProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool
 				response.Usage.PromptTokens = &value
 			}
 		case "content_block_start":
-			if event.ContentBlock.Type == "tool_use" {
-				return response, false, fmt.Errorf("Claude returned a tool call while compaction tools are disabled")
+			if event.Index != len(blocks) || event.ContentBlock == nil {
+				return response, false, fmt.Errorf("Claude returned an invalid content block index")
 			}
-			if event.ContentBlock.Type == "text" {
-				text.WriteString(event.ContentBlock.Text)
+			blocks = append(blocks, &claudeStreamBlock{fields: event.ContentBlock})
+			block := blocks[event.Index]
+			for field, builder := range map[string]*strings.Builder{"text": &block.text, "thinking": &block.thinking, "signature": &block.signature} {
+				if raw, ok := block.fields[field]; ok {
+					var value string
+					if err := json.Unmarshal(raw, &value); err != nil {
+						return response, false, err
+					}
+					builder.WriteString(value)
+				}
 			}
 		case "content_block_delta":
-			if event.Delta.Type == "text_delta" {
-				text.WriteString(event.Delta.Text)
+			if event.Index < 0 || event.Index >= len(blocks) {
+				return response, false, fmt.Errorf("Claude delta has no content block")
+			}
+			block := blocks[event.Index]
+			switch event.Delta.Type {
+			case "text_delta":
+				block.text.WriteString(event.Delta.Text)
+			case "thinking_delta":
+				block.thinking.WriteString(event.Delta.Thinking)
+			case "signature_delta":
+				block.signature.WriteString(event.Delta.Signature)
+			case "input_json_delta":
+				block.input.WriteString(event.Delta.PartialJSON)
 			}
 		case "message_delta":
 			if event.Delta.StopReason != "" {
@@ -231,16 +287,77 @@ func (claudeProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool
 	if !stopped {
 		return response, true, fmt.Errorf("Claude stream ended before completion")
 	}
-	if stopReason != "end_turn" && stopReason != "stop_sequence" {
+	if stopReason != "end_turn" && stopReason != "stop_sequence" && stopReason != "tool_use" && stopReason != "refusal" {
 		return response, false, fmt.Errorf("Claude response did not complete (stop reason: %s)", stopReason)
 	}
-	if strings.TrimSpace(text.String()) == "" {
+	// 原生块和共用字段来自同一份完整响应；部分生成的工具参数不能进入执行阶段。
+	var text, reasoning strings.Builder
+	nativeContent := []json.RawMessage{}
+	toolCalls := []map[string]any{}
+	for index := range blocks {
+		block := blocks[index]
+		for field, builder := range map[string]*strings.Builder{"text": &block.text, "thinking": &block.thinking, "signature": &block.signature} {
+			if _, ok := block.fields[field]; ok || builder.Len() > 0 {
+				block.fields[field], _ = json.Marshal(builder.String())
+			}
+		}
+		if block.input.Len() > 0 {
+			block.fields["input"] = json.RawMessage(block.input.String())
+		}
+		raw, err := json.Marshal(block.fields)
+		if err != nil {
+			return response, false, fmt.Errorf("encode Claude content block: %w", err)
+		}
+		nativeContent = append(nativeContent, raw)
+		var content struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.Unmarshal(raw, &content); err != nil {
+			return response, false, err
+		}
+		switch content.Type {
+		case "text":
+			text.WriteString(block.text.String())
+		case "thinking":
+			reasoning.WriteString(block.thinking.String())
+		case "tool_use":
+			if string(prepared.ToolChoice) == `"none"` {
+				return response, false, fmt.Errorf("Claude returned a tool call while compaction tools are disabled")
+			}
+			var arguments map[string]json.RawMessage
+			if err := json.Unmarshal(content.Input, &arguments); err != nil || arguments == nil || content.ID == "" || content.Name == "" {
+				return response, false, fmt.Errorf("Claude returned an invalid tool call")
+			}
+			toolCalls = append(toolCalls, map[string]any{
+				"id": content.ID, "type": "function",
+				"function": map[string]string{"name": content.Name, "arguments": string(content.Input)},
+			})
+		}
+	}
+	if string(prepared.ToolChoice) == `"none"` && strings.TrimSpace(text.String()) == "" {
 		return response, false, fmt.Errorf("Claude returned no summary text")
 	}
-	message, _ := json.Marshal(map[string]string{"role": "assistant", "content": text.String()})
+	messageFields := map[string]any{
+		"role": "assistant", "content": text.String(), "tool_calls": toolCalls,
+		"claude_content": nativeContent, "claude_model": prepared.Model,
+	}
+	if reasoning.Len() > 0 {
+		messageFields["reasoning"] = reasoning.String()
+	}
+	message, err := json.Marshal(messageFields)
+	if err != nil {
+		return response, false, err
+	}
+	finishReason := "stop"
+	if stopReason == "tool_use" {
+		finishReason = "tool_calls"
+	}
 	response.Choices = append(response.Choices, struct {
 		Message      json.RawMessage `json:"message"`
 		FinishReason string          `json:"finish_reason"`
-	}{message, "stop"})
+	}{message, finishReason})
 	return response, false, nil
 }

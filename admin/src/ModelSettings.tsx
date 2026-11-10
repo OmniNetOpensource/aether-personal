@@ -100,7 +100,7 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (saving || !settings || !catalog || !draft) return;
     setSaveError('');
-    if (!catalog.items.some((model) => model.id === draft.main_model && !model.compact_only) ||
+    if (!catalog.items.some((model) => model.id === draft.main_model) ||
         (draft.compact_model !== '' && !catalog.items.some((model) => model.id === draft.compact_model))) {
       setSaveError('请选择目录中的完整模型 ID，或刷新目录后重试。');
       return;
@@ -204,7 +204,7 @@ export function ModelSettingsPage({
                 onChange={(event) => setDraft({ ...draft, main_model: event.target.value.trim() })}
               />
               <datalist id="main-model-list">
-                {catalog.items.filter((model) => !model.compact_only).map((model) => (
+                {catalog.items.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name}
                   </option>
@@ -315,7 +315,7 @@ export function ModelSettingsPage({
         </div>
       </form>
       <p className="model-catalog-note">
-        {`来自已配置的 OpenRouter、ikun Gemini 与 ikun Claude 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。ikun Claude 当前只用于压缩。目录不保证即时可用性，渠道未返回的费用显示未知。`}
+        {`来自已配置的 OpenRouter、ikun Gemini 与 ikun Claude 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。ikun Claude 可用于 Main 与压缩。目录不保证即时可用性，渠道未返回的费用显示未知。`}
       </p>
     </>
   );

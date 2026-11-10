@@ -41,7 +41,7 @@ function fail(response, status, message) {
 async function proxy(request, response, url) {
   const path = url.pathname.slice(4);
   const callDetail = /^\/admin\/(calls|timeline\/messages)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
-  const serviceConfig = /^\/admin\/services\/(openrouter|ikun_gemini|resend|serper|parallel|everyinfra|aliyun_oss)$/.test(path);
+  const serviceConfig = /^\/admin\/services\/(openrouter|ikun_gemini|ikun_claude|resend|serper|parallel|everyinfra|aliyun_oss)$/.test(path);
   const methods = apiMethods.get(path) || (callDetail ? new Set(['GET']) : serviceConfig ? new Set(['PUT']) : null);
   // 请求详情、时间线与消息全文可能超过缓冲上限，直接流式转发。
   const streamed = callDetail || path === '/admin/timeline';

@@ -191,7 +191,6 @@ export interface ModelSettings {
 }
 
 export interface CatalogModel {
-  compact_only: boolean;
   id: string;
   name: string;
   provider: string;

@@ -1,4 +1,4 @@
-// 本文件读取 ikun Claude 可用模型目录，提供独立压缩模型及其输入、输出容量，不把官方价格当作渠道价格。
+// 本文件读取 ikun Claude 可用模型目录，提供 Main 与压缩模型及其输入、输出容量，不把官方价格当作渠道价格。
 
 package httpapi
 
@@ -15,7 +15,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
-// ikunClaudeModels 只提供 Claude 压缩候选；目录缺少能力字段时，只有已核对官方容量的 Opus 型号可以使用。
+// ikunClaudeModels 提供 Claude 模型候选；目录缺少能力字段时，只有已核对官方容量的 Opus 型号可以使用。
 func (s *server) ikunClaudeModels(ctx context.Context, credentials services.Settings) ([]adminModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -84,7 +84,7 @@ func (s *server) ikunClaudeModels(ctx context.Context, credentials services.Sett
 				entry.Name = entry.ID
 			}
 			limit := entry.OutputTokens
-			models = append(models, adminModel{ID: "ikun:" + entry.ID, Name: entry.Name + " · ikun", Provider: "ikun Claude", ContextLength: entry.InputTokens, MaxCompletionTokens: &limit, CompactOnly: true})
+			models = append(models, adminModel{ID: "ikun:" + entry.ID, Name: entry.Name + " · ikun", Provider: "ikun Claude", ContextLength: entry.InputTokens, MaxCompletionTokens: &limit})
 		}
 		if !page.HasMore {
 			break

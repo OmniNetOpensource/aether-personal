@@ -15,7 +15,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// openRouterProvider 承接除 ikun Gemini 之外的全部模型，是注册表里的兜底渠道。
+// openRouterProvider 承接除已认领的 ikun 模型之外的全部模型，是注册表里的兜底渠道。
 type openRouterProvider struct{}
 
 // Matches 恒为真：注册表按顺序询问，轮到这里的模型都归 OpenRouter。
@@ -24,7 +24,7 @@ func (openRouterProvider) Matches(string) bool { return true }
 // Service 返回看板中保存 OpenRouter 凭证的服务名。
 func (openRouterProvider) Service() string { return services.OpenRouter }
 
-// PrepareRequest 把统一请求序列化为 OpenRouter 的流式聊天请求，并剥掉只属于 Gemini 的原生协议字段。
+// PrepareRequest 把统一请求序列化为 OpenRouter 的流式聊天请求，并剥掉只属于其他渠道的原生协议字段。
 func (openRouterProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
 	// 要求流式返回，并在末尾分片带上用量；用量拿不到时记空，不阻断回复。
 	prepared.Stream = true
@@ -33,17 +33,19 @@ func (openRouterProvider) PrepareRequest(ctx context.Context, credentials servic
 	if strings.HasPrefix(prepared.Model, "google/gemini-") && prepared.Reasoning == nil {
 		prepared.Reasoning = map[string]any{"effort": "high", "exclude": false}
 	}
-	// 从 Gemini 切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
+	// 从 ikun 原生渠道切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
 	messages := make([]json.RawMessage, len(prepared.Messages))
 	copy(messages, prepared.Messages)
 	for index, raw := range messages {
-		if !bytes.Contains(raw, []byte(`"gemini_content"`)) {
+		if !bytes.Contains(raw, []byte(`"gemini_content"`)) && !bytes.Contains(raw, []byte(`"claude_content"`)) {
 			continue
 		}
 		var message map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &message)
 		delete(message, "gemini_content")
 		delete(message, "gemini_model")
+		delete(message, "claude_content")
+		delete(message, "claude_model")
 		messages[index], _ = json.Marshal(message)
 	}
 	prepared.Messages = messages
