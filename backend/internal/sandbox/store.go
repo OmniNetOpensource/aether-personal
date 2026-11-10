@@ -49,18 +49,7 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 	if err := ValidateBinding(s.config.Region, workspace.ServerAddr, workspace.RoleArn); err != nil {
 		return nil, "", err
 	}
-	settings, err := s.services.Load(ctx, services.AliyunFC)
-	if err != nil {
-		return nil, "", err
-	}
-	// 显式覆盖 SDK 的凭证、地域和调试默认值；旧数据面地址不能悄悄改变访问目标。
-	if os.Getenv("E2B_SANDBOX_URL") != "" {
-		return nil, "", errors.New("remove E2B_SANDBOX_URL; sandbox endpoints are assigned by FC")
-	}
-	domain := s.config.Region + ".e2b.fc.aliyuncs.com"
-	client, err := e2b.NewClient(e2b.WithAPIKey(settings.APIKey), e2b.WithValidateAPIKey(true), e2b.WithDomain(domain),
-		e2b.WithAPIURL("https://api."+domain), e2b.WithDebug(false), e2b.WithAccessToken(""),
-		e2b.WithRequestTimeout(90*time.Second), e2b.WithHTTPClient(&http.Client{Timeout: 90 * time.Second}))
+	client, err := s.client(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -83,7 +72,8 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 		}
 	}
 	// 计算实例可以丢弃，AP 与角色绑定保持不变；新实例仍使用 UID 1000 读写同一个挂载。
-	if instance == nil {
+	created := instance == nil
+	if created {
 		token = rand.Text()
 		storage, err := json.Marshal(map[string]any{"userID": 1000, "groupID": 1000, "mountPoints": []map[string]string{{"serverAddr": workspace.ServerAddr, "mountDir": "/mnt/workspace"}}})
 		if err != nil {
@@ -95,20 +85,27 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 		}
 		public := false
 		instance, err = client.CreateSandbox(ctx, e2b.WithTemplate(s.config.Template), e2b.WithTimeout(seconds), e2b.WithSecure(true),
-			e2b.WithLifecycle(e2b.SandboxLifecycle{OnTimeout: "pause", AutoResume: true}),
+			e2b.WithLifecycle(e2b.SandboxLifecycle{OnTimeout: "pause", AutoResume: false}),
 			e2b.WithNetwork(e2b.SandboxNetworkOpts{AllowPublicTraffic: &public}),
-			e2b.WithMetadata(map[string]string{"aether.user_id": userID.String(), "fc.sandbox.storage.agenticfs": string(storage), "fc.sandbox.network.vpc": string(network), "fc.sandbox.auth.role": workspace.RoleArn}))
+			e2b.WithMetadata(map[string]string{"aether.user_id": userID.String(), "aether.desktop_stream": "vnc1", "fc.sandbox.storage.agenticfs": string(storage), "fc.sandbox.network.vpc": string(network), "fc.sandbox.auth.role": workspace.RoleArn}))
 		if err != nil {
 			return nil, "", err
 		}
-		id := instance.SandboxID()
-		if err := s.queries.SaveSandboxInstance(ctx, database.SaveSandboxInstanceParams{UserID: userID, SandboxID: &id, TokenCiphertext: s.services.EncryptSecret("sandbox:"+userID.String(), token)}); err != nil {
-			// 尚未登记的实例不能被下一次调用找到，保存失败时立即释放，清理错误一并向上传递。
-			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			_, killErr := client.KillSandbox(cleanup, id)
-			return nil, "", errors.Join(err, killErr)
+	}
+	// 令牌只由正常的创建／连接路径更新；监控端读取密文，不调用会恢复实例的 ConnectSandbox。
+	id := instance.SandboxID()
+	if err := s.queries.SaveSandboxInstance(ctx, database.SaveSandboxInstanceParams{
+		UserID: userID, SandboxID: &id, TokenCiphertext: s.services.EncryptSecret("sandbox:"+userID.String(), token),
+		TrafficTokenCiphertext: s.services.EncryptSecret("sandbox-traffic:"+userID.String(), instance.TrafficAccessToken()),
+	}); err != nil {
+		if !created {
+			return nil, "", err
 		}
+		// 尚未登记的实例不能被下一次调用找到，保存失败时立即释放，清理错误一并向上传递。
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_, killErr := client.KillSandbox(cleanup, id)
+		return nil, "", errors.Join(err, killErr)
 	}
 	result, err := instance.Commands.Run(ctx, "/opt/aether/start.sh", e2b.WithCommandUser("user"),
 		e2b.WithCommandCwd("/mnt/workspace"), e2b.WithCommandEnv("AIO_API_KEY", token),
@@ -120,4 +117,20 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 		return nil, "", fmt.Errorf("workspace services exited with code %d: %s", result.ExitCode, result.Stderr)
 	}
 	return instance, token, nil
+}
+
+// client 为工具执行和只读监控创建同地域客户端；凭证只从加密服务设置读取。
+func (s *Store) client(ctx context.Context) (*e2b.Client, error) {
+	settings, err := s.services.Load(ctx, services.AliyunFC)
+	if err != nil {
+		return nil, err
+	}
+	// 旧数据面调试地址不能悄悄改变生产访问目标。
+	if os.Getenv("E2B_SANDBOX_URL") != "" {
+		return nil, errors.New("remove E2B_SANDBOX_URL; sandbox endpoints are assigned by FC")
+	}
+	domain := s.config.Region + ".e2b.fc.aliyuncs.com"
+	return e2b.NewClient(e2b.WithAPIKey(settings.APIKey), e2b.WithValidateAPIKey(true), e2b.WithDomain(domain),
+		e2b.WithAPIURL("https://api."+domain), e2b.WithDebug(false), e2b.WithAccessToken(""),
+		e2b.WithRequestTimeout(90*time.Second), e2b.WithHTTPClient(&http.Client{Timeout: 90 * time.Second}))
 }

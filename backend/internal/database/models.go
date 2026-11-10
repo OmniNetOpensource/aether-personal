@@ -115,13 +115,14 @@ type ModelSetting struct {
 }
 
 type SandboxWorkspace struct {
-	UserID          uuid.UUID
-	ServerAddr      string
-	RoleArn         string
-	SandboxID       *string
-	TokenCiphertext []byte
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	UserID                 uuid.UUID
+	ServerAddr             string
+	RoleArn                string
+	SandboxID              *string
+	TokenCiphertext        []byte
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	TrafficTokenCiphertext []byte
 }
 
 type Schedule struct {

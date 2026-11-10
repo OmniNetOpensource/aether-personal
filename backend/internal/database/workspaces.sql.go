@@ -15,7 +15,7 @@ const bindSandboxWorkspace = `-- name: BindSandboxWorkspace :one
 INSERT INTO sandbox_workspaces (user_id, server_addr, role_arn)
 VALUES ($1, $2, $3)
 ON CONFLICT (user_id) DO NOTHING
-RETURNING user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at
+RETURNING user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext
 `
 
 type BindSandboxWorkspaceParams struct {
@@ -35,13 +35,14 @@ func (q *Queries) BindSandboxWorkspace(ctx context.Context, arg BindSandboxWorks
 		&i.TokenCiphertext,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TrafficTokenCiphertext,
 	)
 	return i, err
 }
 
 const getSandboxWorkspace = `-- name: GetSandboxWorkspace :one
 
-SELECT user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at FROM sandbox_workspaces WHERE user_id = $1
+SELECT user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext FROM sandbox_workspaces WHERE user_id = $1
 `
 
 // 本文件保存用户与长期工作区的绑定及当前实例位置；sqlc 生成类型，云端状态由 FC 判断。
@@ -56,23 +57,30 @@ func (q *Queries) GetSandboxWorkspace(ctx context.Context, userID uuid.UUID) (Sa
 		&i.TokenCiphertext,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TrafficTokenCiphertext,
 	)
 	return i, err
 }
 
 const saveSandboxInstance = `-- name: SaveSandboxInstance :exec
 UPDATE sandbox_workspaces
-SET sandbox_id = $2, token_ciphertext = $3, updated_at = now()
+SET sandbox_id = $2, token_ciphertext = $3, traffic_token_ciphertext = $4, updated_at = now()
 WHERE user_id = $1
 `
 
 type SaveSandboxInstanceParams struct {
-	UserID          uuid.UUID
-	SandboxID       *string
-	TokenCiphertext []byte
+	UserID                 uuid.UUID
+	SandboxID              *string
+	TokenCiphertext        []byte
+	TrafficTokenCiphertext []byte
 }
 
 func (q *Queries) SaveSandboxInstance(ctx context.Context, arg SaveSandboxInstanceParams) error {
-	_, err := q.db.Exec(ctx, saveSandboxInstance, arg.UserID, arg.SandboxID, arg.TokenCiphertext)
+	_, err := q.db.Exec(ctx, saveSandboxInstance,
+		arg.UserID,
+		arg.SandboxID,
+		arg.TokenCiphertext,
+		arg.TrafficTokenCiphertext,
+	)
 	return err
 }
