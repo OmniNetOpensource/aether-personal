@@ -20,6 +20,7 @@ const descriptions: Record<string, string> = {
   parallel: '普通网页与 Reddit 正文读取。',
   everyinfra: '微信公众号与小红书搜索、正文读取，以及 X（Twitter）推文搜索。',
   aliyun_oss: '聊天图片保存到私有 Bucket，模型调用前由后端读取并转为 base64。',
+  aliyun_fc: '保存 FC 沙箱 API Key。电脑的地域与模板由部署配置指定，长期工作区由维护者按用户绑定。',
 };
 
 // ServiceSettingsPage 自己负责读取；页面不自动刷新，避免覆盖正在输入的新 Key。上层用 refreshKey 触发手动刷新。

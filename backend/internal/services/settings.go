@@ -28,6 +28,7 @@ const (
 	Parallel   = "parallel"
 	EveryInfra = "everyinfra"
 	AliyunOSS  = "aliyun_oss"
+	AliyunFC   = "aliyun_fc"
 	// ikun Gemini 的默认线路由部署方确定，管理员日常只需填写 Key。
 	DefaultGeminiBaseURL = "https://api.ikuncode.cc"
 	DefaultClaudeBaseURL = "https://api.ikuncode.cc"
@@ -49,6 +50,7 @@ var Definitions = []Definition{
 	{Parallel, "Parallel", "PARALLEL_API_KEY"},
 	{EveryInfra, "EveryInfra", "EVERYINFRA_API_KEY"},
 	{AliyunOSS, "阿里云 OSS", ""},
+	{AliyunFC, "阿里云 FC 沙箱", ""},
 }
 
 // 固定错误让调用者区分未配置、解密失败与输入错误，不把秘密带入日志或 HTTP 响应。
@@ -250,7 +252,7 @@ func validate(service string, configured bool, baseURL, emailFrom, appEnv string
 				return fmt.Errorf("%w: invalid sender address", ErrInvalid)
 			}
 		}
-	case OpenRouter, Serper, Parallel, EveryInfra, AliyunOSS:
+	case OpenRouter, Serper, Parallel, EveryInfra, AliyunOSS, AliyunFC:
 		if baseURL != "" || emailFrom != "" {
 			return fmt.Errorf("%w: unsupported service fields", ErrInvalid)
 		}
@@ -258,4 +260,18 @@ func validate(service string, configured bool, baseURL, emailFrom, appEnv string
 		return fmt.Errorf("%w: unknown service", ErrInvalid)
 	}
 	return nil
+}
+
+// EncryptSecret 使用独立用途作为认证数据，工作区令牌与供应商 Key 不能互相替换。
+func (s *Store) EncryptSecret(purpose, secret string) []byte {
+	return s.cipher.Seal(nil, nil, []byte(secret), []byte(purpose))
+}
+
+// DecryptSecret 只在后端使用秘密前解密，主密钥错误时直接向调用方返回错误。
+func (s *Store) DecryptSecret(purpose string, ciphertext []byte) (string, error) {
+	secret, err := s.cipher.Open(nil, nil, ciphertext, []byte(purpose))
+	if err != nil {
+		return "", ErrUnreadable
+	}
+	return string(secret), nil
 }

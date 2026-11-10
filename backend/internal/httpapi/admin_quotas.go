@@ -88,6 +88,8 @@ func (s *server) fetchServiceQuota(ctx context.Context, definition services.Defi
 		return s.everyInfraQuota(ctx, quota, credentials.APIKey)
 	case services.AliyunOSS:
 		quota.Status, quota.Detail = "unsupported", "OSS 按实际存储、请求和流量计费，请在阿里云费用中心查看账单"
+	case services.AliyunFC:
+		quota.Status, quota.Detail = "unsupported", "FC 沙箱与 AgenticFS 按实际用量计费，请在阿里云费用中心查看账单"
 	}
 	return quota
 }
