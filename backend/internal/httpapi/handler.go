@@ -11,6 +11,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -25,6 +26,7 @@ type server struct {
 	services     *services.Store
 	agents       *agent.Manager
 	images       *images.Store
+	sandbox      *sandbox.Store
 }
 
 // NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器。
@@ -38,6 +40,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSett
 		services:     serviceSettings,
 		agents:       agents,
 		images:       imageStore,
+		sandbox:      sandbox.New(databasePool, serviceSettings, imageStore, appConfig.Sandbox),
 	}
 	go s.listenForUserMessages()
 
@@ -58,6 +61,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSett
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
+	mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
 	mux.HandleFunc("POST /images", s.uploadImage)
 	if appConfig.FrontendDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))

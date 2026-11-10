@@ -6,7 +6,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
     curl ca-certificates ripgrep tmux python3 nodejs xvfb x11-utils dbus-x11 \
-    libatspi2.0-0 at-spi2-core libgtk-3-0 libxdo3 xdotool xclip xfwm4 ffmpeg util-linux fonts-noto-cjk
+    libatspi2.0-0 at-spi2-core libgtk-3-0 libxdo3 xdotool xclip xfwm4 ffmpeg util-linux fonts-noto-cjk \
+    x11vnc websockify
 rm -rf /var/lib/apt/lists/*
 
 # 固定下载地址与摘要，使快照和自有镜像使用相同的守护进程。

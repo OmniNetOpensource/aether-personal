@@ -1,8 +1,9 @@
-// 本文件是 Cloudflare Worker 入口：把聊天 WebSocket 与健康检查请求安全转发到后端源站，其余路径交给静态资源托管。
+// 本文件是 Cloudflare Worker 入口：把聊天、只读桌面流和图片请求安全转发到后端源站，其余路径交给静态资源托管。
 
 const apiMethods = new Map([
   // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
   ['/ws', 'GET'],
+  ['/sandbox/desktop', 'GET'],
   ['/images', 'POST'],
   ['/healthz', 'GET'],
 ]);
@@ -12,7 +13,7 @@ export default {
     const url = new URL(request.url);
     const method = apiMethods.get(url.pathname);
     if (!method) {
-      if (/^\/(auth|admin)(\/|$)/.test(url.pathname)) {
+      if (/^\/(auth|admin|sandbox)(\/|$)/.test(url.pathname)) {
         return new Response('Not found', { status: 404 });
       }
       return env.ASSETS.fetch(request);

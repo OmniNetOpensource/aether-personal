@@ -13,6 +13,7 @@
     "format": "prettier --write src scripts *.ts *.json public/manifest.webmanifest"
   },
   "dependencies": {
+    "@novnc/novnc": "1.7.0",
     "@shikijs/core": "3.23.0",
     "@shikijs/engine-javascript": "3.23.0",
     "@shikijs/langs": "3.23.0",

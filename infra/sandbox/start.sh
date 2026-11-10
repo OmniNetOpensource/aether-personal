@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本脚本在长期工作区挂载后启动用户桌面；持久锁阻止两个计算实例同时写同一个浏览器配置。
+# 本脚本在长期工作区挂载后启动用户桌面及只读画面流；持久锁阻止两个计算实例同时写同一个浏览器配置。
 set -euo pipefail
 
 cd /mnt/workspace
@@ -13,7 +13,8 @@ export AIO_SANDBOX_HOME=/mnt/workspace
 ready() {
     curl --max-time 2 -fsS -H "x-api-key: $AIO_API_KEY" \
         'http://127.0.0.1:18091/v1/capabilities?refresh=true' |
-        python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; sys.exit(0 if d["exec"]["bash"] and d["files"]["write"] and all(d[k]["status"]=="ready" for k in ("browser","computer","code_interpreter")) and d["computer"]["screenshot"] and d["computer"]["actions"] else 1)'
+        python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; sys.exit(0 if d["exec"]["bash"] and d["files"]["write"] and all(d[k]["status"]=="ready" for k in ("browser","computer","code_interpreter")) and d["computer"]["screenshot"] and d["computer"]["actions"] else 1)' &&
+        python3 -c 'import socket; socket.create_connection(("127.0.0.1", 18092), timeout=2).close()'
 }
 
 if [[ "${1:-}" != --serve ]]; then
@@ -69,6 +70,15 @@ xfwm4 --replace &
 window_manager_pid=$!
 pids+=("$window_manager_pid")
 
+# VNC 观察 Agent 的同一个 X11 桌面；底层服务器和业务代理均限制为只读。
+# 原始 VNC 仅监听回环，WebSocket 入口由 FC 的私有流量令牌鉴权。
+x11vnc -display :1 -rfbport 5901 -localhost -nopw -viewonly -forever -shared -noxdamage &
+vnc_pid=$!
+pids+=("$vnc_pid")
+websockify --heartbeat=15 0.0.0.0:18092 127.0.0.1:5901 &
+stream_pid=$!
+pids+=("$stream_pid")
+
 # 锁确保旧实例已退出；Chrome 的主机标识文件属于计算实例，销毁后需重新生成。
 rm -f browser-profile/SingletonLock browser-profile/SingletonCookie browser-profile/SingletonSocket
 google-chrome --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check \
@@ -85,4 +95,4 @@ aio_pid=$!
 pids+=("$aio_pid")
 
 # 任一服务退出就停止整组，错误保留在实例日志；下一次调用得到明确的启动失败。
-wait -n "$aio_pid" "$computer_pid" "$chrome_pid" "$xvfb_pid" "$window_manager_pid"
+wait -n "$aio_pid" "$computer_pid" "$chrome_pid" "$xvfb_pid" "$window_manager_pid" "$vnc_pid" "$stream_pid"

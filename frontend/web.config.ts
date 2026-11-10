@@ -1,4 +1,4 @@
-// 本文件配置 TanStack Start 与 Rsbuild，生成静态 SPA 外壳并保留同源聊天 WebSocket 的开发代理。
+// 本文件配置 TanStack Start 与 Rsbuild，生成静态 SPA 外壳并代理同源聊天、图片与只读桌面连接。
 
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
@@ -16,6 +16,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
+      '/sandbox/desktop': { target: 'http://127.0.0.1:8080', ws: true },
       '/images': { target: 'http://127.0.0.1:8080' },
     },
   },

@@ -1,0 +1,148 @@
+/* 本文件定义只读桌面窗口：与聊天配色一致，手机占满可视视口，画面按比例缩放。 */
+.chat-desktop-launch {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: calc(max(20px, env(safe-area-inset-right)) + 54px);
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid var(--forest-border);
+  border-radius: 50%;
+  color: var(--on-forest);
+  background: var(--forest-hover);
+  box-shadow: 0 3px 12px var(--shadow);
+}
+.chat-desktop-launch svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.desktop-dialog {
+  position: fixed;
+  inset: calc(var(--app-top, 0px) + 24px) 24px auto auto;
+  display: flex;
+  flex-direction: column;
+  width: min(1000px, calc(100vw - 48px));
+  height: min(820px, calc(var(--app-height, 100dvh) - 48px));
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 16px 52px #081a184d;
+}
+.desktop-dialog:not([open]) {
+  display: none;
+}
+.desktop-dialog::backdrop {
+  background: #0c211855;
+}
+.desktop-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.desktop-viewer-header > div {
+  flex: 1;
+}
+.desktop-viewer-header h2 {
+  margin: 0 0 3px;
+  font-size: 18px;
+}
+.desktop-viewer-header span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.desktop-dialog button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--accent-text);
+  background: var(--surface);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.desktop-dialog button:hover {
+  background: var(--surface-muted);
+}
+.desktop-viewer-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #101913;
+}
+.desktop-screen {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.desktop-viewer-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  color: var(--on-forest);
+  background: #101913;
+  text-align: center;
+}
+.desktop-viewer-status p {
+  max-width: 32em;
+  margin: 0;
+  line-height: 1.7;
+}
+.desktop-viewer-footer {
+  padding: 10px 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 全屏查看保留关闭入口；使用可视视口尺寸以适配 iPhone PWA 和浏览器工具栏变化。 */
+.desktop-dialog-expanded {
+  inset: var(--app-top, 0px) 0 auto;
+  width: 100%;
+  height: var(--app-height, 100dvh);
+  border: 0;
+  border-radius: 0;
+}
+@media (max-width: 600px) {
+  .chat-desktop-launch {
+    top: max(12px, env(safe-area-inset-top));
+    right: 68px;
+  }
+  .desktop-dialog {
+    inset: var(--app-top, 0px) 0 auto;
+    width: 100%;
+    height: var(--app-height, 100dvh);
+    border: 0;
+    border-radius: 0;
+  }
+  .desktop-viewer-header {
+    padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+  }
+  .desktop-viewer-header > button:first-of-type {
+    display: none;
+  }
+  .desktop-viewer-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
