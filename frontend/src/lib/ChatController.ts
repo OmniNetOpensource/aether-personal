@@ -126,7 +126,16 @@ export class ChatController {
       this.error = error instanceof Error ? error.message : '无法读取登录信息，请重新登录';
     }
     this.notify();
-    if (navigator.onLine) this.connect();
+    if (navigator.onLine) {
+      this.connect();
+    } else {
+      // 离线冷启动时已缓存登录态直接进聊天页编辑草稿，未登录则进登录页说明原因。
+      if (!this.token) {
+        this.error = '当前处于离线状态，恢复网络后即可登录';
+      }
+      this.initializing = false;
+      this.notify();
+    }
   }
 
   private connect() {

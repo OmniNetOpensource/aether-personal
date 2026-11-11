@@ -124,6 +124,13 @@ export function MessageComposer({
   };
   return (
     <div className="composer-padding" ref={composerPadding}>
+      {!controller.connected && (
+        <p className="composer-connection-hint" role="status">
+          {typeof navigator !== 'undefined' && !navigator.onLine
+            ? '当前处于离线状态，可先编辑草稿，恢复网络后自动连接'
+            : '连接已中断，正在重新连接…'}
+        </p>
+      )}
       {error && (
         <p className="error composer-error" role="alert">
           {error}

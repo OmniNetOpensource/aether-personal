@@ -680,6 +680,18 @@ button.link {
   font-size: 14px;
   line-height: 20px;
 }
+/* 离线或重连时在输入框上方给出轻量提示，连接恢复后自动收起。 */
+.composer-padding .composer-connection-hint {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--forest-border);
+  background: var(--forest-hover);
+  color: var(--on-forest);
+  font-size: 14px;
+  line-height: 20px;
+}
+
 @media (pointer: coarse) {
   .composer-tools .attach-button,
   .composer-tools .send-button {
