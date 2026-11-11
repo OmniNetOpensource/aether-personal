@@ -24,21 +24,23 @@
 ```mermaid
 flowchart LR
     APP["第一层：TanStack Start Web App<br/>移动端 PWA"]
-    subgraph BACKEND["第二层：Go 后端（单进程）"]
+    subgraph BACKEND["第二层：Go 后端（对等无状态多容器）"]
         API["API<br/>HTTP + WebSocket"]
         RUNTIME["Agent 运行时<br/>Main"]
     end
-    DB[("PostgreSQL 18<br/>共享存储")]
+    DB[("PostgreSQL 18<br/>全部持久状态 + 栅栏代数")]
+    REDIS[("Redis 8<br/>纯内存信号与临时租约")]
     subgraph EXTERNAL["第三层：外部服务"]
-        OPENROUTER["OpenRouter<br/>模型"]
+        OPENROUTER["OpenRouter / ikun<br/>模型"]
         RESEND["Resend<br/>验证码邮件"]
-        TOOLS["搜索 · HTTP/MCP<br/>浏览器 · 代码隔离环境"]
+        TOOLS["搜索 · 私有 OSS<br/>FC 个人电脑沙箱"]
     end
 
-    APP <-->|"WebSocket 登录、历史、<br/>收发与推送"| API
+    APP <-->|"Caddy 轮询与健康检查<br/>WebSocket 登录、历史、收发与推送"| API
     API <--> DB
     RUNTIME <--> DB
-    API -->|"唤醒"| RUNTIME
+    API <-->|"chat:notify · agent:input · wake_queue"| REDIS
+    RUNTIME <-->|"BLPOP · 租约续期 · 打断订阅"| REDIS
     RUNTIME <--> OPENROUTER
     API --> RESEND
     RUNTIME <--> TOOLS
@@ -85,7 +87,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 | 组件 | 职责 | 状态 |
 | --- | --- | --- |
-| 健康检查 | `GET /healthz`，同时检查数据库连接 | `已实现` |
+| 健康检查 | `GET /healthz`，同时检查 PostgreSQL 与 Redis 连通性 | `已实现` |
 | 认证 | 邮箱验证码登录、退出，全部走聊天 WebSocket 命令，见 [03 认证](03-auth.md) | `已实现` |
 | 消息 API | WebSocket 登录、历史翻页、收发与推送；服务器事件定义与中转在 `events.go`，见 [04 消息与实时通信](04-messaging.md) | `已实现` |
 | Main 运行时 | 按用户串行运行 Main，调用模型与工具，见 [05 Main 运行时](05-main-runtime.md) | `已实现` |
@@ -142,7 +144,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 关键设计
 
-**持久状态在 PostgreSQL，单进程调度 Main。** 消息、任务与记忆都在 PostgreSQL。后端只运行一个进程：消息提交或定时投递后，进程内的 `Manager` 直接唤醒该用户的 Runner，同一用户同一时间只有一个 Runner；启动时读一次持久待办恢复工作，不引入 Redis。理由是目前只有维护者一人使用，单进程足够，用户量上来后再考虑多实例，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
+**持久状态全在 PostgreSQL，Redis 只传跨实例信号与临时租约，对等容器运行 Main（2026-11-11 更新）。** 对齐 LangSmith Data Plane 模式：消息、任务、记忆、工作区绑定与步骤轨迹 100% 保存在 PostgreSQL；同机纯内存 Redis（关闭磁盘持久化）只承担唤醒队列、每用户 30 秒临时租约、跨实例思考打断广播与聊天新消息推送广播，Redis 重启清空不丢失任何业务数据。生产部署两个完全对等的无状态后端容器（`api-1`、`api-2`），每个容器同时接收 WebSocket 与运行 Agent，并配合 `users.main_lease_epoch` 栅栏代数防脑裂覆盖，实现发版零停机滚动更新与单容器异常自动切流，详见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。此前 2026-11-09 曾简化为单进程，现已升级为本方案。
 
 **一切通信都是消息。** 用户与 Main 只通过消息联系，Main 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）。
 
@@ -179,7 +181,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | HTTP 层 | 标准库 `net/http` | 不引入 Web 框架 |
 | 日志 | `log/slog`；dev 输出文本，prod 输出 JSON | 标准库 |
 | 数据库访问 | pgx `v5.11.0` + sqlc `v1.31.1` | 手写 SQL，sqlc 生成带类型的 Go 调用代码，由 pgx 执行 |
-| 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`），主键 `uuidv7()` | 业务数据与历史检索共用一个数据库 |
+| 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`），主键 `uuidv7()` | 业务持久事实、历史检索与租约栅栏代数共用一个数据库 |
+| 信号与临时协调 | Redis 8（`redis:8-alpine` 纯内存模式）+ `redis/go-redis` v9 | 跨实例唤醒队列、用户临时租约及思考打断/聊天推送 Pub/Sub，不存业务数据 |
 | 迁移 | goose `v3.29.0`（`go tool goose`） | 见 [02 数据模型](02-data-model.md#迁移) |
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
@@ -190,10 +193,10 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 ## 后端骨架 `已实现`
 
 - `internal/config` 启动时一次性读取环境变量，不满足即报错退出。
-- `GET /healthz` 每次请求 ping 数据库，正常返回 `200 ok`，失败返回 `503`。
-- 连接池不预先连接数据库，数据库状态由 `/healthz` 反映。但 Agent 调度启动时要读一次持久待办，此时数据库不可用则进程退出，由部署的重启策略拉起（2026-11-08 起），见 [05](05-main-runtime.md#停机与开机2026-11-09)。
-- 等待数据库就绪由编排层负责：dev compose 使用 `pg_isready` 健康检查，`make db-up` 带 `--wait`，数据库可连接后才返回；生产 compose 中后端使用 `depends_on: condition: service_healthy` 等待数据库。
-- 收到停止信号后，HTTP 服务最多等待 5 秒关闭，正在运行的 Agent 随信号取消；未完成的执行步骤保留在数据库，重启后恢复，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
+- `GET /healthz` 每次请求同时 ping PostgreSQL 与 Redis，均正常返回 `200 ok`，任一不可用返回 `503`，供 Caddy 主动健康检查在单容器重启或异常时切流。
+- 连接池不预先连接数据库，健康状态由 `/healthz` 反映。Agent 调度启动时读一次持久待办并补推无租约任务，此后每 5 秒补偿扫描一次，见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。
+- 等待基础设施就绪由编排层负责：dev compose 同时配置 PostgreSQL `pg_isready` 与 Redis `redis-cli ping` 健康检查，`make db-up` 带 `--wait`；生产 compose 中 `api-1`、`api-2` 使用 `depends_on: condition: service_healthy` 等待 `postgres` 与 `redis`。
+- 收到停止信号后，HTTP 服务最多等待 5 秒关闭；正在运行的 Agent 随信号取消，立即释放 Redis 租约并将未完工作推回唤醒队列，由存活容器无缝接手，见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。
 - dev compose 固定项目名 `aether-personal-dev`，避免与其他目录名为 `dev` 的 compose 项目冲突。
 - `.env` 位于 `backend/`，由 Makefile 加载并传给 compose；仓库提供 `backend/.env.example`。
 - 已验证：数据库正常时 `/healthz` 返回 200，停止数据库后返回 503，缺少 `APP_ENV` 时启动报错退出。
@@ -206,14 +209,14 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | --- | --- |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式、是否真实发信 |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
+| `REDIS_URL` | 服务进程必填，Redis 连接串（本地示例 `redis://localhost:6379/0`，生产 Compose 自动注入 `redis://redis:6379/0`） |
 | `PORT` | 可选，默认 `8080` |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
-| `SUBAGENT_MODEL` | 可选，留空使用 `MAIN_MODEL` |
-| `DATABASE_MAX_CONNS` | 默认 20，最小 5；池外另有一条聊天推送的 LISTEN 连接 |
-| `AGENT_CAPACITY` | 默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；限制同时运行 Main 的用户数，超出的按唤醒顺序排队 |
+| `DATABASE_MAX_CONNS` | 单容器默认 20，最小 5；聊天推送已改走 Redis Pub/Sub，不再占用池外 PostgreSQL 长连接 |
+| `AGENT_CAPACITY` | 单容器默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；满载时暂停从 Redis 队列取活，新待办自动流向空闲容器 |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
-| `POSTGRES_PORT` | 可选，本地 dev 数据库映射到本机的端口，默认 `5432` |
+| `POSTGRES_PORT`、`REDIS_PORT` | 可选，本地 dev 容器映射到本机的端口，默认 `5432` 与 `6379` |
 
 ## 代码托管
 
@@ -229,7 +232,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 - 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
 - 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
-- 只部署一个后端进程，Main 调度在进程内完成，不支持同时运行多个后端实例。
+- 生产单机默认部署两个完全对等的后端容器 `api-1`、`api-2`（各自挂载独立图片缓存卷）与一个纯内存 `redis` 容器，由 Caddy 主动健康检查与轮询转发，发布时不停服滚动更新，详见 [09](09-deployment.md)。
 
 ## 模型服务与费用
 

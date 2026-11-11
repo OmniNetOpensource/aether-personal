@@ -52,7 +52,7 @@ erDiagram
 
 - **主键**使用 UUID v7（PostgreSQL 18 的 `uuidv7()`）：按时间递增，可直接用于排序。
 - **固定取值的字段**（如 `status`、`role`、`sender`）使用 `text` 加 `CHECK` 约束，不使用 PostgreSQL 枚举类型：取值仍在演变，`CHECK` 约束增删改名都容易；Go 代码中自行定义对应常量。
-- **不建 `runs` 表**：Main 可能持续运行，“一轮”的边界不清晰。执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中，按用户串行处理由进程内 Manager 保证每用户只有一个 Runner，重启恢复依据最新一条消息和未得到结果的工具调用判断（2026-11-02 起，见 [05](05-main-runtime.md#运行循环-已实现)）。
+- **不建 `runs` 表**：Main 可能持续运行，“一轮”的边界不清晰。执行轨迹直接按 `messages.sequence` 查看，失败原因记在 `steps` 或工具结果消息中；按用户串行处理由 Redis 临时租约与 `users.main_lease_epoch` 栅栏代数跨实例保证，重启或交接依据最新一条消息和未得到结果的工具调用判断（见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)）。
 
 ## 各表字段
 
@@ -63,6 +63,7 @@ erDiagram
 | `id` | uuid | 主键 |
 | `email` | text | 登录邮箱，唯一 |
 | `main_failed_through_sequence` | bigint | Main 上次运行失败时的最大消息序号；最新消息不超过它时不再自动重试，空表示没有失败停住（`00026`） |
+| `main_lease_epoch` | bigint | 单调递增的 Main 执行代数（默认 0，`00052`）；每次实例抢占用户租约后原子递增，Runner 所有写库事务核对该代数防止跨实例脑裂覆盖 |
 | `task_input_through_sequence` | bigint | 已登记需求的用户输入位置；只标记分类完成，与任务完成、聊天已读无关（`00034`） |
 | `created_at` | timestamptz | 注册时间 |
 
@@ -289,7 +290,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00048_add_chat_search.sql` | `chat_message_text` 函数与可见聊天全文三元组 GIN 索引，供页面历史搜索与上下文窗口使用 | `已实现` |
 | `00049_add_sandbox_workspaces.sql` | `sandbox_workspaces` 工作区绑定表，并将 `aliyun_fc` 纳入服务目录 | `已实现` |
 | `00050_add_sandbox_traffic_token.sql` | 持久化加密的沙箱流量令牌，支持不唤醒实例的只读实时桌面观察 | `已实现` |
-| `00051_add_workspace_file_transfer.sql` | `sandbox_workspaces.synced_through_sequence` 记录已同步进 `/mnt/workspace/uploads` 的聊天附件序号，并在聊天搜索中纳入附件文件名 | `开发中` |
+| `00051_add_workspace_file_transfer.sql` | `sandbox_workspaces.synced_through_sequence` 记录已同步进 `/mnt/workspace/uploads` 的聊天附件序号，并在聊天搜索中纳入附件文件名 | `已实现` |
+| `00052_add_user_lease_epoch.sql` | `users.main_lease_epoch` 单调递增执行代数，防止多实例租约超时或 Redis 重启后旧实例覆盖新实例的数据 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

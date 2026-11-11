@@ -20,35 +20,38 @@
 
 ## 整体结构
 
-后端是单进程：同一个进程既接收 WebSocket，也运行 Main。理由是目前只有维护者一人使用，见 [05](05-main-runtime.md#停机与开机2026-11-09)。
+2026-11-11 更新：后端采用对齐 LangSmith Data Plane 的**对等无状态多容器架构**（生产单机部署 `api-1`、`api-2` 与纯内存 `redis`），每个容器同时接收 WebSocket 与运行 Main。选择理由是在不增加额外主机成本的前提下，消除发布更新与单容器异常期间的连接中断，详见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。
 
-- 消息、任务、记忆和轨迹都在 PostgreSQL，进程内不保存唯一的业务状态。
-- 用户消息提交后，WebSocket 处理代码直接调用进程内的 `Manager.Wake` 唤醒该用户的 Main；启动时读一次持久待办恢复工作。
-- 数据库通知 `user_messages` 只用于聊天推送，不触发 Main 运行。
-- 不引入 Redis 或单独事件表。
+- 消息、任务、记忆和轨迹 100% 保存在 PostgreSQL，进程与 Redis 均不保存业务持久状态。
+- WebSocket 负载均衡无需配置 Sticky Session：HTTP `Upgrade` 完成后即固定在所连容器，跨容器实时推送通过 Redis Pub/Sub 频道 `chat:notify` 广播用户 ID，持有该用户连接的容器收到后各自查表推送。
+- 用户消息提交后，`Manager.Wake` 通过单次 Redis Pipeline 同时发布 `chat:notify`（聊天推送）、`agent:input`（跨实例打断未占位思考）与 `agent:wake_queue`（唤醒空闲容器竞争消费）。
+- PostgreSQL 不再占用池外 `LISTEN` 长连接，完全回归短事务读写。
 
 ## 一条消息的完整路径
 
 ```mermaid
 sequenceDiagram
     participant App
-    participant WS as 后端：WebSocket
+    participant WS as 接入容器：WebSocket
     participant DB as PostgreSQL
-    participant Runner as 后端：Main 运行时
-    participant Model as OpenRouter
+    participant Redis as Redis（纯内存信号）
+    participant Runner as 执行容器：Main 运行时
+    participant Model as 模型供应商
 
     App->>WS: hello {token?, last_change_cursor?}
     WS-->>App: ready {authenticated, history, change_cursor}
-    App->>WS: send_message {client_message_id, text}
-    WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence），NOTIFY
+    App->>WS: send_message {client_message_id, parts}
+    WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence）
+    WS->>Redis: Pipeline：PUBLISH chat:notify + agent:input，去重入队 wake_queue
     WS-->>App: messages {这条用户消息, main_thinking}
     WS-->>App: delivered {client_message_id}
-    WS->>Runner: Manager.Wake（进程内直接唤醒）
+    Redis-->>Runner: BLPOP 取出 user_id，抢租约并递增 main_lease_epoch
     Runner->>DB: 读取上下文
     Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
-    Runner->>DB: 事务：保存模型输出与工具结果，NOTIFY
-    DB-->>WS: NOTIFY user_messages
+    Runner->>DB: 事务：校验 main_lease_epoch，保存模型输出与工具结果
+    Runner->>Redis: PUBLISH chat:notify
+    Redis-->>WS: 收到该用户广播，唤醒连接查表
     WS-->>App: messages {Main 的回复}
 ```
 
@@ -58,8 +61,7 @@ sequenceDiagram
 2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用和图片组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 64,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。2026-11-08，用户把这一上限从 32,000 调到 64,000。
 3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存。
 4. 先把这条消息推给当前连接，再在同一连接上回复 `delivered`。顺序反过来时，输入框清空与消息出现在列表之间会有一瞬间两边都看不到这条消息。App 收到 `delivered` 即发送成功，输入框清空；15 秒未收到或连接断开即发送失败，输入框显示错误并保留内容，再按发送就用同一个 `client_message_id` 重发。
-5. 发送 NOTIFY，使用户的其他设备也能收到这条消息。
-6. 调用 `Manager.Wake` 唤醒该用户的 Main：该用户还没有 Runner 就新建一个；已经有 Runner 在运行时只留下待唤醒标记，等它结束后再检查一次。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
+5. 调用 `Manager.Wake` 通过 Redis Pipeline 同时广播 `chat:notify`（让该用户的其他设备连接收到消息）、广播 `agent:input`（若该用户的 Runner 正在任一容器思考则立即打断重读）并将用户去重推入 `agent:wake_queue` 供空闲容器消费。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
 
 ## WebSocket
 
@@ -166,10 +168,10 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 ## 推送
 
-- 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备），因此不能在消息上标记“已发送”。
-- 收到该用户的 NOTIFY 后，每条连接从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
+- 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备或连在不同后端容器），因此不能在消息上标记“已发送”。
+- 收到 Redis `chat:notify` 频道中该用户的广播后，持有其连接的容器唤醒本地连接，从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
 - 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
-- 后端用一条专用连接 `LISTEN user_messages`，断线重连后让所有聊天连接补查。
+- 每个后端容器用 `ChannelWithSubscriptions` 订阅 Redis `chat:notify`，首次连接与断线重连收到 `subscribe` 确认后自动触发 `wakeAll()` 让本机所有聊天连接补查，避免断连窗口漏推。
 
 ## 助手消息宽度
 
@@ -216,13 +218,13 @@ UUIDv7 的时间来自数据库服务器时钟；时钟被人为往回调时，�
 
 | 机制 | 范围 | 作用 |
 | --- | --- | --- |
-| 写入锁 `pg_advisory_xact_lock('messages:<user_id>')` | 单个插入事务，提交时自动释放 | 同一用户的插入排队，保证 `id` 顺序与提交顺序一致 |
-| Manager 的 Runner 登记 | Main 运行全程，Runner 结束后注销 | 同一用户同一时间只有一个 Runner；登记在进程内存，进程退出即消失，见 [05](05-main-runtime.md#停机与开机2026-11-09) |
+| 写入锁 `pg_advisory_xact_lock('messages:<user_id>')` | 单个插入/校验事务，提交时自动释放 | 同一用户的插入与代数校验按单向锁序排队，保证 `id` 顺序与提交顺序一致且不死锁 |
+| Redis 用户租约 `agent:lease:<user_id>` + `users.main_lease_epoch` | Main 运行全程（30s TTL，每 10s 续期），结束后释放 | 跨容器保证同一用户同一时间只有一个有效 Runner；栅栏代数阻止超时残留的旧容器改写新容器数据，见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
 
 ## 暂不采用、以后再评估
 
-- 将“连接服务器”与“agent worker”拆成两组机器（LangGraph 的做法）：代码按两种角色分开编写，目前在同一进程中运行。
-- 多实例部署：需要跨进程保证同一用户只在一处运行，并在进程失效后接管，等用户量上来后再设计。
-- 边生成边显示时通知量大，届时评估 NOTIFY 是否足够，或合并发送、引入 Redis。
+- 将“连接服务器”与“agent worker”拆成两组机器：当前规模下每个后端容器对等兼任两种角色，运维最简单；未来超大规模时可按需拆分。
+- 多台主机分布式部署：当前在单机上部署双容器与同机纯内存 Redis（零新增云账单），后续若跨多主机只需将 `DATABASE_URL` 与 `REDIS_URL` 指向 VPC 内的托管实例。
+- 边生成边显示：Redis Pub/Sub 通道已就位，后续如需逐段流式推送可直接复用。
 
 `待确认`：边生成边显示的推送方式；各平台的 WebSocket 连接恢复行为；其他平台的连接与部署验收。

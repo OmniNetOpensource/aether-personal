@@ -53,14 +53,14 @@
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
 | 配置来源 | 基础设施与模型默认值读取环境变量；运行时模型选择与服务凭证保存在数据库。主加密密钥由部署端提供；缺少业务 Key 允许先进入看板配置 | [01](wiki/01-overview.md#配置) |
 | 服务凭证 | 2026-10-30 起在看板统一管理服务凭证（现含 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS、阿里云 FC 共九组），AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
-| 健康检查 | `GET /healthz`，同时检查数据库连接；连接池不预先连接数据库，但 Agent 启动时读不到持久待办即进程退出，由重启策略拉起 | [01](wiki/01-overview.md#后端骨架-已实现) |
+| 健康检查 | `GET /healthz`，同时探测 PostgreSQL 与 Redis 连通性，供 Caddy 主动健康检查在单容器重启或异常时自动切流 | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
-| 本地 dev 数据库 | Docker Compose，端口 `${POSTGRES_PORT:-5432}` | [01](wiki/01-overview.md#后端骨架-已实现) |
+| 本地 dev 基础设施 | Docker Compose，PostgreSQL `${POSTGRES_PORT:-5432}` 与纯内存 Redis `${REDIS_PORT:-6379}` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 本地常用命令 | `backend/Makefile` | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 代码托管 | GitHub `OmniNetOpensource/aether-personal`，公开，Apache-2.0，提交使用 noreply 邮箱 | [01](wiki/01-overview.md#代码托管) |
 | 开发分支 | 2026-10-27 用户要求默认直接在最新 `main` 开发，不自行创建独立开发分支；公开仓库推送仍需授权 | [01](wiki/01-overview.md#代码托管) |
-| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，Go 与数据库在阿里云新加坡；2026-10-30 已部署并通过核心线上验收，定期异机备份尚未自动化 | [09](wiki/09-deployment.md) |
-| 一键发布 | 2026-11-03 用户要求以 `make publish` 更新已有实例；固定提交构建，经 SSH 先备份再迁移和切换主机，随后发布 Cloudflare 并校验；生产密钥留在服务器，失败保留恢复记录 | [09](wiki/09-deployment.md#一键更新现有部署) |
+| 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，阿里云新加坡单机运行两个对等 Go 后端容器（`api-1`、`api-2`，独立图片缓存卷）、纯内存 Redis 8 与 PostgreSQL 18，由 Caddy 轮询及健康检查，零新增云服务账单 | [09](wiki/09-deployment.md) |
+| 一键发布 | 2026-11-03 以 `make publish` 更新已有实例；2026-11-11 改为不停服滚动更新：在线 MVCC `pg_dump` 热备份后执行迁移，先更新 `api-1` 等健康再更新 `api-2`、看板与网关，随后发布 Cloudflare 并校验；生产密钥留在服务器 | [09](wiki/09-deployment.md#一键更新现有部署) |
 | Push 自动发布 | 2026-11-03 用户确认以 GitHub Actions 在 `main` push 后自动发布；固定事件提交、串行迁移、专用部署凭证，备份用 age 加密后保存 90 天，解密私钥留在维护者本机 | [09](wiki/09-deployment.md#push-后自动发布) |
 | 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 | [01](wiki/01-overview.md#模型服务与费用) |
@@ -106,7 +106,7 @@
 
 | 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| 整体结构 | PostgreSQL 保存全部持久状态，单进程 Manager 调度 Main，不引入 Redis。理由（2026-11-09 用户说明）是目前只有维护者一人使用，等用户量上来后再考虑多实例。同日用户确认文档按单实例迭代，删除此前多实例方案的全部说明，以后需要时再重新设计 | [05](wiki/05-main-runtime.md#停机与开机2026-11-09) |
+| 整体结构 | 2026-11-11 改为对齐 LangSmith Data Plane 的对等无状态多容器架构：PostgreSQL 保存 100% 持久业务事实与单调递增栅栏代数 `users.main_lease_epoch`（`00052`），纯内存无持久化 Redis 8 只负责跨实例唤醒队列、用户临时租约、思考打断广播与聊天推送广播；消除 PostgreSQL 池外 `LISTEN` 长连接（取代 2026-11-09 的单进程方案） | [05](wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
 | 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
 | 后台连接 | 2026-11-03：页面隐藏时保留 WebSocket 与自动重连，网络恢复时允许后台重连，返回前台时确保连接存在；离线或离开页面仍关闭。理由是普通页面切换不应中断消息接收或使发送中的请求失败；系统冻结或回收网页后靠重连与游标补齐恢复 | [04](wiki/04-messaging.md#websocket) |
 | 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
@@ -133,11 +133,11 @@
 | 连续消息与多个请求 | 2026-11-04：按目标判断消息关系，不同目标分别处理，同一目标的补充与修正合并处理；换话题不自动取消旧请求，结束前逐个核对结果、必要澄清或阻塞原因。压缩摘要保留各请求状态，避免漏答。2026-11-06 改为持久化任务队列：先登记新输入、补充更新原任务、新目标排队，当前任务结束后再领取下一项 | [05](wiki/05-main-runtime.md#连续消息与多个请求2026-11-04) |
 | 运行循环 | 2026-11-08 按三阶段重排：请求前（清理上次进程退出的残留、补跑缺回执的工具、开步骤、压缩与组装）、请求（发出并收回完整回复）、请求后（保存回复并执行工具、重试、失败收尾），循环主体只判断还有没有活；残留清理由运行开头挪到每轮请求前开头，重试改为循环的下一轮，删除 Manager 对临时数据库错误的退避重试、启动读不到待办即退出。理由是代码直接展现三个阶段，修改时容易定位并限定范围，且不再防御走不到的场景，见 [05](wiki/05-main-runtime.md#agent-loop-三阶段2026-11-08)。2026-11-06 改为单进程 Manager 直接唤醒、启动时恢复，取代仅通知调度，见 [05](wiki/05-main-runtime.md#停机与开机2026-11-09)。同日曾增加队列状态与未登记输入判断，稍后取消并由 `00042` 恢复为只由消息尾部决定，见 [11](wiki/11-tasks.md)。2026-11-07 增加收尾任务提醒：消息尾部已收尾时 Runner 查一次进行中与排队任务、带 `task_reminder` 续跑一轮，`main_work` 不变，见 [11](wiki/11-tasks.md)。以下为原有基础：2026-11-02 简化：用户消息入库、一批工具回执齐全后唤醒 Runner；Runner 只看消息尾部决定执行缺回执的工具、回复或停下，要不要运行由视图 `main_work`（最新一条消息）判断；失败收尾记 `users.main_failed_through_sequence`，有更新的消息才再试；assistant 消息与 step 同事务落库，删除 `steps.model_reply`。理由是消息表成为唯一事实，不再另外维护已读位置与未完成步骤。2026-11-03 改为 Runner 只认 PostgreSQL 通知：删每秒与启动扫描和各处进程内直接唤醒，接受漏通知后靠下一次通知顺带恢复、无时限保证，理由是调度只留一条事件路径 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | 处理中收到新消息 | 2026-11-03：还在等首段正文／工具时取消旧请求、重组上下文；首段正文或工具片段在写入锁内占位，已占位或工具在执行时待本批结束再取新输入。理由是允许及时补充指令，同时保住已开始回复的顺序。2026-11-08 选择只在占位事务里检查一次新输入，删除登记思考请求之后的补查，组装后到达的输入仍由占位事务兜住 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| 按用户串行 | 单进程 Manager 按用户登记 Runner，同一用户同一时间只有一个；消息写入仍先取 `pg_advisory_xact_lock` | [05](wiki/05-main-runtime.md#停机与开机2026-11-09) |
-| 每用户 Runner | 2026-11-06 起由单进程 Manager 在消息提交后直接唤醒、启动时恢复持久待办；以下为拆分历史。2026-11-03 拆分：进程内一个 `Manager`（共享依赖、全局并发名额、Runner 登记），有活时为每个用户创建一个 `Runner` 独占一条协程运行，结束先注销再释放名额；不为无活用户常驻，共享依赖不按用户复制。理由是每用户状态与执行归属清晰，消息表仍是唯一事实 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| 停机与开机 | 停机时 HTTP 最多等 5 秒；正在运行的 Runner 随信号取消，等协程退出后关连接池，中断不记失败位置。开机时读一次 `main_work` 恢复待办，请求前阶段清理残留并补跑缺回执的工具。2026-11-09 用户确认被切断的模型请求会重新请求、被中断的联网工具会再执行一次，原话「多花钱/多执行没有关系，这是保证可靠性的cost」。同日确认信号一到就取消，因为重启会从数据库原地继续 | [05](wiki/05-main-runtime.md#停机与开机2026-11-09) |
-| 用户执行容量 | `AGENT_CAPACITY` 默认连接池上限减 4，允许调小；名额全满时按唤醒顺序排队，持久待办不丢 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| 数据库连接池上限 | 环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不放进 `DATABASE_URL`，以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 按用户串行与脑裂防护 | 2026-11-11：跨实例以 Redis `agent:lease:<user_id>`（30s TTL，每 10s Lua 续期）互斥，抢锁后在 `LockUserMessages` 内原子递增 `users.main_lease_epoch`（`00052`）；Runner 在请求前、请求、请求后三阶段的所有写库事务均核对该代数，被新实例取代时静默停止、不记失败位置 | [05](wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
+| 每用户 Runner | 对等容器内的 `Manager` 先占用本机槽位再经 `BLPOP` 取活，为该用户启动独占协程 `Runner` 并登记到本机内存字典以支持 `agent:input` 即时打断思考；每 5 秒对照 `ListMainWork` 补偿扫描，不为无活用户常驻 | [05](wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
+| 停机与开机 | 停机时 HTTP 最多等 5 秒；Runner 随信号立即取消，注销后主动释放 Redis 租约并复查 `HasMainWork` 重新入队，由存活容器毫秒级接手从数据库原地继续（延续 2026-11-09 接受重复请求与重复执行成本的决定） | [05](wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
+| 用户执行容量 | 单容器 `AGENT_CAPACITY` 默认连接池上限减 4，允许调小；本机槽位满载时暂停 `BLPOP`，新待办自动流向空闲容器 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
+| 数据库连接池上限 | 单容器环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不再占用池外 `LISTEN` 长连接，也不放进 `DATABASE_URL` 以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
 | Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；2026-11-02 起提醒改为组装时插入、不落库：从最近一条用户消息起，每 4 轮没有可见正文的工具调用插一条不可见 user 提醒，写出正文或用户新消息即重新计数，不设上限（原为连续 5 轮、同一次沉默最多 3 次）。不写正文即沉默 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值。2026-10-30 用户指定维护者线上使用 ikun Gemini 4 Argon，生产已保存 `ikun:gemini-4-argon` | [05](wiki/05-main-runtime.md#模型)、[08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |

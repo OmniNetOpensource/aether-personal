@@ -4,15 +4,16 @@ flowchart TD
         DESKTOP_UI["只读实时桌面（noVNC / RFB）<br/>按工作区绑定显示入口"]
     end
 
-    subgraph L2["第二层：Go 后端（单进程）"]
+    subgraph L2["第二层：Go 后端（对等无状态多容器：api-1 · api-2）"]
         API["API：聊天 WebSocket · 图片/文件上传 · 只读桌面流 · 管理接口"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送 · 页面历史搜索"]
-        IMAGES["存储与缓存：私有 OSS 读写签名 · 本机图片磁盘缓存"]
-        MANAGER["Manager：单进程调度<br/>提交后直接唤醒 · 启动时恢复待办 · 每用户一个 Runner"]
-        DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与模型调用日志")]
+        IMAGES["存储与缓存：私有 OSS 读写签名 · 每容器独立图片磁盘缓存"]
+        MANAGER["Manager：对等实例调度<br/>BLPOP 竞争取活 · 租约续期 · 本机字典打断思考 · 5 秒补偿"]
+        REDIS[("Redis 8（纯内存无持久化）：唤醒队列 · 用户临时租约 · 思考打断与聊天推送 Pub/Sub")]
+        DB[("PostgreSQL：消息历史 · 租约栅栏代数 · 需求队列 · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
-            MAIN["Main Runtime：三阶段 Agent Loop · messageList 上下文 · 按用户串行处理"]
+            MAIN["Main Runtime：三阶段 Agent Loop · messageList 上下文 · 写库核对栅栏代数"]
             TASKS["需求队列：登记输入 · 自主选择与让位<br/>每用户一项执行中"]
             SEARCH["search_message"]
             READ["read_message"]
@@ -32,10 +33,12 @@ flowchart TD
         API <-->|"用户输入 / 历史搜索 / 对外消息与事件"| MESSAGES
         API <-->|"POST /images · POST /files"| IMAGES
         MESSAGES <-->|"保存与读取消息"| DB
+        MESSAGES <-->|"发布与订阅 chat:notify"| REDIS
         MESSAGES -->|"输入提交后唤醒"| MANAGER
-        MANAGER -->|"启动时读取 main_work"| DB
-        MANAGER -->|"按容量启动该用户的 Runner"| MAIN
-        MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
+        MANAGER <-->|"唤醒队列 / 租约锁 / agent:input 打断"| REDIS
+        MANAGER -->|"抢锁后递增代数 / 周期读取 main_work"| DB
+        MANAGER -->|"按本机容量启动该用户的 Runner"| MAIN
+        MAIN <-->|"载入 messageList / 校验代数保存本轮轨迹"| DB
         MAIN <-->|"发送前将 oss:// 解析为 base64"| IMAGES
 
         TASKS <-->|"任务与状态 / 回执同事务"| DB
@@ -45,8 +48,8 @@ flowchart TD
         SCHEDULE <-->|"安排与回执同事务"| DB
 
         SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 三阶段闲置后台工作"]
-        SCHEDULER <-->|"插入不可见 schedule_event / memory_update / recent_followup / unknown_unknowns"| DB
-        SCHEDULER -->|"插入后唤醒"| MANAGER
+        SCHEDULER <-->|"行锁防重插入不可见 schedule_event / memory_update / recent_followup / unknown_unknowns"| DB
+        SCHEDULER -->|"插入后经 Redis 唤醒"| MANAGER
     end
 
     subgraph L3["第三层：外部服务"]
@@ -56,9 +59,9 @@ flowchart TD
         SANDBOX["阿里云 FC Sandbox + AgenticFS<br/>持久 /mnt/workspace · AIO MCP · VNC"]
     end
 
-    ADMIN["管理看板：admin/ · 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署"]
+    ADMIN["管理看板：admin/ · 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
     ADMIN <-->|"独立密码登录 / 时间线、调用详情与配置"| API
-    CLIENT <-->|"WebSocket 登录 / 历史 / 搜索 / 收发与推送"| API
+    CLIENT <-->|"Caddy 轮询与健康检查 / WebSocket 登录、历史、收发与推送"| API
     DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API
     API <-->|"被动观察桌面流（不唤醒实例）"| SANDBOX
     IMAGES <-->|"流式读写与临时签名"| OSS

@@ -18,7 +18,7 @@
 
 ## 运行机制
 
-**触发消息。** 定时任务与反思都以 `role = user`、`sender = system`、`visible = false` 的消息写入 `messages`，用 `content.name` 区分：`schedule_event`（定时任务）与 `reflection`（闲置反思）。Main 是否有活只看消息尾部（视图 `main_work`），最后一条是 user 消息即有活，所以 agent loop 的三个阶段与循环主体都不需要知道“定时”这回事：触发消息照常进入请求组装、思考中被新输入打断、压缩进摘要。插入后调度器调用进程内 `Manager.Wake` 唤醒 Main（`00040` 起不再有数据库触发器）。
+**触发消息。** 定时任务与闲置后台工作都以 `role = user`、`sender = system`、`visible = false` 的消息写入 `messages`，用 `content.name` 区分：`schedule_event`（定时任务）与三阶段闲置工作名。Main 是否有活只看消息尾部（视图 `main_work`），最后一条是 user 消息即有活，所以 agent loop 的三个阶段与循环主体都不需要知道“定时”这回事：触发消息照常进入请求组装、思考中被新输入打断、压缩进摘要。投递事务使用 `LockUserMessages` 与 `FOR UPDATE SKIP LOCKED`，因此多个对等后端容器同时扫描也绝不会重复投递；事务提交后调用 `Manager.Wake` 经 Redis 广播并唤醒空闲容器。
 
 **调度器。** `backend/internal/scheduler/` 由 `main.go` 启动，每 5 秒扫描一次到期安排与到期反思，失败在这一层记录日志，未投递的下一次扫描再试。触发精度因此在 5 秒量级。
 

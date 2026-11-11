@@ -25,7 +25,7 @@ npm start
 看板令牌固定 12 小时有效，仅保存在当前标签页的 sessionStorage。退出立即撤销该会话。聊天继续使用邮箱验证码，两个入口的令牌互不通用。管理员密码是共享凭证，不能识别具体个人。后端全局每分钟最多接受 10 次登录尝试。
 `npm start` 实际执行 `node --env-file-if-exists=.env server.mjs`，自动加载本目录的 `.env`。也可直接配置进程环境变量后执行 `node server.mjs`。
 
-`API_UPSTREAM` 是服务端固定的 Go 后端源站；不支持 URL 路径、凭证或任意目标代理。浏览器只访问同源 `/api`，不需要 CORS，也不包含 OpenRouter、数据库或供应商密钥。会话令牌保存在当前标签页的 sessionStorage，退出时撤销。
+`API_UPSTREAM` 是服务端固定的 Go 后端源站（支持逗号分隔多个对等后端实例，单容器滚动重启连接失败时自动切换下一个实例）；不支持 URL 路径、凭证或任意目标代理。浏览器只访问同源 `/api`，不需要 CORS，也不包含 OpenRouter、数据库或供应商密钥。会话令牌保存在当前标签页的 sessionStorage，退出时撤销。
 
 ## 文件职责
 

@@ -34,8 +34,8 @@
 
 ## 技术栈
 
-- 后端：Go `1.27.2`、标准库 `net/http`、`log/slog`、pgx v5（`pgxpool`）。
-- 数据库：PostgreSQL 18 + pgvector，主键 `uuidv7()`。
+- 后端：Go `1.27.2`、标准库 `net/http`、`log/slog`、pgx v5（`pgxpool`）、`redis/go-redis` v9。
+- 数据库与信号协调：PostgreSQL 18 + pgvector（保存全部持久状态与租约栅栏代数，主键 `uuidv7()`）；Redis 8（纯内存无持久化，仅传递跨实例唤醒队列、用户临时租约、思考打断与聊天推送广播）。
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
 - 模型：OpenRouter、ikun Gemini 原生协议与 ikun Claude 原生 Messages 协议（支持独立上下文压缩模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（含本机磁盘图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
@@ -45,7 +45,7 @@
 
 ```sh
 cp .env.example .env   # 首次
-make db-up             # 启动本地 PostgreSQL（等到可连接才返回）
+make db-up             # 启动本地 PostgreSQL 与纯内存 Redis（等到可连接才返回）
 make migrate           # 执行迁移
 make run               # 运行后端；dev 下登录验证码打印在日志中
 make db-down

@@ -12,21 +12,21 @@
 | 产品名称 | 中文「阿芒」，英文 Aether |
 | 前端 | TanStack Start + React + TypeScript；SPA 静态部署，移动端使用 PWA |
 | 后端 | Go |
-| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，Go 与数据库在阿里云新加坡；已有主机通过 `make publish` 更新 |
+| 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，阿里云新加坡单机运行双对等后端容器（`api-1`、`api-2`）、纯内存 Redis 8 与 PostgreSQL 18；通过 `make publish` 零停机滚动更新 |
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
-| 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1`：手写 SQL，生成带类型的 Go 调用代码 |
+| 数据库与信号层 | `pgx v5.11.0 + sqlc v1.31.1`（PostgreSQL 持久事实与栅栏代数）+ `redis/go-redis v9`（纯内存唤醒、临时租约与 Pub/Sub） |
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
-| 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
+| 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
 | 模型服务 | OpenRouter、ikun Gemini 与 ikun Claude；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，压缩可单独指定模型 |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
 | Main Agent | 每用户固定一个逻辑 Main，按用户串行运行，状态持久化到 PostgreSQL |
-| 调度与停机 | 单进程 Manager 在消息提交后直接唤醒 Main，启动时恢复持久待办；停机信号一到就取消运行中的任务，中断的工作重启后接着做，接受重复请求与重复执行，见 [停机与开机](docs/wiki/05-main-runtime.md#停机与开机2026-11-09) |
+| 调度与停机 | 对等无状态后端容器经 Redis 竞争消费与续期租约、以 `users.main_lease_epoch` 校验写库防脑裂；停机信号一到即取消本地运行、释放租约并重入队由存活容器接手，见 [对等多实例调度与停机交接](docs/wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
 | 需求队列 | `tasks` 持久化需求；补充更新原任务、新目标排队，当前任务结束后由模型读取任务列表选择下一项；只管理任务要求与状态，不绑定回答或文件产物，本地开发中 |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
 | 主题记忆 | 不自动注入记忆，Main 需要时通过 `memory` 先读根索引、再读相关主题；明确的长期偏好与约定默认自动维护，详细主题通过单一 `memory` 工具按需读写 |
@@ -106,11 +106,11 @@ make check
 ```sh
 cd backend
 cp .env.example .env
-make db-up     # 启动本地 PostgreSQL，等到数据库可连接后才返回
+make db-up     # 启动本地 PostgreSQL 与纯内存 Redis，等到健康后才返回
 make migrate   # 执行数据库迁移（goose，已作为 Go 工具依赖固定版本）
 make run       # 加载 .env 运行后端
 curl localhost:8080/healthz
-make db-down   # 停止本地 PostgreSQL
+make db-down   # 停止本地容器
 ```
 
 | 环境变量 | 说明 |
@@ -118,12 +118,13 @@ make db-down   # 停止本地 PostgreSQL
 | `ADMIN_PASSWORD_HASH` | 管理看板密码哈希，用 `python3 scripts/set-admin-password.py` 设置；留空关闭管理入口。见 [08](docs/wiki/08-admin-observability.md) |
 | `APP_ENV` | 必填，`dev` 或 `prod`；决定日志格式（dev 文本，prod JSON） |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串 |
-| `DATABASE_MAX_CONNS` | 默认 `20`，最小 `5`；同时运行 Main 的用户数默认不超过该值减 4（可用 `AGENT_CAPACITY` 调小）；另有一条聊天推送用的 LISTEN 连接 |
+| `REDIS_URL` | 服务进程必填，Redis 连接串（本地示例 `redis://localhost:6379/0`，生产 Compose 自动注入） |
+| `DATABASE_MAX_CONNS` | 单容器默认 `20`，最小 `5`；同时运行 Main 的用户数默认不超过该值减 4（可用 `AGENT_CAPACITY` 调小） |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
 | `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
-| `POSTGRES_PORT` | 可选，本地数据库映射到本机的端口，默认 `5432` |
+| `POSTGRES_PORT`、`REDIS_PORT` | 可选，本地开发容器映射到本机的端口，默认 `5432` 与 `6379` |
 
 本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
 
