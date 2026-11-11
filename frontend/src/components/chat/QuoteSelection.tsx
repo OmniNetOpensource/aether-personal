@@ -1,10 +1,10 @@
-// 本文件负责选中助手原文后的引用入口，以及引用位置的记录与回看高亮；位置只依赖可见正文文本。
+// 本文件负责选中一条消息的可见正文后的引用入口，以及引用位置的记录与回看高亮；位置只依赖标成正文的文字。
 
 import { useEffect, useState } from 'react';
 import type { RefObject } from 'react';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 
-// quoteTextNodes 排除代码工具栏与公式隐藏文本，保证记录的是用户看见的原文。
+// quoteTextNodes 只收集 data-quote-text 里的可见文字。用户消息里的引用卡片、图片、文件名和展开按钮没有这个标记，不能插进字符位置；代码工具栏和公式隐藏文本同样排除。
 function quoteTextNodes(root: Element): Text[] {
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -12,7 +12,8 @@ function quoteTextNodes(root: Element): Text[] {
   while (node) {
     if (
       node instanceof Text &&
-      !node.parentElement?.closest('button, header, .katex-mathml, [hidden]')
+      node.parentElement?.closest('[data-quote-text]') &&
+      !node.parentElement.closest('button, header, .katex-mathml, [hidden]')
     )
       nodes.push(node);
     node = walker.nextNode();
@@ -20,7 +21,7 @@ function quoteTextNodes(root: Element): Text[] {
   return nodes;
 }
 
-// QuoteSelection 只允许同一条助手回复内的选择；按钮固定在选区上边中点，不挤动消息布局。
+// QuoteSelection 只允许同一条消息内的选择；按钮固定在选区上边中点，不挤动消息布局。
 export function QuoteSelection({
   container,
   onQuote,

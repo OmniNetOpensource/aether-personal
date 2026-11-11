@@ -6,7 +6,7 @@ import { CollapsibleMessage } from './CollapsibleMessage.js';
 import { FileAttachmentCard } from './FileAttachmentCard.js';
 import { ImagePreview } from './ImagePreview.js';
 
-// AssistantMessageBubble 把折叠按钮放在引用正文之外，确保引用位置只计算原文；文件与图片附件独立渲染。
+// AssistantMessageBubble 把折叠按钮放在引用正文之外，Markdown 标成可引用正文，确保引用位置只计算原文；文件与图片附件独立渲染。
 export function AssistantMessageBubble({
   message,
   joinedWithPrevious,
@@ -31,7 +31,7 @@ export function AssistantMessageBubble({
         >
           <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
             {message.text ? (
-              <div data-quote-body data-message-id={message.id}>
+              <div data-quote-body data-quote-text data-message-id={message.id}>
                 <Markdown text={message.text} />
               </div>
             ) : null}

@@ -6,7 +6,7 @@ import { CollapsibleMessage } from './CollapsibleMessage.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 import type { ChatMessage } from '../../lib/ChatController.js';
 
-// UserMessageBubble 共用整条正文的折叠容器，展开后仍可回看引用、预览图片与下载附件。
+// UserMessageBubble 共用整条正文的折叠容器，展开后仍可回看引用、预览图片与下载附件。只有用户自己写的文字可以再被引用。
 export function UserMessageBubble({
   message,
   joinedWithPrevious,
@@ -29,31 +29,33 @@ export function UserMessageBubble({
           className={`bubble user-bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
           <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
-            {message.parts.map((part, index) =>
-              part.type === 'quote' ? (
-                <button
-                  type="button"
-                  className="sent-quote"
-                  key={index}
-                  onClick={() => onQuoteNavigate(part.quote)}
-                  aria-label="查看引用原文"
-                >
-                  <blockquote>{part.quote.text}</blockquote>
-                </button>
-              ) : part.type === 'image' ? (
-                <div className="message-images" key={index}>
-                  <ImagePreview image={part.image} />
-                </div>
-              ) : part.type === 'file' ? (
-                <div className="message-files" key={index}>
-                  <FileAttachmentCard file={part.file} />
-                </div>
-              ) : (
-                <p className="user-text" key={index}>
-                  {part.text}
-                </p>
-              ),
-            )}
+            <div data-quote-body data-message-id={message.id}>
+              {message.parts.map((part, index) =>
+                part.type === 'quote' ? (
+                  <button
+                    type="button"
+                    className="sent-quote"
+                    key={index}
+                    onClick={() => onQuoteNavigate(part.quote)}
+                    aria-label="查看引用原文"
+                  >
+                    <blockquote>{part.quote.text}</blockquote>
+                  </button>
+                ) : part.type === 'image' ? (
+                  <div className="message-images" key={index}>
+                    <ImagePreview image={part.image} />
+                  </div>
+                ) : part.type === 'file' ? (
+                  <div className="message-files" key={index}>
+                    <FileAttachmentCard file={part.file} />
+                  </div>
+                ) : (
+                  <p className="user-text" data-quote-text key={index}>
+                    {part.text}
+                  </p>
+                ),
+              )}
+            </div>
           </CollapsibleMessage>
         </div>
       </article>
