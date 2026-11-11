@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配数据库、Redis 信号客户端、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待后台任务和请求处理结束。
+// 本文件是后端进程入口：装配数据库、Redis 客户端、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待后台任务和请求处理结束。
 
 package main
 
@@ -68,20 +68,8 @@ func main() {
 		slog.Error("initialize service encryption failed")
 		os.Exit(1)
 	}
-	// 上传、工具和模型请求共享一个缓存实例；清理任务由入口启动并在退出时等待，错误也只在入口记录。
-	imageStore, err := images.NewStore(serviceSettings, appConfig.ImageCacheDir, appConfig.ImageCacheMaxBytes, appConfig.ImageCacheTTL)
-	if err != nil {
-		slog.Error("initialize image cache failed", "error", err)
-		os.Exit(1)
-	}
-	cacheDone := make(chan error, 1)
-	go func() {
-		err := imageStore.RunCacheCleanup(ctx)
-		if err != nil {
-			stop()
-		}
-		cacheDone <- err
-	}()
+	// 上传、工具和模型请求通过 Redis 跨实例共享图片缓存；过期由 Redis TTL 自动回收，无需后台清理协程。
+	imageStore := images.NewStore(serviceSettings, redisClient, appConfig.ImageCacheMaxBytes, appConfig.ImageCacheTTL)
 	manager := agent.NewManager(databasePool, redisClient, appConfig, serviceSettings, imageStore)
 	managerDone := make(chan error, 1)
 	go func() {
@@ -110,7 +98,7 @@ func main() {
 	}
 	stop()
 	<-httpDone
-	if err := errors.Join(<-managerDone, <-cacheDone); err != nil {
+	if err := <-managerDone; err != nil {
 		slog.Error("background workers stopped", "error", err)
 		os.Exit(1)
 	}

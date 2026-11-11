@@ -35,10 +35,10 @@
 ## 技术栈
 
 - 后端：Go `1.27.2`、标准库 `net/http`、`log/slog`、pgx v5（`pgxpool`）、`redis/go-redis` v9。
-- 数据库与信号协调：PostgreSQL 18 + pgvector（保存全部持久状态与租约栅栏代数，主键 `uuidv7()`）；Redis 8（纯内存无持久化，仅传递跨实例唤醒队列、用户临时租约、思考打断与聊天推送广播）。
+- 数据库与信号协调：PostgreSQL 18 + pgvector（保存全部持久状态与租约栅栏代数，主键 `uuidv7()`）；Redis 8（纯内存无持久化，传递跨实例唤醒队列、用户临时租约、思考打断与聊天推送广播，并以 `oss://` 为键共享图片旁路缓存）。
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
-- 模型：OpenRouter、ikun Gemini 原生协议与 ikun Claude 原生 Messages 协议（支持独立上下文压缩模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（含本机磁盘图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
+- 模型：OpenRouter、ikun Gemini 原生协议与 ikun Claude 原生 Messages 协议（支持独立上下文压缩模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（配 Redis 共享图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
 - 前端：React + React DOM + TypeScript，纯 Web 应用，移动端使用 PWA；工程位于 `frontend/`，构建输出 `frontend/build/web`。
 
 ## 常用命令（在 `backend/` 下）

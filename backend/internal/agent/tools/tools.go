@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Dependencies 是 Runner 的外部依赖：连接池供工具查库，凭证与客户端供联网请求，共享图片存储负责 OSS 与磁盘缓存。
+// Dependencies 是 Runner 的外部依赖：连接池供工具查库，凭证与客户端供联网请求，共享图片存储负责 OSS 与 Redis 缓存。
 type Dependencies struct {
 	DatabasePool *pgxpool.Pool
 	Services     *services.Store

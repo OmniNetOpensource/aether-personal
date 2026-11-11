@@ -31,7 +31,6 @@ type Config struct {
 	AgentCapacity        int32
 	MainModel            string
 	FrontendDir          string
-	ImageCacheDir        string
 	ImageCacheMaxBytes   int64
 	ImageCacheTTL        time.Duration
 }
@@ -75,12 +74,8 @@ func Load() (Config, error) {
 		agentCapacity = int32(parsed)
 	}
 
-	// 磁盘缓存必须容得下一张合法图片；七天是从写入开始的绝对有效期，不随读取延长。
-	imageCacheDir := os.Getenv("IMAGE_CACHE_DIR")
-	if imageCacheDir == "" {
-		imageCacheDir = "bin/image-cache"
-	}
-	imageCacheMaxBytes := int64(1 << 30)
+	// Redis 图片缓存容量须容得下一张合法图片，默认 128 MiB；TTL 为从写入起算的绝对有效期，读取不续期。
+	imageCacheMaxBytes := int64(128 << 20)
 	if value := os.Getenv("IMAGE_CACHE_MAX_BYTES"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed < images.MaxImageBytes {
@@ -88,11 +83,11 @@ func Load() (Config, error) {
 		}
 		imageCacheMaxBytes = parsed
 	}
-	imageCacheTTL := 7 * 24 * time.Hour
+	imageCacheTTL := 24 * time.Hour
 	if value := os.Getenv("IMAGE_CACHE_TTL"); value != "" {
 		parsed, err := time.ParseDuration(value)
-		if err != nil || parsed <= 0 {
-			return Config{}, fmt.Errorf("IMAGE_CACHE_TTL must be a positive duration, got %q", value)
+		if err != nil || parsed < time.Second {
+			return Config{}, fmt.Errorf("IMAGE_CACHE_TTL must be at least 1s, got %q", value)
 		}
 		imageCacheTTL = parsed
 	}
@@ -163,7 +158,6 @@ func Load() (Config, error) {
 		AgentCapacity:        agentCapacity,
 		MainModel:            mainModel,
 		FrontendDir:          os.Getenv("FRONTEND_DIR"),
-		ImageCacheDir:        imageCacheDir,
 		ImageCacheMaxBytes:   imageCacheMaxBytes,
 		ImageCacheTTL:        imageCacheTTL,
 	}, nil

@@ -1,191 +1,111 @@
-// 本文件管理图片的持久化磁盘缓存：按绝对有效期清理、按最近使用时间淘汰，内存只保留索引，下载不持有缓存锁。
+// 本文件管理跨实例共享的 Redis 图片缓存：直接以 oss:// 引用为键保存原始字节，按绝对 TTL 过期并在图片键空间内按最近访问时间淘汰。
 
 package images
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
+	"github.com/redis/go-redis/v9"
 )
 
-// cacheEntry 的 writtenAt 来自文件修改时间，读取不改它，保证七天有效期不会随访问延长。
-// lastUsedAt 只在内存里维护；重启后以写入时间恢复初始淘汰顺序，不影响有效期。
-type cacheEntry struct {
-	size       int64
-	writtenAt  time.Time
-	lastUsedAt time.Time
+// 缓存淘汰索引统一放入同一哈希标签槽，与唤醒队列和用户租约完全隔离，避免全局内存淘汰误删协调信号。
+const (
+	imageCacheLRUKey   = "{image:cache}:lru"
+	imageCacheSizesKey = "{image:cache}:sizes"
+	imageCacheBytesKey = "{image:cache}:bytes"
+)
+
+// trackCachedImageLua 在同一哈希槽内原子登记新缓存图片的大小与访问时间，并在超出容量上限时弹出最久未访问的 oss:// 键。
+const trackCachedImageLua = `
+local oldSize = tonumber(redis.call("HGET", KEYS[2], ARGV[1]) or "0")
+local newSize = tonumber(ARGV[2])
+local maxBytes = tonumber(ARGV[3])
+local nowMilli = tonumber(ARGV[4])
+
+local totalBytes = tonumber(redis.call("GET", KEYS[3]) or "0")
+if oldSize > 0 then
+	redis.call("HDEL", KEYS[2], ARGV[1])
+	redis.call("ZREM", KEYS[1], ARGV[1])
+	totalBytes = totalBytes - oldSize
+end
+
+local evicted = {}
+while totalBytes + newSize > maxBytes do
+	local popped = redis.call("ZPOPMIN", KEYS[1], 1)
+	if #popped == 0 then
+		break
+	end
+	local victim = popped[1]
+	local victimSize = tonumber(redis.call("HGET", KEYS[2], victim) or "0")
+	redis.call("HDEL", KEYS[2], victim)
+	totalBytes = totalBytes - victimSize
+	evicted[#evicted + 1] = victim
+end
+
+redis.call("HSET", KEYS[2], ARGV[1], newSize)
+redis.call("ZADD", KEYS[1], nowMilli, ARGV[1])
+redis.call("SET", KEYS[3], totalBytes + newSize)
+return evicted
+`
+
+// NewStore 创建共享 Redis 图片缓存的图片与文件存储；键到期由 Redis 自动释放，无需本地目录与后台清理协程。
+func NewStore(serviceSettings *services.Store, redisClient *redis.Client, maxBytes int64, ttl time.Duration) *Store {
+	return &Store{
+		services:      serviceSettings,
+		redisClient:   redisClient,
+		cacheMaxBytes: maxBytes,
+		cacheTTL:      ttl,
+	}
 }
 
-// NewStore 恢复专用缓存目录的索引，并清理进程退出留下的临时文件、过期图片和超出容量的旧缓存。
-func NewStore(serviceSettings *services.Store, directory string, maxBytes int64, ttl time.Duration) (*Store, error) {
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return nil, fmt.Errorf("create image cache: %w", err)
-	}
-	files, err := os.ReadDir(directory)
-	if err != nil {
-		return nil, fmt.Errorf("read image cache directory: %w", err)
-	}
-	store := &Store{services: serviceSettings, cacheDirectory: directory, cacheMaxBytes: maxBytes,
-		cacheTTL: ttl, cacheEntries: map[string]cacheEntry{}}
-	// 正式文件只使用 .img 后缀；临时文件从不作为缓存命中，重启时移除未发布的副本。
-	for _, file := range files {
-		name := file.Name()
-		if strings.HasPrefix(name, ".image-") {
-			if err := os.Remove(filepath.Join(directory, name)); err != nil {
-				return nil, fmt.Errorf("remove unfinished image cache: %w", err)
-			}
-			continue
-		}
-		if !strings.HasSuffix(name, ".img") {
-			continue
-		}
-		info, err := file.Info()
-		if err != nil {
-			return nil, fmt.Errorf("inspect image cache: %w", err)
-		}
-		store.cacheEntries[name] = cacheEntry{size: info.Size(), writtenAt: info.ModTime(), lastUsedAt: info.ModTime()}
-		store.cacheBytes += info.Size()
-	}
-	if err := store.cleanExpiredImages(); err != nil {
-		return nil, err
-	}
-	if err := store.trimCache(0); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-// cacheName 以完整 OSS 引用生成固定文件名，避免不同 Bucket 或用户的同名对象共用副本。
-func cacheName(reference string) string {
-	return fmt.Sprintf("%x.img", sha256.Sum256([]byte(reference)))
-}
-
-// readCachedImage 只把不存在或已过期视为未命中；文件系统错误直接返回，不用 OSS 下载掩盖磁盘故障。
-func (s *Store) readCachedImage(reference string) ([]byte, error) {
-	s.cacheMutex.Lock()
-	defer s.cacheMutex.Unlock()
-	name := cacheName(reference)
-	entry, exists := s.cacheEntries[name]
-	if !exists {
-		return nil, nil
-	}
-	if time.Since(entry.writtenAt) >= s.cacheTTL {
-		return nil, s.removeCachedImage(name)
-	}
-	data, err := os.ReadFile(filepath.Join(s.cacheDirectory, name))
-	if errors.Is(err, os.ErrNotExist) {
-		delete(s.cacheEntries, name)
-		s.cacheBytes -= entry.size
+// readCachedImage 直接以 oss:// 引用从 Redis 读取原始图片字节；仅将键不存在或已到期视为未命中，读取不延长绝对 TTL。
+func (s *Store) readCachedImage(ctx context.Context, reference string) ([]byte, error) {
+	data, err := s.redisClient.Get(ctx, reference).Bytes()
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read cached image %s: %w", reference, err)
 	}
-	entry.lastUsedAt = time.Now()
-	s.cacheEntries[name] = entry
+	// 仅在淘汰索引仍记录该引用时更新最近访问时间，避免刚被并发淘汰的键重新写回有序集合。
+	if err := s.redisClient.ZAddXX(ctx, imageCacheLRUKey, redis.Z{
+		Score:  float64(time.Now().UnixMilli()),
+		Member: reference,
+	}).Err(); err != nil {
+		return nil, fmt.Errorf("touch cached image %s: %w", reference, err)
+	}
 	return data, nil
 }
 
-// writeCachedImage 在锁内淘汰并发布完整文件；下载在调用它之前完成，不让慢网络阻塞其他用户读缓存。
-func (s *Store) writeCachedImage(reference string, data []byte) (err error) {
-	s.cacheMutex.Lock()
-	defer s.cacheMutex.Unlock()
-	name := cacheName(reference)
-	// 两个请求同时未命中时，保留先发布的副本及其原始有效期。
-	if entry, exists := s.cacheEntries[name]; exists {
-		if time.Since(entry.writtenAt) < s.cacheTTL {
-			return nil
-		}
-		if err := s.removeCachedImage(name); err != nil {
-			return err
-		}
-	}
-	if err := s.trimCache(int64(len(data))); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(s.cacheDirectory, ".image-")
+// writeCachedImage 以 oss:// 引用将原始图片字节写入 Redis：NX 保留并发未命中时先发布的副本与原有效期，超限时按 LRU 淘汰旧图片。
+func (s *Store) writeCachedImage(ctx context.Context, reference string, data []byte) error {
+	inserted, err := s.redisClient.SetNX(ctx, reference, data, s.cacheTTL).Result()
 	if err != nil {
-		return fmt.Errorf("create cached image %s: %w", reference, err)
-	}
-	// 失败时删除临时文件，清理失败也随原始错误返回；成功重命名后目录里只剩正式文件。
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, os.Remove(file.Name()))
-		}
-	}()
-	_, writeErr := file.Write(data)
-	if err = errors.Join(writeErr, file.Close()); err != nil {
 		return fmt.Errorf("write cached image %s: %w", reference, err)
 	}
-	if err = os.Rename(file.Name(), filepath.Join(s.cacheDirectory, name)); err != nil {
-		return fmt.Errorf("publish cached image %s: %w", reference, err)
+	if !inserted {
+		return nil
 	}
-	now := time.Now()
-	s.cacheEntries[name] = cacheEntry{size: int64(len(data)), writtenAt: now, lastUsedAt: now}
-	s.cacheBytes += int64(len(data))
-	return nil
-}
-
-// removeCachedImage 同步删除磁盘文件与索引；调用方持有缓存锁，或仍处在启动装配阶段。
-func (s *Store) removeCachedImage(name string) error {
-	if err := os.Remove(filepath.Join(s.cacheDirectory, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove cached image %s: %w", name, err)
+	evicted, err := s.redisClient.Eval(
+		ctx,
+		trackCachedImageLua,
+		[]string{imageCacheLRUKey, imageCacheSizesKey, imageCacheBytesKey},
+		reference,
+		len(data),
+		s.cacheMaxBytes,
+		time.Now().UnixMilli(),
+	).StringSlice()
+	if err != nil {
+		return fmt.Errorf("track cached image %s: %w", reference, err)
 	}
-	s.cacheBytes -= s.cacheEntries[name].size
-	delete(s.cacheEntries, name)
-	return nil
-}
-
-// trimCache 为新文件腾出空间，每次删除最近最少使用的副本；调用方持锁，启动恢复时尚无并发访问。
-func (s *Store) trimCache(requiredBytes int64) error {
-	for s.cacheBytes+requiredBytes > s.cacheMaxBytes {
-		oldestName := ""
-		var oldestTime time.Time
-		for name, entry := range s.cacheEntries {
-			if oldestName == "" || entry.lastUsedAt.Before(oldestTime) {
-				oldestName, oldestTime = name, entry.lastUsedAt
-			}
-		}
-		if err := s.removeCachedImage(oldestName); err != nil {
-			return err
+	if len(evicted) > 0 {
+		if err := s.redisClient.Del(ctx, evicted...).Err(); err != nil {
+			return fmt.Errorf("evict cached images: %w", err)
 		}
 	}
 	return nil
-}
-
-// cleanExpiredImages 删除已过绝对有效期的文件，不触碰 OSS 原图。
-func (s *Store) cleanExpiredImages() error {
-	s.cacheMutex.Lock()
-	defer s.cacheMutex.Unlock()
-	for name, entry := range s.cacheEntries {
-		if time.Since(entry.writtenAt) >= s.cacheTTL {
-			if err := s.removeCachedImage(name); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// RunCacheCleanup 由进程入口管理生命周期；退出时停止计时器，清理错误向上交给入口统一处理。
-func (s *Store) RunCacheCleanup(ctx context.Context) error {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := s.cleanExpiredImages(); err != nil {
-				return err
-			}
-		}
-	}
 }

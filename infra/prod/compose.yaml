@@ -1,4 +1,4 @@
-# 本文件编排生产单机多容器环境：PostgreSQL 持久化业务数据，纯内存 Redis 传递跨实例信号，两个对等后端容器各自挂载独立图片缓存卷。
+# 本文件编排生产单机多容器环境：PostgreSQL 持久化业务数据，纯内存 Redis 传递跨实例信号并共享图片缓存，两个对等后端容器无状态运行。
 name: aether-personal-prod
 
 x-logging: &logging
@@ -31,9 +31,8 @@ x-api: &api-service
     SANDBOX_SECURITY_GROUP_ID: ${SANDBOX_SECURITY_GROUP_ID:-}
     SANDBOX_VSWITCH_IDS: ${SANDBOX_VSWITCH_IDS:-}
     SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-10m}
-    IMAGE_CACHE_DIR: /var/cache/aether/images
-    IMAGE_CACHE_MAX_BYTES: ${IMAGE_CACHE_MAX_BYTES:-1073741824}
-    IMAGE_CACHE_TTL: ${IMAGE_CACHE_TTL:-168h}
+    IMAGE_CACHE_MAX_BYTES: ${IMAGE_CACHE_MAX_BYTES:-134217728}
+    IMAGE_CACHE_TTL: ${IMAGE_CACHE_TTL:-24h}
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
@@ -82,13 +81,9 @@ services:
     build:
       context: ../..
       dockerfile: infra/prod/Dockerfile.backend
-    volumes:
-      - image-cache-1:/var/cache/aether/images
 
   api-2:
     <<: *api-service
-    volumes:
-      - image-cache-2:/var/cache/aether/images
 
   migrate:
     image: aether-personal-backend:${RELEASE_TAG:-local}
@@ -170,7 +165,5 @@ services:
 
 volumes:
   postgres-data:
-  image-cache-1:
-  image-cache-2:
   caddy-data:
   caddy-config:

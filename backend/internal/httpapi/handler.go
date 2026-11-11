@@ -18,7 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// server 共享请求处理所需的连接池、Redis 客户端、服务配置与图片存储，所有图片入口使用同一份本机缓存索引。
+// server 共享请求处理所需的连接池、Redis 客户端、服务配置与图片存储，图片入口经 Redis 跨实例共享缓存。
 type server struct {
 	databasePool *pgxpool.Pool
 	redisClient  *redis.Client

@@ -1,4 +1,4 @@
-// 本文件封装聊天图片的 OSS 存储：上传后填入本机缓存，模型请求优先读缓存并转换为 base64，历史返回临时预览链接。
+// 本文件封装聊天图片的 OSS 存储：上传后填入共享 Redis 缓存，模型请求优先读缓存并转换为 base64，历史返回临时预览链接。
 
 package images
 
@@ -13,13 +13,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 const MaxImageBytes = 4 << 20
@@ -34,15 +34,12 @@ type Image struct {
 	MIMEType   string `json:"mime_type"`
 }
 
-// Store 在进程内共享磁盘缓存的索引；图片字节留在磁盘，服务凭证仍在每次操作时从看板配置读取。
+// Store 跨后端实例通过 Redis 共享图片原始字节缓存；服务凭证仍在每次操作时从看板配置读取。
 type Store struct {
-	services       *services.Store
-	cacheDirectory string
-	cacheMaxBytes  int64
-	cacheTTL       time.Duration
-	cacheMutex     sync.Mutex
-	cacheEntries   map[string]cacheEntry
-	cacheBytes     int64
+	services      *services.Store
+	redisClient   *redis.Client
+	cacheMaxBytes int64
+	cacheTTL      time.Duration
 }
 
 // client 将服务配置转换成官方 SDK 客户端；连接和读取受调用方超时控制，兜底上限覆盖 50 MB 文件流传输。
@@ -85,8 +82,8 @@ func (s *Store) Put(ctx context.Context, userID uuid.UUID, name string, data []b
 		return Image{}, fmt.Errorf("OSS 图片上传失败")
 	}
 	image := Image{Name: name, StorageURL: "oss://" + settings.Bucket + "/" + key, Size: len(data), MIMEType: mime}
-	// 上传成功后直接复用已有字节，下次模型请求不再把刚上传的图片下载回来。
-	if err := s.writeCachedImage(image.StorageURL, data); err != nil {
+	// 上传成功后直接写入共享 Redis 缓存，无论下一跳落在哪个后端实例都不必从 OSS 重新下载。
+	if err := s.writeCachedImage(ctx, image.StorageURL, data); err != nil {
 		return Image{}, err
 	}
 	image.URL, err = s.Preview(ctx, image.StorageURL)
@@ -169,7 +166,7 @@ func (s *Store) ResolveMessages(ctx context.Context, messages []json.RawMessage)
 				if err != nil {
 					return nil, err
 				}
-				data, err := s.readCachedImage(image.URL)
+				data, err := s.readCachedImage(ctx, image.URL)
 				if err != nil {
 					return nil, err
 				}
@@ -186,7 +183,7 @@ func (s *Store) ResolveMessages(ctx context.Context, messages []json.RawMessage)
 					if _, err := ValidateBytes(data); err != nil {
 						return nil, err
 					}
-					if err := s.writeCachedImage(image.URL, data); err != nil {
+					if err := s.writeCachedImage(ctx, image.URL, data); err != nil {
 						return nil, err
 					}
 				}
@@ -202,7 +199,7 @@ func (s *Store) ResolveMessages(ctx context.Context, messages []json.RawMessage)
 	return resolved, nil
 }
 
-// Inspect 优先从本机缓存核对真实字节大小与类型，未命中时再向 OSS 读取对象元信息，不信任客户端回传的 size。
+// Inspect 优先从共享 Redis 缓存核对真实字节大小与类型，未命中时再向 OSS 读取对象元信息，不信任客户端回传的 size。
 func (s *Store) Inspect(ctx context.Context, reference string) (int, string, error) {
 	client, settings, err := s.client(ctx)
 	if err != nil {
@@ -212,7 +209,7 @@ func (s *Store) Inspect(ctx context.Context, reference string) (int, string, err
 	if err != nil {
 		return 0, "", err
 	}
-	cachedData, err := s.readCachedImage(reference)
+	cachedData, err := s.readCachedImage(ctx, reference)
 	if err != nil {
 		return 0, "", err
 	}
