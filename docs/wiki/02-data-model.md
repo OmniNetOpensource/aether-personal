@@ -45,7 +45,7 @@ erDiagram
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `model_calls` | 每次模型 HTTP 请求尝试、结果与可空用量 | `开发中` |
-| `model_settings` | 全局 Main 与压缩运行时模型选择、三阶段闲置后台工作时长、版本与最后修改者快照 | `开发中` |
+| `model_settings` | 全局 Main 与压缩运行时模型选择、闲置后台反思时长、版本与最后修改者快照 | `开发中` |
 | `service_settings` | 九组服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -286,12 +286,13 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00041_remove_assistant_task_binding.sql` | 移除助手消息的任务 ID 与强制归属约束；只保留任务和相关用户输入 | `开发中` |
 | `00045_add_schedules.sql` | 重新加入 `schedules` 表，一次性与周期安排共用，投递后删除或推进 `next_run_at` | `开发中` |
 | `00046_add_reflection_idle_minutes.sql` | `model_settings.reflection_idle_minutes`，后由 `00047` 拆分为三列 | `历史` |
-| `00047_split_idle_work_minutes.sql` | 将闲置时长拆分为 `memory_update_idle_minutes`、`recent_followup_idle_minutes`、`unknown_unknowns_idle_minutes`（默认 60/120/180 分钟） | `已实现` |
+| `00047_split_idle_work_minutes.sql` | 曾将闲置时长拆分为三列，后由 `00053` 合并回单列 | `历史` |
 | `00048_add_chat_search.sql` | `chat_message_text` 函数与可见聊天全文三元组 GIN 索引，供页面历史搜索与上下文窗口使用 | `已实现` |
 | `00049_add_sandbox_workspaces.sql` | `sandbox_workspaces` 工作区绑定表，并将 `aliyun_fc` 纳入服务目录 | `已实现` |
 | `00050_add_sandbox_traffic_token.sql` | 持久化加密的沙箱流量令牌，支持不唤醒实例的只读实时桌面观察 | `已实现` |
 | `00051_add_workspace_file_transfer.sql` | `sandbox_workspaces.synced_through_sequence` 记录已同步进 `/mnt/workspace/uploads` 的聊天附件序号，并在聊天搜索中纳入附件文件名 | `已实现` |
 | `00052_add_user_lease_epoch.sql` | `users.main_lease_epoch` 单调递增执行代数，防止多实例租约超时或 Redis 重启后旧实例覆盖新实例的数据 | `已实现` |
+| `00053_merge_idle_work_minutes.sql` | 将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），配合持续按最近一次请求触发 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

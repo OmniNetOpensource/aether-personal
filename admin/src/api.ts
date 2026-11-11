@@ -145,9 +145,7 @@ export interface ModelSettings {
   compact_model: string;
   compact_context_length: number;
   compact_at_tokens: number;
-  memory_update_idle_minutes: number;
-  recent_followup_idle_minutes: number;
-  unknown_unknowns_idle_minutes: number;
+  reflection_idle_minutes: number;
   main_model: string;
   version: number;
   updated_at: string | null;

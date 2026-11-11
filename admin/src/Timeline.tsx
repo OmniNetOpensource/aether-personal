@@ -141,9 +141,10 @@ function TimelineImages({ item }: { item: TimelineItem }) {
   ) : null;
 }
 
-// triggerTitles 区分落库的定时触发与三种闲置后台工作消息，避免时间线里统称系统通知。
+// triggerTitles 区分落库的定时触发与闲置后台反思消息（含合并前的三种历史名称），避免时间线里统称系统通知。
 const triggerTitles: Record<string, string> = {
   schedule_event: '定时任务触发',
+  reflection: '闲置后台反思',
   memory_update: '闲置记忆整理',
   recent_followup: '闲置近期跟进',
   unknown_unknowns: '闲置未知探索',

@@ -1,4 +1,4 @@
--- 本文件是定时触发的查询集合：schedule 工具的增删改查、调度器扫描到期安排并推进下一次时间，以及闲置后台工作的到期判断与触发消息写入（sqlc 据此生成代码）。
+-- 本文件是定时触发的查询集合：schedule 工具的增删改查、调度器扫描到期安排并推进下一次时间，以及闲置后台反思的到期判断与触发消息写入（sqlc 据此生成代码）。
 
 -- name: CreateSchedule :one
 INSERT INTO schedules (user_id, title, context, cron, timezone, next_run_at)
@@ -29,27 +29,29 @@ SELECT * FROM schedules WHERE id = $1 AND next_run_at <= now() FOR UPDATE SKIP L
 -- name: AdvanceSchedule :exec
 UPDATE schedules SET next_run_at = $2, updated_at = now() WHERE id = $1;
 
--- name: ListIdleWorkDue :many
--- 一种闲置后台工作的到期条件：用户最近一条消息之后这种工作还没投过、前一种工作已经投过（previous_work_name 为空表示没有前一种）、
--- Main 没有活、用户最近一条消息已过 idle_minutes。从用户消息起算，所以前一种工作自己产生的消息不会推迟后一种。
--- 最近一条用户消息早于闲置时长再加一天的不算，上线或停机恢复后不给很久以前的对话补跑。user_id 为空时扫描全部用户，投递事务内按用户复查。
+-- name: ListReflectionDue :many
+-- 闲置后台反思的到期条件：该用户发过本人消息、Main 当前没有活也没有进行中的模型请求，
+-- 且最近一次已结束的模型请求（与最新一条消息入库时间取较晚者）距今已满 idle_minutes。
+-- 以前投递过不阻止再次触发；user_id 为空时扫描全部用户，投递事务内按用户复查。
 SELECT u.id AS user_id FROM users AS u
-CROSS JOIN LATERAL (
-    SELECT m.sequence, m.created_at FROM messages AS m
-    WHERE m.user_id = u.id AND m.sender = 'user' AND m.role = 'user' AND NOT m.is_summary
-    ORDER BY m.sequence DESC LIMIT 1
-) AS last_input
 WHERE (sqlc.narg(user_id)::uuid IS NULL OR u.id = sqlc.narg(user_id)::uuid)
-    AND last_input.created_at <= now() - make_interval(mins => sqlc.arg(idle_minutes)::int)
-    AND last_input.created_at > now() - make_interval(mins => sqlc.arg(idle_minutes)::int) - interval '1 day'
+    AND EXISTS (
+        SELECT 1 FROM messages AS m
+        WHERE m.user_id = u.id AND m.sender = 'user' AND m.role = 'user' AND NOT m.is_summary
+    )
     AND NOT EXISTS (SELECT 1 FROM main_work AS w WHERE w.user_id = u.id)
-    AND NOT EXISTS (SELECT 1 FROM messages AS m WHERE m.user_id = u.id
-        AND m.sequence > last_input.sequence AND m.content ->> 'name' = sqlc.arg(work_name)::text)
-    AND (sqlc.arg(previous_work_name)::text = '' OR EXISTS (SELECT 1 FROM messages AS m WHERE m.user_id = u.id
-        AND m.sequence > last_input.sequence AND m.content ->> 'name' = sqlc.arg(previous_work_name)::text));
+    AND NOT EXISTS (SELECT 1 FROM model_calls AS mc WHERE mc.user_id = u.id AND mc.outcome = 'in_flight')
+    AND GREATEST(
+        (SELECT mc.finished_at FROM model_calls AS mc
+         WHERE mc.user_id = u.id AND mc.finished_at IS NOT NULL
+         ORDER BY mc.started_at DESC LIMIT 1),
+        (SELECT m.created_at FROM messages AS m
+         WHERE m.user_id = u.id
+         ORDER BY m.sequence DESC LIMIT 1)
+    ) <= now() - make_interval(mins => sqlc.arg(idle_minutes)::int);
 
 -- name: InsertTriggerMessage :one
--- 定时投递与闲置后台工作共用：不可见的 user 消息，由系统发出，入库即成为 Main 的新输入。
+-- 定时投递与闲置后台反思共用：不可见的 user 消息，由系统发出，入库即成为 Main 的新输入。
 INSERT INTO messages (user_id, role, content, sender, visible)
 VALUES ($1, 'user', $2, 'system', false)
 RETURNING sequence;

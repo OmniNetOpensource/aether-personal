@@ -1,4 +1,4 @@
-// 本文件是管理看板配置页的模型部分：分别选择 Main 与压缩模型，填写压缩阈值与三种闲置后台工作的时长，保存后从下一次请求或扫描生效。
+// 本文件是管理看板配置页的模型部分：分别选择 Main 与压缩模型，填写压缩阈值与闲置后台反思时长，保存后从下一次请求或扫描生效。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -10,15 +10,6 @@ import {
   type ModelSettings,
 } from './api.js';
 import { Empty } from './ui.js';
-
-type IdleMinutesKey = 'memory_update_idle_minutes' | 'recent_followup_idle_minutes' | 'unknown_unknowns_idle_minutes';
-
-// idleWorkFields 按运行顺序列出三种闲置后台工作的设置项，输入框、变更判断与校验共用。
-const idleWorkFields: { key: IdleMinutesKey; label: string }[] = [
-  { key: 'memory_update_idle_minutes', label: '记忆整理' },
-  { key: 'recent_followup_idle_minutes', label: '近期跟进' },
-  { key: 'unknown_unknowns_idle_minutes', label: '未知的未知' },
-];
 
 // ModelSettingsPage 自己负责读取与保存；页面不自动刷新，避免覆盖尚未保存的选择。上层用 refreshKey 触发手动刷新。
 export function ModelSettingsPage({
@@ -36,7 +27,7 @@ export function ModelSettingsPage({
 }) {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens' | IdleMinutesKey> | null>(null);
+  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens' | 'reflection_idle_minutes'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loadError, setLoadError] = useState(false);
@@ -58,9 +49,7 @@ export function ModelSettingsPage({
         main_model: loadedSettings.main_model,
         compact_model: loadedSettings.compact_model,
         compact_at_tokens: loadedSettings.compact_at_tokens,
-        memory_update_idle_minutes: loadedSettings.memory_update_idle_minutes,
-        recent_followup_idle_minutes: loadedSettings.recent_followup_idle_minutes,
-        unknown_unknowns_idle_minutes: loadedSettings.unknown_unknowns_idle_minutes,
+        reflection_idle_minutes: loadedSettings.reflection_idle_minutes,
       });
       setLoadError(false);
       onUpdated(`${formatTime(loadedCatalog.fetched_at)} 已更新目录`);
@@ -91,7 +80,7 @@ export function ModelSettingsPage({
     draft.main_model !== settings.main_model ||
     draft.compact_model !== settings.compact_model ||
     draft.compact_at_tokens !== settings.compact_at_tokens ||
-    idleWorkFields.some((field) => draft[field.key] !== settings[field.key]);
+    draft.reflection_idle_minutes !== settings.reflection_idle_minutes;
   const perMillion = (value: string) =>
     value !== '' && Number.isFinite(Number(value)) ? `$${Number(value) * 1000000}` : '未知';
 
@@ -109,9 +98,8 @@ export function ModelSettingsPage({
       setSaveError('压缩阈值需为 1000–2000000 Token 的整数。');
       return;
     }
-    const invalidIdle = idleWorkFields.find((field) => !Number.isInteger(draft[field.key]) || draft[field.key] < 10 || draft[field.key] > 10080);
-    if (invalidIdle) {
-      setSaveError(`${invalidIdle.label}的闲置时长需为 10–10080 分钟的整数。`);
+    if (!Number.isInteger(draft.reflection_idle_minutes) || draft.reflection_idle_minutes < 10 || draft.reflection_idle_minutes > 10080) {
+      setSaveError('闲置时长需为 10–10080 分钟的整数。');
       return;
     }
     const current = generation.current;
@@ -127,9 +115,7 @@ export function ModelSettingsPage({
         main_model: saved.main_model,
         compact_model: saved.compact_model,
         compact_at_tokens: saved.compact_at_tokens,
-        memory_update_idle_minutes: saved.memory_update_idle_minutes,
-        recent_followup_idle_minutes: saved.recent_followup_idle_minutes,
-        unknown_unknowns_idle_minutes: saved.unknown_unknowns_idle_minutes,
+        reflection_idle_minutes: saved.reflection_idle_minutes,
       });
       notify('模型配置已应用，下一次请求开始生效。');
     } catch (error) {
@@ -275,26 +261,24 @@ export function ModelSettingsPage({
           </p>
         </section>
         <section className="panel model-role-card compact-settings">
-          <h3>闲置后台工作</h3>
+          <h3>闲置后台反思</h3>
           <p className="muted">
-            用户最近一条消息之后，按下面的时长依次运行三种后台工作，前一种运行过才轮到后一种；每段新对话各运行一次，由 Main 模型执行。记忆整理只改记忆、不发消息；近期跟进与未知的未知有值得说的才发一条消息。
+            距离该用户最近一次请求结束满设定时长且当前空闲时，自动由 Main 在后台运行一次：有新对话时整理记忆，并视情况发一条近期跟进或新推荐，无事可说则保持沉默；跑完后重新计时并持续按周期触发。
           </p>
           <div className="model-role-grid">
-            {idleWorkFields.map((field) => (
-              <label key={field.key} className="model-picker">
-                {field.label}（分钟）
-                <input
-                  type="number"
-                  min={10}
-                  max={10080}
-                  step={1}
-                  required
-                  value={draft[field.key]}
-                  disabled={saving}
-                  onChange={(event) => setDraft({ ...draft, [field.key]: Number(event.target.value) })}
-                />
-              </label>
-            ))}
+            <label className="model-picker">
+              闲置时长（分钟）
+              <input
+                type="number"
+                min={10}
+                max={10080}
+                step={1}
+                required
+                value={draft.reflection_idle_minutes}
+                disabled={saving}
+                onChange={(event) => setDraft({ ...draft, reflection_idle_minutes: Number(event.target.value) })}
+              />
+            </label>
           </div>
         </section>
         <div className="model-save-bar">
