@@ -47,28 +47,13 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
 // ---- 后端返回的数据形状（与 backend/internal/httpapi 的管理接口一一对应） ----
 
-// Page 是游标分页的统一外壳。
-export interface Page<T> {
-  items: T[];
-  next_cursor: string | null;
-}
-
 export interface SnapshotUser {
   id: string;
   email: string;
   created_at: string;
-  last_activity_at: string | null;
-  main_active: boolean;
-  attempts: number;
-  failed: number;
-  input_tokens: number;
-  output_tokens: number;
-  cost_known_usd: string;
-  cost_unknown: number;
 }
 
 export interface SnapshotAgent {
-  id: string | null;
   user_id: string;
   email: string;
   status: string;
@@ -76,27 +61,9 @@ export interface SnapshotAgent {
 
 export interface Snapshot {
   generated_at: string;
-  coverage: { first_observed_at: string | null; legacy_steps: number };
-  metrics: {
-    attempts: number;
-    succeeded: number;
-    failed: number;
-    in_flight: number;
-    interrupted: number;
-    input_tokens: number;
-    output_tokens: number;
-    input_unknown: number;
-    output_unknown: number;
-    cost_known_usd: string;
-    cost_unknown: number;
-    mean_duration_ms: number | null;
-    duration_samples: number;
-  };
-  trend: { at: string; attempts: number; succeeded: number; failed: number }[];
-  models: { model: string; attempts: number; cost_known_usd: string }[];
-  tools: { name: string; count: number }[];
-  users: Page<SnapshotUser>;
-  agents: Page<SnapshotAgent>;
+  models: { model: string }[];
+  users: { items: SnapshotUser[] };
+  agents: { items: SnapshotAgent[] };
 }
 
 // Call 是单次模型请求尝试的日志行，列表与时间线共用。

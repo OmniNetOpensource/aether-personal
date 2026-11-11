@@ -1,15 +1,13 @@
-// 本文件实现管理看板的只读查询接口：汇总运行概览、用户与 Main、模型调用列表及详情，供看板分页筛选查看。
+// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表、模型候选、Main 状态以及单次模型调用的请求与响应正文。
 
 package httpapi
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,37 +17,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type adminCursor struct {
-	At time.Time `json:"at"`
-	ID uuid.UUID `json:"id"`
-}
-
+// adminFilters 是快照与运行时间线共用的查询条件。
 type adminFilters struct {
 	From, To       time.Time
-	Bucket         string
 	UserID         *uuid.UUID
 	Model, Outcome *string
-	Search         string
-	Limit          int32
-	Cursor         *adminCursor
-	UserCursor     *adminCursor
-	AgentCursor    *adminCursor
-	StepID         *uuid.UUID
 }
 
-type adminPage struct {
-	Items      []json.RawMessage `json:"items"`
-	NextCursor *string           `json:"next_cursor"`
-	lastCursor *adminCursor
+// adminUser 是快照接口返回给看板下拉框的用户摘要。
+type adminUser struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
+// adminAgentStatus 是选中用户 Main 的当前运行状态。
+type adminAgentStatus struct {
+	UserID uuid.UUID `json:"user_id"`
+	Email  string    `json:"email"`
+	Status string    `json:"status"`
+}
+
+// adminMe 返回当前共享管理员会话的显示名称。
 func (s *server) adminMe(w http.ResponseWriter, r *http.Request) {
 	writeAdminJSON(w, map[string]string{"name": "管理员"})
 }
 
+// parseAdminFilters 校验看板提交的时间窗口、用户、模型与请求结果筛选参数。
 func parseAdminFilters(r *http.Request) (adminFilters, error) {
 	values := r.URL.Query()
-	filter := adminFilters{To: time.Now().UTC(), Limit: 50}
+	filter := adminFilters{To: time.Now().UTC()}
 	var err error
 	if value := values.Get("to"); value != "" {
 		filter.To, err = time.Parse(time.RFC3339, value)
@@ -67,19 +64,6 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 	filter.From, filter.To = filter.From.UTC(), filter.To.UTC()
 	if filter.From.Year() < 1 || filter.To.Year() < 1 || !filter.From.Before(filter.To) || filter.To.Sub(filter.From) > 31*24*time.Hour {
 		return filter, fmt.Errorf("range must be positive and no longer than 31 days")
-	}
-	filter.Bucket = values.Get("bucket")
-	if filter.Bucket == "" {
-		filter.Bucket = "hour"
-		if filter.To.Sub(filter.From) > 48*time.Hour {
-			filter.Bucket = "day"
-		}
-	}
-	if filter.Bucket != "hour" && filter.Bucket != "day" {
-		return filter, fmt.Errorf("bucket must be hour or day")
-	}
-	if filter.Bucket == "hour" && filter.To.Sub(filter.From.Truncate(time.Hour)) > 744*time.Hour {
-		return filter, fmt.Errorf("hourly range exceeds 744 buckets; use day")
 	}
 	if value := values.Get("user_id"); value != "" {
 		id, err := uuid.Parse(value)
@@ -102,67 +86,10 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 			return filter, fmt.Errorf("invalid outcome")
 		}
 	}
-	filter.Search = strings.TrimSpace(values.Get("q"))
-	if !utf8.ValidString(filter.Search) || strings.ContainsRune(filter.Search, 0) || utf8.RuneCountInString(filter.Search) > 128 {
-		return filter, fmt.Errorf("q is too long")
-	}
-	if value := values.Get("limit"); value != "" {
-		limit, err := strconv.Atoi(value)
-		if err != nil || limit < 1 || limit > 100 {
-			return filter, fmt.Errorf("limit must be between 1 and 100")
-		}
-		filter.Limit = int32(limit)
-	}
-	for _, cursor := range []struct {
-		name string
-		out  **adminCursor
-	}{{"cursor", &filter.Cursor}, {"user_cursor", &filter.UserCursor}, {"agent_cursor", &filter.AgentCursor}} {
-		value := values.Get(cursor.name)
-		if value == "" {
-			continue
-		}
-		if len(value) > 256 {
-			return filter, fmt.Errorf("invalid %s", cursor.name)
-		}
-		decoded, err := base64.RawURLEncoding.DecodeString(value)
-		var parsed adminCursor
-		if err != nil || json.Unmarshal(decoded, &parsed) != nil || parsed.At.IsZero() || parsed.At.Year() < 1 {
-			return filter, fmt.Errorf("invalid %s", cursor.name)
-		}
-		*cursor.out = &parsed
-	}
-	if value := values.Get("step_id"); value != "" {
-		id, err := uuid.Parse(value)
-		if err != nil {
-			return filter, fmt.Errorf("invalid step_id")
-		}
-		filter.StepID = &id
-	}
-
 	return filter, nil
 }
 
-func adminCursorValues(cursor *adminCursor) (*time.Time, *uuid.UUID) {
-	if cursor == nil {
-		return nil, nil
-	}
-	return &cursor.At, &cursor.ID
-}
-
-func appendAdminItem(page *adminPage, payload []byte, at time.Time, id uuid.UUID, limit int32) {
-	if len(page.Items) < int(limit) {
-		page.Items = append(page.Items, json.RawMessage(payload))
-		page.lastCursor = &adminCursor{At: at, ID: id}
-		return
-	}
-	// The extra row proves another page exists; resume after the last visible row.
-	if page.NextCursor == nil {
-		data, _ := json.Marshal(page.lastCursor)
-		value := base64.RawURLEncoding.EncodeToString(data)
-		page.NextCursor = &value
-	}
-}
-
+// beginAdminRead 开启带语句超时的只读事务，确保同一次看板快照里的查询观察到一致的时间点。
 func (s *server) beginAdminRead(ctx context.Context) (pgx.Tx, error) {
 	tx, err := s.databasePool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -175,12 +102,14 @@ func (s *server) beginAdminRead(ctx context.Context) (pgx.Tx, error) {
 	return tx, nil
 }
 
+// writeAdminJSON 统一以禁止缓存的 JSON 响应写出数据。
 func writeAdminJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(value)
 }
 
+// adminSnapshot 返回看板筛选栏所需的用户、模型候选，以及当前选中用户的 Main 运行状态。
 func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseAdminFilters(r)
 	if err != nil {
@@ -197,100 +126,47 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	queries := s.queries.WithTx(tx)
 	payload, err := queries.AdminSnapshot(ctx, database.AdminSnapshotParams{
-		FromAt: filter.From, ToAt: filter.To, Bucket: filter.Bucket,
-		UserID: filter.UserID,
-		Model:  filter.Model, Outcome: filter.Outcome, Search: filter.Search,
+		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
 	})
 	if err != nil {
 		internalError(w, "read admin snapshot failed", err)
 		return
 	}
-	cursorAt, cursorID := adminCursorValues(filter.UserCursor)
-	userRows, err := queries.ListAdminUsers(ctx, database.ListAdminUsersParams{
-		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-		Model:   filter.Model,
-		Outcome: filter.Outcome, Search: filter.Search,
-		CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
-	})
+	userRows, err := queries.ListAdminUsers(ctx, filter.UserID)
 	if err != nil {
 		internalError(w, "read admin users failed", err)
 		return
 	}
-	users := adminPage{Items: []json.RawMessage{}}
+	users := make([]adminUser, 0, len(userRows))
 	for _, row := range userRows {
-		appendAdminItem(&users, row.Payload, row.CreatedAt, row.ID, filter.Limit)
+		users = append(users, adminUser{ID: row.ID, Email: row.Email, CreatedAt: row.CreatedAt})
 	}
-	agents := adminPage{Items: []json.RawMessage{}}
+	agents := []adminAgentStatus{}
 	if filter.UserID != nil {
-		cursorAt, cursorID = adminCursorValues(filter.AgentCursor)
-		rows, err := queries.ListAdminAgents(ctx, database.ListAdminAgentsParams{
-			FromAt: filter.From, ToAt: filter.To,
-			SelectedUserID: *filter.UserID,
-			Model:          filter.Model, Outcome: filter.Outcome, Search: filter.Search,
-			CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
-		})
-		if err != nil {
-			internalError(w, "read admin agents failed", err)
+		agent, err := queries.GetAdminAgentStatus(ctx, *filter.UserID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			internalError(w, "read admin agent status failed", err)
 			return
 		}
-		for _, row := range rows {
-			id := uuid.Nil
-			if row.ID != nil {
-				id = *row.ID
-			}
-			appendAdminItem(&agents, row.Payload, row.CreatedAt, id, filter.Limit)
+		if err == nil {
+			agents = append(agents, adminAgentStatus{UserID: agent.UserID, Email: agent.Email, Status: agent.Status})
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		internalError(w, "commit admin snapshot failed", err)
 		return
 	}
-	var snapshot map[string]json.RawMessage
+	var snapshot map[string]any
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
 		internalError(w, "decode admin snapshot failed", err)
 		return
 	}
-	snapshot["users"], _ = json.Marshal(users)
-	snapshot["agents"], _ = json.Marshal(agents)
+	snapshot["users"] = map[string]any{"items": users}
+	snapshot["agents"] = map[string]any{"items": agents}
 	writeAdminJSON(w, snapshot)
 }
 
-func (s *server) adminCalls(w http.ResponseWriter, r *http.Request) {
-	filter, err := parseAdminFilters(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	tx, err := s.beginAdminRead(ctx)
-	if err != nil {
-		internalError(w, "begin admin calls failed", err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	cursorAt, cursorID := adminCursorValues(filter.Cursor)
-	rows, err := s.queries.WithTx(tx).ListAdminCalls(ctx, database.ListAdminCallsParams{
-		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-		Model:   filter.Model,
-		Outcome: filter.Outcome, Search: filter.Search, StepID: filter.StepID,
-		CursorAt: cursorAt, CursorID: cursorID, PageLimit: filter.Limit + 1,
-	})
-	if err != nil {
-		internalError(w, "read admin calls failed", err)
-		return
-	}
-	page := adminPage{Items: []json.RawMessage{}}
-	for _, row := range rows {
-		appendAdminItem(&page, row.Payload, row.StartedAt, row.ID, filter.Limit)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		internalError(w, "commit admin calls failed", err)
-		return
-	}
-	writeAdminJSON(w, page)
-}
-
+// adminCallDetail 按调用 ID 返回单次模型请求的实际请求与响应 JSON。
 func (s *server) adminCallDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {

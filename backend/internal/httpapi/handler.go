@@ -50,7 +50,6 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSett
 	mux.Handle("POST /admin/logout", s.requireAdmin(http.HandlerFunc(s.adminLogout)))
 	mux.Handle("GET /admin/me", s.requireAdmin(http.HandlerFunc(s.adminMe)))
 	mux.Handle("GET /admin/snapshot", s.requireAdmin(http.HandlerFunc(s.adminSnapshot)))
-	mux.Handle("GET /admin/calls", s.requireAdmin(http.HandlerFunc(s.adminCalls)))
 	mux.Handle("GET /admin/calls/{id}", s.requireAdmin(http.HandlerFunc(s.adminCallDetail)))
 	mux.Handle("GET /admin/timeline", s.requireAdmin(http.HandlerFunc(s.adminTimeline)))
 	mux.Handle("GET /admin/timeline/messages/{id}", s.requireAdmin(http.HandlerFunc(s.adminTimelineMessage)))
