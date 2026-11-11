@@ -105,8 +105,8 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
-  // Start 预渲染外壳含内联脚本数据，script-src 需放行 'unsafe-inline'；其余资源仍只允许同源。
-  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  // Start 预渲染外壳含内联脚本数据，script-src 需放行 'unsafe-inline'；时间线按需加载私有 OSS 签名预览图，img-src 放行阿里云 OSS。
+  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; connect-src 'self'; img-src 'self' data: https://*.aliyuncs.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   try {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) return await proxy(request, response, url);

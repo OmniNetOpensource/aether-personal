@@ -1,4 +1,4 @@
-// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 的输入、模型回复、工具调用与失败请求，长内容折叠并可加载全文。
+// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 的输入、模型回复、工具调用与失败请求，长内容折叠，图片按需加载展示。
 
 import type { ReactNode } from 'react';
 import {
@@ -68,7 +68,7 @@ export function TimelinePage(props: TimelineViewProps) {
             if (item.tool_call_id && paired.has(item.tool_call_id)) return null;
             return <ToolResultNode key={item.id ?? index} item={item} {...props} />;
           }
-          return <InputNode key={item.id ?? index} item={item} {...props} />;
+          return <InputNode key={item.id ?? index} item={item} email={email} {...props} />;
         })}
         {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
         {timeline.next_cursor ? (
@@ -128,35 +128,72 @@ function LoadFullButton({ item, ...props }: { item: TimelineItem } & TimelineVie
   );
 }
 
-// InputNode 是用户输入、日程投递、系统通知与压缩摘要节点的渲染。
-function InputNode({ item, ...props }: { item: TimelineItem } & TimelineViewProps) {
+// TimelineImages 统一展示输入与工具结果中的图片；尚未加载预览链接时先显示数量。
+function TimelineImages({ item }: { item: TimelineItem }) {
+  return item.images?.length ? (
+    <div className="timeline-images">
+      {item.images.map((url) => (
+        <img key={url} src={url} alt="截图" />
+      ))}
+    </div>
+  ) : item.image_count ? (
+    <p className="timeline-muted">{`包含 ${item.image_count} 张截图`}</p>
+  ) : null;
+}
+
+// triggerTitles 区分落库的定时触发与三种闲置后台工作消息，避免时间线里统称系统通知。
+const triggerTitles: Record<string, string> = {
+  schedule_event: '定时任务触发',
+  memory_update: '闲置记忆整理',
+  recent_followup: '闲置近期跟进',
+  unknown_unknowns: '闲置未知探索',
+};
+
+// InputNode 是用户输入、定时触发、闲置后台工作与压缩摘要节点的渲染。
+function InputNode({
+  item,
+  email,
+  ...props
+}: { item: TimelineItem; email: string } & TimelineViewProps) {
   const view = fullView(item, props.fullItems);
+  const call = item.is_summary ? item.call : undefined;
+  const withEmail = call ? { ...call, email } : null;
   const senders: Record<string, [string, string]> = {
     user: ['input', '用户输入'],
     main: ['input', '来自 Main'],
     system: ['runtime', '系统通知'],
   };
+  const triggerTitle = item.name ? triggerTitles[item.name] : undefined;
   const [kind, title] = item.is_summary
     ? ['summary', '上下文压缩摘要']
-    : item.name === 'sandbox_observation'
-      ? ['runtime', '截图观察']
+    : triggerTitle
+      ? ['runtime', triggerTitle]
       : (senders[item.sender ?? ''] ?? ['runtime', '运行时提示']);
   return (
-    <TimelineNode kind={kind} title={title} at={item.at}>
+    <TimelineNode
+      kind={kind}
+      title={title}
+      at={item.at}
+      extras={
+        call ? (
+          <>
+            <span className="timeline-meta">{callMeta(call)}</span>
+            {withEmail ? (
+              <button type="button" className="text-button" onClick={() => props.onOpenCall(withEmail)}>
+                请求详情 →
+              </button>
+            ) : null}
+          </>
+        ) : undefined
+      }
+    >
+      {call ? <RequestIds id={call.id} notify={props.notify} /> : null}
       {item.is_summary ? (
         <Foldable storageKey={`${item.id}:text`} label="摘要内容" text={view.text ?? ''} openState={props.openState} />
       ) : view.text ? (
         <div className="timeline-bubble">{view.text}</div>
       ) : null}
-      {view.images?.length ? (
-        <div className="timeline-images">
-          {view.images.map((url) => (
-            <img key={url} src={url} alt="截图" />
-          ))}
-        </div>
-      ) : item.image_count ? (
-        <p className="timeline-muted">{`包含 ${item.image_count} 张截图`}</p>
-      ) : null}
+      <TimelineImages item={view} />
       <LoadFullButton item={item} {...props} />
     </TimelineNode>
   );
@@ -256,6 +293,7 @@ function ToolCard({
       {result && view ? (
         <>
           <Foldable storageKey={`${toolCallId}:result`} label="结果" text={view.text ?? ''} openState={props.openState} />
+          <TimelineImages item={view} />
           <LoadFullButton item={result} {...props} />
         </>
       ) : null}
@@ -275,6 +313,7 @@ function ToolResultNode({ item, ...props }: { item: TimelineItem } & TimelineVie
     >
       {item.tool_call_id ? <CopyChip label="工具调用 ID" value={item.tool_call_id} notify={props.notify} /> : null}
       <Foldable storageKey={`${item.id}:text`} label="结果" text={view.text ?? ''} openState={props.openState} />
+      <TimelineImages item={view} />
       <LoadFullButton item={item} {...props} />
     </TimelineNode>
   );

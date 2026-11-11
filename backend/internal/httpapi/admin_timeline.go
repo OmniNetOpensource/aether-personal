@@ -62,7 +62,7 @@ type timelineToolCall struct {
 	Arguments string `json:"arguments"`
 }
 
-// storedMessage 覆盖消息表 content 中会出现的字段：OpenRouter 消息、Gemini 原生 parts 以及带截图的观察消息。
+// storedMessage 覆盖消息表 content 中会出现的字段：OpenRouter、Gemini 与 Claude 的消息结构及工具调用。
 type storedMessage struct {
 	Name             string          `json:"name"`
 	Content          json.RawMessage `json:"content"`
@@ -78,6 +78,9 @@ type storedMessage struct {
 			Thought bool   `json:"thought"`
 		} `json:"parts"`
 	} `json:"gemini_content"`
+	ClaudeContent []struct {
+		Type string `json:"type"`
+	} `json:"claude_content"`
 	ToolCalls []struct {
 		ID       string `json:"id"`
 		Function struct {
@@ -133,7 +136,7 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 	item.Text = clip(text)
 
 	if role == "assistant" {
-		// OpenRouter 放在 reasoning / reasoning_details，Gemini 放在 thought parts；只有加密内容时无法展示原文。
+		// OpenRouter 放在 reasoning / reasoning_details，Gemini 放在 thought parts，Claude 加密块为 redacted_thinking；只有加密内容时无法展示原文。
 		reasoning, encrypted := message.Reasoning, false
 		if reasoning == "" {
 			texts := []string{}
@@ -150,6 +153,11 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 			for _, part := range message.GeminiContent.Parts {
 				if part.Thought && part.Text != "" {
 					texts = append(texts, part.Text)
+				}
+			}
+			for _, block := range message.ClaudeContent {
+				if block.Type == "redacted_thinking" {
+					encrypted = true
 				}
 			}
 			reasoning = strings.Join(texts, "\n")
