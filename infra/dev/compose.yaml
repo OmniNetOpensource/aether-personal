@@ -1,3 +1,4 @@
+# 本文件提供本地开发的 PostgreSQL 与纯内存 Redis 容器，供 backend/Makefile 启动并等待健康。
 name: aether-personal-dev
 
 services:
@@ -15,6 +16,17 @@ services:
       test: ["CMD", "pg_isready", "-U", "aether", "-d", "aether"]
       interval: 2s
       timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
       retries: 15
 
 volumes:

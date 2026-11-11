@@ -184,4 +184,5 @@ type User struct {
 	Email                     string
 	CreatedAt                 time.Time
 	MainFailedThroughSequence *int64
+	MainLeaseEpoch            int64
 }

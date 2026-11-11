@@ -13,6 +13,18 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const claimUserLeaseEpoch = `-- name: ClaimUserLeaseEpoch :one
+UPDATE users SET main_lease_epoch = main_lease_epoch + 1 WHERE id = $1::uuid RETURNING main_lease_epoch
+`
+
+// 新实例接管用户执行权时原子递增代数，使此前任何旧实例的后续写库事务在校验阶段被拒绝。
+func (q *Queries) ClaimUserLeaseEpoch(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, claimUserLeaseEpoch, userID)
+	var main_lease_epoch int64
+	err := row.Scan(&main_lease_epoch)
+	return main_lease_epoch, err
+}
+
 const completeMainReply = `-- name: CompleteMainReply :exec
 UPDATE messages SET content = $2, generating = false, visible = $3
 WHERE id = $1 AND generating
@@ -54,7 +66,8 @@ func (q *Queries) FailUnfinishedSteps(ctx context.Context, arg FailUnfinishedSte
 }
 
 const finishStep = `-- name: FinishStep :exec
-UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now() WHERE id = $1
+UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now()
+WHERE id = $1 AND finished_at IS NULL
 `
 
 type FinishStepParams struct {
@@ -140,6 +153,17 @@ func (q *Queries) GetMainStatus(ctx context.Context, userID uuid.UUID) (GetMainS
 	var i GetMainStatusRow
 	err := row.Scan(&i.Thinking, &i.Failed)
 	return i, err
+}
+
+const getUserLeaseEpoch = `-- name: GetUserLeaseEpoch :one
+SELECT main_lease_epoch FROM users WHERE id = $1::uuid
+`
+
+func (q *Queries) GetUserLeaseEpoch(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getUserLeaseEpoch, userID)
+	var main_lease_epoch int64
+	err := row.Scan(&main_lease_epoch)
+	return main_lease_epoch, err
 }
 
 const hasMainWork = `-- name: HasMainWork :one
@@ -454,8 +478,8 @@ const lockUserMessages = `-- name: LockUserMessages :exec
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || $1::uuid::text, 0))
 `
 
-// 本文件提供消息写入、上下文、步骤记账和持久待办查询；短事务用户锁保证消息顺序，执行由进程内 Manager 串行调度。
-// 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
+// 本文件提供消息写入、上下文、步骤记账、租约代数和持久待办查询；短事务用户锁保证消息顺序，执行代数防止跨实例脑裂覆盖。
+// 事务内持有，提交时释放：同一用户的插入与代数校验排队进行，保证顺序一致且不死锁。
 func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockUserMessages, userID)
 	return err
@@ -469,15 +493,6 @@ WHERE id = $1::uuid
 // 记下失败时最后一条消息的序号，之后有新消息才再次运行。
 func (q *Queries) MarkMainFailed(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markMainFailed, userID)
-	return err
-}
-
-const notifyUserMessages = `-- name: NotifyUserMessages :exec
-SELECT pg_notify('user_messages', $1::uuid::text)
-`
-
-func (q *Queries) NotifyUserMessages(ctx context.Context, userID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, notifyUserMessages, userID)
 	return err
 }
 

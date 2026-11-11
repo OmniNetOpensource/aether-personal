@@ -15,11 +15,13 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
-// server 共享请求处理所需的连接池、服务配置与图片存储，所有图片入口使用同一份缓存索引。
+// server 共享请求处理所需的连接池、Redis 客户端、服务配置与图片存储，所有图片入口使用同一份本机缓存索引。
 type server struct {
 	databasePool *pgxpool.Pool
+	redisClient  *redis.Client
 	queries      *database.Queries
 	appConfig    config.Config
 	httpClient   *http.Client
@@ -30,10 +32,11 @@ type server struct {
 	sandbox      *sandbox.Store
 }
 
-// NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器，推送监听随进程 ctx 退出。
-func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
+// NewHandler 装配聊天与管理接口；聊天输入落库后经 Redis 跨实例唤醒 Agent 与聊天推送，订阅随进程 ctx 退出。
+func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *redis.Client, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
 	s := &server{
 		databasePool: databasePool,
+		redisClient:  redisClient,
 		queries:      database.New(databasePool),
 		appConfig:    appConfig,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
@@ -70,10 +73,16 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, appConfig confi
 	return mux
 }
 
+// healthz 同时探测 PostgreSQL 与 Redis 连通性，供网关主动健康检查在单实例异常时自动切流。
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.databasePool.Ping(r.Context()); err != nil {
-		slog.Error("health check failed", "error", err)
+		slog.Error("database health check failed", "error", err)
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.redisClient.Ping(r.Context()).Err(); err != nil {
+		slog.Error("redis health check failed", "error", err)
+		http.Error(w, "redis unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Write([]byte("ok"))

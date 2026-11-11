@@ -12,6 +12,7 @@ import (
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
+	"github.com/redis/go-redis/v9"
 )
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	AppEnv               string
 	Port                 string
 	DatabaseURL          string
+	RedisURL             string
 	DatabaseMaxConns     int32
 	AgentCapacity        int32
 	MainModel            string
@@ -46,6 +48,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 
+	// 服务进程必须配置 REDIS_URL；导入命令不涉及跨实例信号，留空时跳过解析。
+	redisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if redisURL != "" {
+		if _, err := redis.ParseURL(redisURL); err != nil {
+			return Config{}, fmt.Errorf("invalid REDIS_URL: %w", err)
+		}
+	}
+
 	databaseMaxConns := int32(20)
 	if value := os.Getenv("DATABASE_MAX_CONNS"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 32)
@@ -55,7 +65,7 @@ func Load() (Config, error) {
 		databaseMaxConns = int32(parsed)
 	}
 
-	// 单进程并行用户数采用保守的连接预算；Runner 仅在短查询和事务期间使用连接。
+	// 单实例并行用户数采用保守的连接预算；Runner 仅在短查询和事务期间使用连接。
 	agentCapacity := databaseMaxConns - 4
 	if value := os.Getenv("AGENT_CAPACITY"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 32)
@@ -148,6 +158,7 @@ func Load() (Config, error) {
 		TurnstileHostname:    strings.ToLower(strings.TrimSpace(os.Getenv("TURNSTILE_HOSTNAME"))),
 		Port:                 port,
 		DatabaseURL:          databaseURL,
+		RedisURL:             redisURL,
 		DatabaseMaxConns:     databaseMaxConns,
 		AgentCapacity:        agentCapacity,
 		MainModel:            mainModel,

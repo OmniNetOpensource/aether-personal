@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配数据库、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待缓存清理和请求处理结束。
+// 本文件是后端进程入口：装配数据库、Redis 信号客户端、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待后台任务和请求处理结束。
 
 package main
 
@@ -19,6 +19,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -49,6 +50,18 @@ func main() {
 	}
 
 	defer databasePool.Close()
+	if appConfig.RedisURL == "" {
+		slog.Error("REDIS_URL is required")
+		os.Exit(1)
+	}
+	redisOptions, err := redis.ParseURL(appConfig.RedisURL)
+	if err != nil {
+		slog.Error("parse REDIS_URL failed", "error", err)
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(redisOptions)
+	defer redisClient.Close()
+
 	// HTTP 与 Agent 共用无缓存的服务配置入口，数据库保留凭证的唯一运行时副本。
 	serviceSettings, err := services.New(databasePool, appConfig.ServiceEncryptionKey, appConfig.AppEnv)
 	if err != nil {
@@ -69,7 +82,7 @@ func main() {
 		}
 		cacheDone <- err
 	}()
-	manager := agent.NewManager(databasePool, appConfig, serviceSettings, imageStore)
+	manager := agent.NewManager(databasePool, redisClient, appConfig, serviceSettings, imageStore)
 	managerDone := make(chan error, 1)
 	go func() {
 		err := manager.Start(ctx)
@@ -82,7 +95,7 @@ func main() {
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(ctx, databasePool, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(ctx, databasePool, redisClient, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
 	httpDone := make(chan struct{})
 	go func() {
 		defer close(httpDone)

@@ -1,4 +1,4 @@
-// 本文件是聊天 WebSocket 主通道：处理登录与发送等客户端命令、推送历史与新消息，并借助数据库通知跨连接唤醒推送。
+// 本文件是聊天 WebSocket 主通道：处理登录与发送等客户端命令、推送历史与新消息，并借助 Redis 广播跨实例唤醒推送。
 
 package httpapi
 
@@ -13,11 +13,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/redis/go-redis/v9"
 )
 
 // maxMessageCharacters 是单条用户消息的字符上限，发送命令的校验以此为准。
@@ -46,7 +48,7 @@ type clientFrame struct {
 	Files            []messageFile  `json:"-"`
 }
 
-// chatConnections 记录本机每个用户的 WebSocket 连接；收到该用户的 NOTIFY 时唤醒这些连接去查表推送。
+// chatConnections 记录本实例每个用户的 WebSocket 连接；收到该用户的 Redis 推送广播时唤醒这些连接去查表推送。
 type chatConnections struct {
 	mutex       sync.Mutex
 	wakeSignals map[uuid.UUID]map[chan struct{}]struct{}
@@ -105,47 +107,30 @@ func (c *chatConnections) wakeAll() {
 	}
 }
 
-// listenForUserMessages 常驻监听数据库的 user_messages 通知；进程退出时停止，异常断开后隔一秒重连。
+// listenForUserMessages 订阅 Redis 聊天推送频道；首次连接与断线重连后唤醒全部连接补查数据库，不占用 PostgreSQL 长连接。
 func (s *server) listenForUserMessages(ctx context.Context) {
+	pubsub := s.redisClient.Subscribe(ctx, agent.ChatNotifyChannel)
+	defer pubsub.Close()
+	events := pubsub.ChannelWithSubscriptions()
 	for {
-		err := s.listenOnce(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		slog.Error("listen for user messages stopped", "error", err)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			switch item := event.(type) {
+			case *redis.Subscription:
+				if item.Kind == "subscribe" {
+					s.connections.wakeAll()
+				}
+			case *redis.Message:
+				if userID, err := uuid.Parse(item.Payload); err == nil {
+					s.connections.wake(userID)
+				}
+			}
 		}
-	}
-}
-
-// listenOnce 只监听聊天推送；退出时使用独立短超时关闭劫持连接，确保向 PostgreSQL 发出正常断开报文。
-func (s *server) listenOnce(ctx context.Context) error {
-	pooledConnection, err := s.databasePool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	// 监听中的连接不能还回连接池。
-	connection := pooledConnection.Hijack()
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = connection.Close(closeCtx)
-	}()
-
-	if _, err := connection.Exec(ctx, "LISTEN user_messages"); err != nil {
-		return err
-	}
-	// 未监听期间的通知已经丢失，让所有连接各自查一次表。
-	s.connections.wakeAll()
-	for {
-		notification, err := connection.WaitForNotification(ctx)
-		if err != nil {
-			return err
-		}
-		s.connections.wake(uuid.MustParse(notification.Payload))
 	}
 }
 
@@ -492,7 +477,7 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在事务里落库并通知聊天连接，提交后直接唤醒同进程的 Manager；
+// saveUserMessage 在事务里落库，提交后经 Redis 跨实例广播聊天更新并唤醒 Agent；
 // 成功后先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
@@ -508,10 +493,7 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 			Content:         userMessageContent(frame),
 			ClientMessageID: &frame.ClientMessageID,
 		})
-		if err != nil {
-			return err
-		}
-		return queries.NotifyUserMessages(ctx, userID)
+		return err
 	})
 	if err != nil {
 		slog.Error("save user message failed", "user_id", userID, "error", err)
@@ -520,7 +502,7 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 	}
 
 	// 唤醒先于任何 WebSocket 写入；连接此时断开也不影响已经提交的工作。
-	s.agents.Wake(userID, sequence)
+	s.agents.Wake(ctx, userID, sequence)
 	if s.pushChatMessages(ctx, relay, userID, changeCursor) != nil {
 		return false
 	}

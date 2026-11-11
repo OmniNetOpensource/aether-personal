@@ -1,11 +1,15 @@
--- 本文件提供消息写入、上下文、步骤记账和持久待办查询；短事务用户锁保证消息顺序，执行由进程内 Manager 串行调度。
+-- 本文件提供消息写入、上下文、步骤记账、租约代数和持久待办查询；短事务用户锁保证消息顺序，执行代数防止跨实例脑裂覆盖。
 
 -- name: LockUserMessages :exec
--- 事务内持有，提交时释放：同一用户的插入排队进行，id 顺序与提交顺序一致。
+-- 事务内持有，提交时释放：同一用户的插入与代数校验排队进行，保证顺序一致且不死锁。
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || sqlc.arg(user_id)::uuid::text, 0));
 
--- name: NotifyUserMessages :exec
-SELECT pg_notify('user_messages', sqlc.arg(user_id)::uuid::text);
+-- name: ClaimUserLeaseEpoch :one
+-- 新实例接管用户执行权时原子递增代数，使此前任何旧实例的后续写库事务在校验阶段被拒绝。
+UPDATE users SET main_lease_epoch = main_lease_epoch + 1 WHERE id = sqlc.arg(user_id)::uuid RETURNING main_lease_epoch;
+
+-- name: GetUserLeaseEpoch :one
+SELECT main_lease_epoch FROM users WHERE id = sqlc.arg(user_id)::uuid;
 
 -- name: InsertUserMessage :one
 -- 重发返回原输入序号，唤醒时不会把同一条输入误认为更新的输入。
@@ -94,7 +98,8 @@ VALUES ($1, $2, now())
 RETURNING id;
 
 -- name: FinishStep :exec
-UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now() WHERE id = $1;
+UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now()
+WHERE id = $1 AND finished_at IS NULL;
 
 -- name: FailUnfinishedSteps :exec
 UPDATE steps SET error = sqlc.arg(error), finished_at = now()

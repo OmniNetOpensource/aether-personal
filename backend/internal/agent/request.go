@@ -48,7 +48,10 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 		stopListening()
 		return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 			q := database.New(tx)
-			if err := q.LockUserMessages(ctx, r.userID); err != nil {
+			if err := r.lockAndVerifyLease(ctx, q); err != nil {
+				if errors.Is(err, errLostLease) {
+					cancel(errLostLease)
+				}
 				return err
 			}
 			newer, err := q.HasNewMainInput(ctx, input)
@@ -65,15 +68,21 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 	}
 	response, retryable, err := r.sendModelRequest(modelCtx, request,
 		database.StartModelCallParams{StepID: stepID, Purpose: "agent"}, reserve)
+	if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
+		return uuid.Nil, response, false, errLostLease
+	}
 	if errors.Is(context.Cause(modelCtx), errNewInput) {
 		return uuid.Nil, response, false, errNewInput
 	}
 	if err != nil {
 		return uuid.Nil, response, retryable, err
 	}
-	// 合法的沉默回复也在同一写入锁下与新输入交接。
+	// 合法的沉默回复也在同一写入锁与租约校验下与新输入交接。
 	if replyID == uuid.Nil {
 		if err := reserve(); err != nil {
+			if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
+				return uuid.Nil, response, false, errLostLease
+			}
 			if errors.Is(context.Cause(modelCtx), errNewInput) {
 				return uuid.Nil, response, false, errNewInput
 			}

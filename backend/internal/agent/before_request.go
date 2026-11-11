@@ -22,17 +22,27 @@ import (
 // through 随本轮实际读到的消息更新，失败时由请求后阶段据此停住；准备失败时已开的步骤交给失败收尾结束。
 func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, taskReminder bool) (modelRequest, uuid.UUID, error) {
 	queries := database.New(r.databasePool)
-	// 收拾上次进程退出留下的记录：进行中的模型调用记为中断，删掉未发布的占位，未结束的步骤以中断收尾。
-	// 同一用户只有当前 Runner，且它上一轮的记录在这里都已结束，所以只会清到残留；必须排在开新步骤之前，否则新步骤也会被标成中断。
-	if err := queries.InterruptModelCalls(ctx, r.userID); err != nil {
-		return modelRequest{}, uuid.Nil, fmt.Errorf("recover model call journal: %w", err)
-	}
-	if err := queries.DiscardGeneratingReply(ctx, r.userID); err != nil {
-		return modelRequest{}, uuid.Nil, fmt.Errorf("recover incomplete reply: %w", err)
-	}
-	interrupted := "interrupted before the step finished"
-	if err := queries.FailUnfinishedSteps(ctx, database.FailUnfinishedStepsParams{UserID: r.userID, Error: &interrupted}); err != nil {
-		return modelRequest{}, uuid.Nil, fmt.Errorf("recover unfinished steps: %w", err)
+	// 在校验本轮租约代数的短事务内收拾上次中断留下的记录，防止已失去租约的旧实例误清接管实例正在运行的调用与步骤；
+	// 必须排在开新步骤之前，否则新步骤也会被标成中断。
+	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+		txQueries := database.New(tx)
+		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+			return err
+		}
+		if err := txQueries.InterruptModelCalls(ctx, r.userID); err != nil {
+			return fmt.Errorf("recover model call journal: %w", err)
+		}
+		if err := txQueries.DiscardGeneratingReply(ctx, r.userID); err != nil {
+			return fmt.Errorf("recover incomplete reply: %w", err)
+		}
+		interrupted := "interrupted before the step finished"
+		if err := txQueries.FailUnfinishedSteps(ctx, database.FailUnfinishedStepsParams{UserID: r.userID, Error: &interrupted}); err != nil {
+			return fmt.Errorf("recover unfinished steps: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return modelRequest{}, uuid.Nil, err
 	}
 	// 进程中断时可能停在一批工具中间：先补跑没有回执的工具，请求里才不会出现没有回执的调用。
 	// 失败只停住本次读到的工作；工具批次以发起它的助手消息为界。
@@ -54,7 +64,16 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 			return modelRequest{}, uuid.Nil, err
 		}
 	}
-	stepID, err := queries.StartStep(ctx, database.StartStepParams{UserID: r.userID, Model: r.settings.MainModel})
+	var stepID uuid.UUID
+	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+		txQueries := database.New(tx)
+		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+			return err
+		}
+		var err error
+		stepID, err = txQueries.StartStep(ctx, database.StartStepParams{UserID: r.userID, Model: r.settings.MainModel})
+		return err
+	})
 	if err != nil {
 		return modelRequest{}, uuid.Nil, err
 	}
@@ -145,8 +164,17 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	// 工具定义与普通请求相同，由各渠道按同一套转换发出，前缀因此与普通请求一致；tool_choice=none 只禁止调用，不删除定义。
 	compactMessages := buildCompactRequestMessages(rowsToCompact, compactPrompt)
 	summaryRequest := modelRequest{Model: compactModel, Messages: compactMessages, Tools: tools.Definitions(), ToolChoice: json.RawMessage(`"none"`), Reasoning: map[string]any{"effort": "low", "exclude": true}}
-	// 先登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
-	compactStepID, err := queries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: compactModel})
+	// 先在租约校验下登记一个压缩步骤再调模型，方便看板按步骤查这次压缩的原因和前后大小；下面这段收尾保证没提交成功就把它记为失败。
+	var compactStepID uuid.UUID
+	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+		txQueries := database.New(tx)
+		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+			return err
+		}
+		var err error
+		compactStepID, err = txQueries.StartCompactStep(ctx, database.StartCompactStepParams{UserID: r.userID, Model: compactModel})
+		return err
+	})
 	if err != nil {
 		return modelRequest{}, err
 	}
@@ -173,10 +201,10 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	_ = json.Unmarshal(result.Choices[0].Message, &summary)
 	// 压缩后的新世代以这条摘要替代被压的历史，保留下来的新消息原文依次跟在后面；指令由每次请求的第一条注入，不随世代落库。
 	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary.Content})
-	// 摘要落库：一个事务里写入摘要消息并给压缩步骤记上用量，两步要么一起成要么都不算；压缩后的大小不估算，下一次 Agent 请求的官方 prompt_tokens 就是它。
+	// 摘要落库：在租约校验下同一个事务写入摘要消息并给压缩步骤记上用量；压缩后的大小不估算，下一次 Agent 请求的官方 prompt_tokens 就是它。
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
-		if err := q.LockUserMessages(ctx, r.userID); err != nil {
+		if err := r.lockAndVerifyLease(ctx, q); err != nil {
 			return err
 		}
 		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{UserID: r.userID, Content: summaryJSON, StepID: &compactStepID, SummaryThroughSequence: &through}); err != nil {

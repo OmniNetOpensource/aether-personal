@@ -112,24 +112,19 @@ func deliverSchedule(ctx context.Context, pool *pgxpool.Pool, manager *agent.Man
 		}
 		// 周期安排从投递时刻往后算下一次，停机期间错过的多次触发因此合并成这一次投递。
 		if item.Cron == nil {
-			if _, err := queries.DeleteSchedule(ctx, database.DeleteScheduleParams{UserID: userID, ID: item.ID}); err != nil {
-				return err
-			}
-		} else {
-			next, err := tools.NextCronTime(*item.Cron, *item.Timezone, deliveredAt)
-			if err != nil {
-				return err
-			}
-			if err := queries.AdvanceSchedule(ctx, database.AdvanceScheduleParams{ID: item.ID, NextRunAt: next}); err != nil {
-				return err
-			}
+			_, err := queries.DeleteSchedule(ctx, database.DeleteScheduleParams{UserID: userID, ID: item.ID})
+			return err
 		}
-		return queries.NotifyUserMessages(ctx, userID)
+		next, err := tools.NextCronTime(*item.Cron, *item.Timezone, deliveredAt)
+		if err != nil {
+			return err
+		}
+		return queries.AdvanceSchedule(ctx, database.AdvanceScheduleParams{ID: item.ID, NextRunAt: next})
 	})
 	if err != nil || sequence == 0 {
 		return err
 	}
-	manager.Wake(userID, sequence)
+	manager.Wake(ctx, userID, sequence)
 	return nil
 }
 
@@ -152,14 +147,11 @@ func deliverIdleWork(ctx context.Context, pool *pgxpool.Pool, manager *agent.Man
 			return err
 		}
 		sequence, err = queries.InsertTriggerMessage(ctx, database.InsertTriggerMessageParams{UserID: userID, Content: content})
-		if err != nil {
-			return err
-		}
-		return queries.NotifyUserMessages(ctx, userID)
+		return err
 	})
 	if err != nil || sequence == 0 {
 		return err
 	}
-	manager.Wake(userID, sequence)
+	manager.Wake(ctx, userID, sequence)
 	return nil
 }

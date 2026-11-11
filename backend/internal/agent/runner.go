@@ -19,6 +19,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 // 模型单次 HTTP 请求与包含全部重试的调用共用十分钟上限，联网工具另用自己的客户端。
@@ -27,17 +28,46 @@ const modelRequestTimeout = 10 * time.Minute
 // errModelRetryTimeout 区分模型调用预算耗尽与进程退出等外部中断。
 var errModelRetryTimeout = errors.New("model request and retries exceeded 10 minute budget")
 
-// Runner 是一个用户的 Main 在本进程内的一次执行者：有活时由 Manager 创建并独占一条协程，
-// 只服务自己这一个用户，消息尾部没有活就结束、由 Manager 注销；进程级依赖按引用共享，不按用户复制。
+// errLostLease 表示当前用户的执行租约已被新实例接管，本 Runner 应立即静默停止且不记为运行失败。
+var errLostLease = errors.New("agent execution lease was superseded")
+
+// Runner 是一个用户的 Main 在本进程内的一次执行者：有活时由 Manager 抢占租约后创建并独占一条协程，
+// 只服务自己这一个用户，每次写库校验 leaseEpoch 防止跨实例覆盖，消息尾部没有活就结束；进程级依赖按引用共享。
 type Runner struct {
 	databasePool *pgxpool.Pool
+	redisClient  *redis.Client
 	settings     config.Config
 	modelClient  *http.Client
 	toolDeps     tools.Dependencies
 	services     *services.Store
 	userID       uuid.UUID
+	leaseEpoch   int64
 	mutex        sync.Mutex
 	thinking     *thinkingRequest
+}
+
+// lockAndVerifyLease 按固定顺序先获取用户消息锁、再核对执行代数，阻止失去租约的旧实例改写新实例的数据。
+func (r *Runner) lockAndVerifyLease(ctx context.Context, queries *database.Queries) error {
+	if err := queries.LockUserMessages(ctx, r.userID); err != nil {
+		return err
+	}
+	epoch, err := queries.GetUserLeaseEpoch(ctx, r.userID)
+	if err != nil {
+		return err
+	}
+	if epoch != r.leaseEpoch {
+		return errLostLease
+	}
+	return nil
+}
+
+// notifyChat 使用独立短超时向 Redis 广播聊天状态更新，唤醒持有该用户 WebSocket 的实例查表推送。
+func (r *Runner) notifyChat() {
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := NotifyChat(notifyCtx, r.redisClient, r.userID); err != nil {
+		slog.Error("notify agent activity failed", "user_id", r.userID, "error", err)
+	}
 }
 
 // thinkingRequest 只在模型还没有产出正文或工具时登记，序号来自实际发送的上下文。
@@ -90,13 +120,7 @@ const (
 func (r *Runner) run(parent context.Context) error {
 	queries := database.New(r.databasePool)
 	// 运行结束刷新其他连接的消息与思考状态，浏览器连接的生命周期不影响本次执行。
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := queries.NotifyUserMessages(cleanup, r.userID); err != nil {
-			slog.Error("notify agent activity failed", "user_id", r.userID, "error", err)
-		}
-	}()
+	defer r.notifyChat()
 	// 空唤醒（例如客户端重发同一条消息）直接结束：不进入循环，也就不会在模型没运行时发收尾任务提醒。
 	hasWork, err := queries.HasMainWork(parent, r.userID)
 	if err != nil {

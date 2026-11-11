@@ -35,7 +35,7 @@ func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through in
 		}
 		return roundDone, nil
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, errLostLease) {
 		return roundStop, nil
 	}
 	// 被更新的输入取代：撤销未发布的占位并结束这一步，清零重试后按消息尾部重来，新输入会一并带上。
@@ -67,30 +67,37 @@ func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through in
 	}
 }
 
-// abandonAttempt 放弃这一次尝试：撤销未发布的占位，以原因结束这一步；下一轮的尝试会重新开一步。
+// abandonAttempt 在租约校验下放弃这一次尝试：撤销未发布的占位，以原因结束这一步；下一轮的尝试会重新开一步。
 func (r *Runner) abandonAttempt(ctx context.Context, stepID uuid.UUID, reason string) error {
-	queries := database.New(r.databasePool)
-	if err := queries.DiscardGeneratingReply(ctx, r.userID); err != nil {
-		return err
-	}
-	return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &reason})
-}
-
-// saveReply 在一个事务里完成助手记录与步骤：正文独立成为用户回复，有正文才对用户可见。工具调用从此成为历史的一部分。
-func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, response chatResponse) error {
 	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
+		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
+			return err
+		}
+		if err := queries.DiscardGeneratingReply(ctx, r.userID); err != nil {
+			return err
+		}
+		return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &reason})
+	})
+}
+
+// saveReply 在一个校验租约的事务里完成助手记录与步骤，提交后经 Redis 推送可见回复。工具调用从此成为历史的一部分。
+func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, response chatResponse) error {
+	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+		queries := database.New(tx)
+		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
 		if err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: AssistantTextToUser(response.Choices[0].Message) != ""}); err != nil {
 			return err
 		}
-		if err := queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost}); err != nil {
-			return err
-		}
-		return queries.NotifyUserMessages(ctx, r.userID)
+		return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost})
 	})
+	if err != nil {
+		return err
+	}
+	r.notifyChat()
+	return nil
 }
 
 // executeToolCalls 并行执行独立工具，电脑操作则在一个协程里按模型原始顺序执行。
@@ -173,23 +180,25 @@ func toolResultContent(call toolCall, result string) ([]byte, *string, bool, err
 	return encoded, nil, false, err
 }
 
-// saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
-// 工具并行执行时从连接池取连接保存，同一用户的插入由 LockUserMessages 在数据库内串行排队。
+// saveToolResult 在校验租约后保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
+// 工具并行执行时从连接池取连接保存，同一用户的插入由 lockAndVerifyLease 在数据库内串行排队。
 func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call toolCall, result string) error {
 	content, sender, visible, err := toolResultContent(call, result)
 	if err != nil {
 		return err
 	}
-	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
+		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible}); err != nil {
-			return err
-		}
-		return queries.NotifyUserMessages(ctx, r.userID)
+		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible})
 	})
+	if err != nil {
+		return err
+	}
+	r.notifyChat()
+	return nil
 }
 
 // executeDatabaseTool 执行与回执同一事务的工具。未登记的名字返回工具错误，让模型可以改口。
@@ -201,13 +210,12 @@ func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Quer
 	return tool.Execute(ctx, r.toolDeps, queries, r.userID, call.Function.Arguments)
 }
 
-// executeDatabaseToolAndSaveResult 在一个事务里执行单个数据库工具并保存它的回执：
+// executeDatabaseToolAndSaveResult 在一个校验租约的事务里执行单个数据库工具并保存它的回执：
 // 工具的写入与回执要么一起提交、要么一起回滚，所以恢复时看到有回执就代表工具已经生效，不会重复执行。
-// 每个工具从连接池取自己的连接开事务，同一批工具才能真正并行；同一用户的消息插入由 LockUserMessages 串行排队。
 func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, stepID uuid.UUID, call toolCall) error {
-	return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
+		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
 		result, err := r.executeDatabaseTool(ctx, queries, call)
@@ -218,26 +226,27 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, stepID uu
 		if err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible}); err != nil {
-			return err
-		}
-		return queries.NotifyUserMessages(ctx, r.userID)
+		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible})
 	})
+	if err != nil {
+		return err
+	}
+	r.notifyChat()
+	return nil
 }
 
-// failRun 是失败的统一出口：进程正在退出时不写失败位置，留给重启后从持久状态接着做；否则在一个事务里落库失败收尾，结束本次运行。
+// failRun 是失败的统一出口：进程退出或租约已被新实例接管时不写失败位置；否则在校验租约的事务里落库失败收尾，结束本次运行。
 // 收尾撤销未发布的占位，给最后一条 assistant 里还没有回执的工具调用各补一条中断回执，避免历史里留下没有回执的调用；
 // 未完成的步骤以失败结束，没有更新的输入时记下失败时最后一条消息的序号，之后有新消息才再次运行，避免同一失败反复重试。
 func (r *Runner) failRun(ctx context.Context, through int64, cause error) (roundEnd, error) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(cause, errLostLease) {
 		return roundStop, nil
 	}
-	slog.Error("agent run failed", "user_id", r.userID, "error", cause)
 	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := pgx.BeginFunc(cleanup, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
-		if err := queries.LockUserMessages(cleanup, r.userID); err != nil {
+		if err := r.lockAndVerifyLease(cleanup, queries); err != nil {
 			return err
 		}
 		if err := queries.DiscardGeneratingReply(cleanup, r.userID); err != nil {
@@ -270,10 +279,15 @@ func (r *Runner) failRun(ctx context.Context, through int64, cause error) (round
 				return err
 			}
 		}
-		return queries.NotifyUserMessages(cleanup, r.userID)
+		return nil
 	})
+	if errors.Is(err, errLostLease) {
+		return roundStop, nil
+	}
+	slog.Error("agent run failed", "user_id", r.userID, "error", cause)
 	if err != nil {
 		return roundStop, fmt.Errorf("save agent failure: %w", err)
 	}
+	r.notifyChat()
 	return roundStop, nil
 }
