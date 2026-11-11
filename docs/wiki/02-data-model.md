@@ -40,7 +40,7 @@ erDiagram
 | `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `memory_files` | 用户私有 `/memories` 文本文件，包含 `memory.md` 根和详细主题 | `开发中` |
 | `schedules` | 定时任务：标题、到点交给 Main 的上下文、可空的 `cron` 与 `timezone`（同时为空即一次性）和下次触发时间，见 [10](10-schedules.md) | `开发中` |
-| `sandbox_workspaces` | 用户与独立 AgenticFS 工作区的绑定、加密实例令牌/流量令牌与聊天附件同步序号，见 [07](07-sandbox.md) | `已实现` |
+| `sandbox_workspaces` | 用户与独立 AgenticFS 工作区的绑定及加密的当前实例令牌/流量令牌，见 [07](07-sandbox.md) | `已实现` |
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
@@ -290,9 +290,10 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00048_add_chat_search.sql` | `chat_message_text` 函数与可见聊天全文三元组 GIN 索引，供页面历史搜索与上下文窗口使用 | `已实现` |
 | `00049_add_sandbox_workspaces.sql` | `sandbox_workspaces` 工作区绑定表，并将 `aliyun_fc` 纳入服务目录 | `已实现` |
 | `00050_add_sandbox_traffic_token.sql` | 持久化加密的沙箱流量令牌，支持不唤醒实例的只读实时桌面观察 | `已实现` |
-| `00051_add_workspace_file_transfer.sql` | `sandbox_workspaces.synced_through_sequence` 记录已同步进 `/mnt/workspace/uploads` 的聊天附件序号，并在聊天搜索中纳入附件文件名 | `已实现` |
+| `00051_add_workspace_file_transfer.sql` | 聊天搜索 `chat_message_text` 纳入用户与工具气泡的附件文件名（其中的 `synced_through_sequence` 游标列后由 `00054` 删除） | `已实现` |
 | `00052_add_user_lease_epoch.sql` | `users.main_lease_epoch` 单调递增执行代数，防止多实例租约超时或 Redis 重启后旧实例覆盖新实例的数据 | `已实现` |
 | `00053_merge_idle_work_minutes.sql` | 将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），配合持续按最近一次请求触发 | `已实现` |
+| `00054_drop_workspace_sync_cursor.sql` | 删除 `sandbox_workspaces.synced_through_sequence`，聊天附件改为由 `sandbox_import_file` 按需导入工作区 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

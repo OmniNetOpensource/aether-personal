@@ -28,7 +28,7 @@ flowchart TD
             MAIN -->|"正文或独立文件气泡回复用户"| MESSAGES
         end
 
-        TOOLS["Main 执行工具<br/>联网：search · search_twitter · fetch_url · read_image<br/>电脑：sandbox_* · browser_* · sandbox_send_file"]
+        TOOLS["Main 执行工具<br/>联网：search · search_twitter · fetch_url · read_image<br/>电脑：sandbox_* · browser_* · sandbox_import_file · sandbox_send_file"]
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 历史搜索 / 对外消息与事件"| MESSAGES
         API <-->|"POST /images · POST /files"| IMAGES
@@ -68,4 +68,4 @@ flowchart TD
     IMAGES <-->|"流式读写与临时签名"| OSS
     MAIN <-->|"模型推理与独立上下文压缩"| MODEL
     TOOLS <-->|"联网搜索与网页读取"| EXTERNAL
-    TOOLS <-->|"自动同步 uploads · 有序执行命令/浏览器 · 发回产物"| SANDBOX
+    TOOLS <-->|"按需导入附件 · 有序执行命令/浏览器 · 发回产物"| SANDBOX

@@ -16,13 +16,13 @@
 
 ## 聊天 ↔ `/mnt/workspace` 双向文件流转（2026-11-11）
 
-参考 Anthropic Files API、OpenAI Code Interpreter、Claude Cowork 与 Manus Sandbox 的前沿实践，采用**「私有 OSS 持久存储 + 入站自动同步进 `uploads` + 出站显式工具交付独立气泡」**双层结构，单文件与单条消息附件合计上限均为 **50 MiB**（远低于 Cloudflare 100 MB 请求上限，全程 `io.Reader` 流式传输，不占宿主机内存，也不要求修改已有 OSS Bucket 的私有权限或新增 `DeleteObject` 授权）：
+采用**「私有 OSS 持久存储 + 对称按需工具传输（入站 `sandbox_import_file` + 出站 `sandbox_send_file` 独立气泡）」**双层结构，单文件与单条消息附件合计上限均为 **50 MiB**（远低于 Cloudflare 100 MB 请求上限，全程 `io.Reader` 流式传输，不占宿主机内存，也不要求修改已有 OSS Bucket 的私有权限或新增 `DeleteObject` 授权）。2026-11-11 稍早曾原型实现按 `sandbox_workspaces.synced_through_sequence`（`00051`）把全部聊天图片与文件自动补写进 `/mnt/workspace/uploads/`，同日确认改为显式 `sandbox_import_file` 并由 `00054` 移除同步游标列——理由是绝大多数聊天截图仅用于视觉理解、无关沙箱调用（如只用浏览器查网页）不应搬运历史附件、跨消息同名附件自动平铺会互相覆盖，且把 `oss://` 固定引用留在消息文本与 `search_text` 中后，即使对话压缩或工作区文件误删也可随时重新按需拉回原件：
 
-1. **用户发文件给阿芒（零工具调用、自动落盘）**
+1. **用户发文件给阿芒（持久存 OSS，需要时 `sandbox_import_file` 同轮按序导入）**
    - 已绑定工作区的账号在聊天输入框可选择、粘贴或拖放任意格式文件：`<= 4 MiB` 的 PNG/JPEG/GIF/WebP（单条最多 8 张、合计 `<= 8 MiB`）继续作为视觉图片经 `POST /images` 上传并直接给模型看；其余任意格式文件及超过 4 MiB 的大图（单条最多 10 个，全部附件合计 `<= 50 MiB`）经 `POST /files` 流式存入私有 OSS `aether-chat/<user_id>/files/<UUID>`，聊天流与历史记录中立即展示可点击下载的文件卡片。
    - 下载链接在读取历史或实时推送时由后端通过 OSS `Presign` 本地签发（有效期 24 小时），附带 RFC 5987 `response-content-disposition` 响应参数，浏览器保存时自动还原原始中英文文件名。
-   - 发给模型的用户消息不塞入文件字节，只附带一行结构化说明，指明文件名、字节数、媒体类型及其在电脑中的固定路径 `/mnt/workspace/uploads/<文件名>`（同名附件自动加序号区分）。
-   - 当阿芒随后调用任何沙箱电脑工具时，`sandbox.Store.ensure` 根据 `sandbox_workspaces.synced_through_sequence`（`00051`）自动把尚未同步过的用户文件与图片从 OSS 流式写入 `/mnt/workspace/uploads/`，阿芒无需调用任何“导入工具”即可直接用脚本或命令读取。
+   - 发给模型的用户消息不塞入文件字节，也不在上传或开电脑时强行唤醒沙箱写盘，只附带一行结构化说明，指明文件名、字节数、媒体类型及其不可变的 `source: oss://...` 引用（不含签名，不破坏模型前缀缓存，同时进入 `messages.search_text` 支持日后检索）。
+   - 当阿芒确实需要在电脑中读取或处理某个聊天文件或图片时，显式调用 `sandbox_import_file(source="oss://...", path="/mnt/workspace/...")`：后端先在唤醒沙箱前校验当前用户对 `oss://` 对象的归属与 `/mnt/workspace` 内的目标路径，自动递归建好父目录后将 OSS 对象字节直接流式写入工作区。由于 `sandbox_import_file` 与其他电脑命令共享 `Ordered: true` 单协程串行队列，阿芒可在同一轮回复内同时发出导入与脚本处理调用，无需多耗一轮模型推理，且多版同名附件可由模型指定不同目标路径共存。
 
 2. **阿芒从电脑发文件给用户（`sandbox_send_file` 独立气泡）**
    - 阿芒在 `/mnt/workspace` 中生成最终交付物（报告、表格、压缩包、代码或图表）后，显式调用 `sandbox_send_file(path="/mnt/workspace/...")`；中间草稿与临时文件留在工作区不打扰用户。
