@@ -104,16 +104,23 @@ func (c *chatConnections) wakeAll() {
 	}
 }
 
-// listenForUserMessages 常驻监听数据库的 user_messages 通知；一轮监听断开后隔一秒重连，避免数据库不可用时空转重试。
-func (s *server) listenForUserMessages() {
+// listenForUserMessages 常驻监听数据库的 user_messages 通知；进程退出时停止，异常断开后隔一秒重连。
+func (s *server) listenForUserMessages(ctx context.Context) {
 	for {
-		err := s.listenOnce(context.Background())
+		err := s.listenOnce(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		slog.Error("listen for user messages stopped", "error", err)
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
 	}
 }
 
-// listenOnce 只监听聊天推送；执行调度由 Agent 自己的定向通知与补偿扫描负责。
+// listenOnce 只监听聊天推送；退出时使用独立短超时关闭劫持连接，确保向 PostgreSQL 发出正常断开报文。
 func (s *server) listenOnce(ctx context.Context) error {
 	pooledConnection, err := s.databasePool.Acquire(ctx)
 	if err != nil {
@@ -121,7 +128,11 @@ func (s *server) listenOnce(ctx context.Context) error {
 	}
 	// 监听中的连接不能还回连接池。
 	connection := pooledConnection.Hijack()
-	defer connection.Close(ctx)
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = connection.Close(closeCtx)
+	}()
 
 	if _, err := connection.Exec(ctx, "LISTEN user_messages"); err != nil {
 		return err

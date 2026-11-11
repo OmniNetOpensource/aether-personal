@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -29,8 +30,8 @@ type server struct {
 	sandbox      *sandbox.Store
 }
 
-// NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器。
-func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
+// NewHandler 装配聊天与管理接口；聊天输入提交后直接交给同进程的 Agent 调度器，推送监听随进程 ctx 退出。
+func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
 	s := &server{
 		databasePool: databasePool,
 		queries:      database.New(databasePool),
@@ -42,7 +43,7 @@ func NewHandler(databasePool *pgxpool.Pool, appConfig config.Config, serviceSett
 		images:       imageStore,
 		sandbox:      sandbox.New(databasePool, serviceSettings, imageStore, appConfig.Sandbox),
 	}
-	go s.listenForUserMessages()
+	go s.listenForUserMessages(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)

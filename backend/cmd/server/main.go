@@ -82,7 +82,7 @@ func main() {
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(databasePool, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(ctx, databasePool, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
 	httpDone := make(chan struct{})
 	go func() {
 		defer close(httpDone)
