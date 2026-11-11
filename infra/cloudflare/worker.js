@@ -5,6 +5,7 @@ const apiMethods = new Map([
   ['/ws', 'GET'],
   ['/sandbox/desktop', 'GET'],
   ['/images', 'POST'],
+  ['/files', 'POST'],
   ['/healthz', 'GET'],
 ]);
 

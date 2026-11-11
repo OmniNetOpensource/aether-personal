@@ -43,6 +43,7 @@ type clientFrame struct {
 	Parts            []messagePart  `json:"parts"`
 	Quotes           []messageQuote `json:"-"`
 	Images           []messageImage `json:"-"`
+	Files            []messageFile  `json:"-"`
 }
 
 // chatConnections 记录本机每个用户的 WebSocket 连接；收到该用户的 NOTIFY 时唤醒这些连接去查表推送。
@@ -303,7 +304,7 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 				var valid bool
 				frame, valid = normalizeMessageInput(frame)
 				if !valid || !authenticated || frame.ClientMessageID == uuid.Nil ||
-					!validMessageInput(frame, userID) || !s.checkMessageImages(ctx, &frame) {
+					!validMessageInput(frame, userID) || !s.checkMessageAttachments(ctx, userID, &frame) {
 					connection.Close(websocket.StatusPolicyViolation, "invalid send_message")
 					return
 				}

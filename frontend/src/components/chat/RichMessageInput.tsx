@@ -5,6 +5,7 @@ import type { JSONContent, NodeViewRendererProps } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import { FileAttachmentCard } from './FileAttachmentCard.js';
 import { ImagePreview } from './ImagePreview.js';
 import { messagePartSchema } from '../../lib/messageAttachments.js';
 import type { MessagePart } from '../../lib/messageAttachments.js';
@@ -76,14 +77,24 @@ function chipView(props: NodeViewRendererProps) {
             </svg>
             <span className="composer-quote-text">{part.quote.text}</span>
           </span>
-        ) : (
+        ) : part.type === 'image' ? (
           <ImagePreview image={part.image} />
+        ) : (
+          <FileAttachmentCard file={part.file} compact />
         )}
         <button
           type="button"
           className="chip-remove"
-          aria-label={part.type === 'quote' ? '移除引用' : `移除 ${part.image.name}`}
-          title={part.type === 'quote' ? '移除引用' : '移除图片'}
+          aria-label={
+            part.type === 'quote'
+              ? '移除引用'
+              : part.type === 'image'
+                ? `移除 ${part.image.name}`
+                : `移除 ${part.file.name}`
+          }
+          title={
+            part.type === 'quote' ? '移除引用' : part.type === 'image' ? '移除图片' : '移除文件'
+          }
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
             const position = props.getPos();
@@ -144,7 +155,9 @@ const ContentChip = Node.create({
       ? `引用：${part.quote.text}`
       : part.type === 'image'
         ? `图片：${part.image.name}`
-        : part.text;
+        : part.type === 'file'
+          ? `文件：${part.file.name}`
+          : part.text;
   },
   addNodeView() {
     return chipView;

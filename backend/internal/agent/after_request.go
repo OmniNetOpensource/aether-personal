@@ -150,20 +150,33 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。
-// 带 ContentArray 的工具成功时保存文本与 oss:// 图片段，工具错误和普通回执仍是字符串。
-func toolResultContent(call toolCall, result string) ([]byte, error) {
+// 带 ContentArray 的工具成功时保存文本与 oss:// 图片段，带 UserVisibleParts 的工具成功时附带展示用的 parts 并标为对聊天可见。
+func toolResultContent(call toolCall, result string) ([]byte, *string, bool, error) {
 	var content any = result
 	trimmed := strings.TrimSpace(result)
-	if tool, ok := tools.ByName(call.Function.Name); ok && tool.ContentArray && strings.HasPrefix(trimmed, "[") {
+	tool, ok := tools.ByName(call.Function.Name)
+	if ok && tool.UserVisibleParts && strings.HasPrefix(trimmed, "{") {
+		var visible struct {
+			Content string          `json:"content"`
+			Parts   json.RawMessage `json:"parts"`
+		}
+		if json.Unmarshal([]byte(trimmed), &visible) == nil && len(visible.Parts) > 0 {
+			sender := "main"
+			encoded, err := json.Marshal(map[string]any{"role": "tool", "tool_call_id": call.ID, "content": visible.Content, "parts": visible.Parts})
+			return encoded, &sender, true, err
+		}
+	}
+	if ok && tool.ContentArray && strings.HasPrefix(trimmed, "[") {
 		content = json.RawMessage(trimmed)
 	}
-	return json.Marshal(map[string]any{"role": "tool", "tool_call_id": call.ID, "content": content})
+	encoded, err := json.Marshal(map[string]any{"role": "tool", "tool_call_id": call.ID, "content": content})
+	return encoded, nil, false, err
 }
 
 // saveToolResult 保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
 // 工具并行执行时从连接池取连接保存，同一用户的插入由 LockUserMessages 在数据库内串行排队。
 func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call toolCall, result string) error {
-	content, err := toolResultContent(call, result)
+	content, sender, visible, err := toolResultContent(call, result)
 	if err != nil {
 		return err
 	}
@@ -172,7 +185,7 @@ func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call tool
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible}); err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, r.userID)
@@ -201,11 +214,11 @@ func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, stepID uu
 		if err != nil {
 			return err
 		}
-		content, err := toolResultContent(call, result)
+		content, sender, visible, err := toolResultContent(call, result)
 		if err != nil {
 			return err
 		}
-		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID}); err != nil {
+		if err := queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible}); err != nil {
 			return err
 		}
 		return queries.NotifyUserMessages(ctx, r.userID)
@@ -236,7 +249,7 @@ func (r *Runner) failRun(ctx context.Context, through int64, cause error) (round
 		}
 		calls, stepID := pendingToolCalls(rows)
 		for _, call := range calls {
-			content, err := toolResultContent(call, "Error: execution was interrupted before this tool call completed.")
+			content, _, _, err := toolResultContent(call, "Error: execution was interrupted before this tool call completed.")
 			if err != nil {
 				return err
 			}

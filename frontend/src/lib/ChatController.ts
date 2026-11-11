@@ -5,8 +5,8 @@ import { ServerEventRelay } from './ServerEventRelay.js';
 import type { ClientCommand } from './ServerEventRelay.js';
 import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
 
-import { messageImageSchema } from './messageAttachments.js';
-import type { MessageImage, MessagePart } from './messageAttachments.js';
+import { messageFileSchema, messageImageSchema } from './messageAttachments.js';
+import type { MessageFile, MessageImage, MessagePart } from './messageAttachments.js';
 
 // ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
 export interface ChatMessage {
@@ -465,15 +465,32 @@ export class ChatController {
     return messageImageSchema.parse(await response.json());
   }
 
+  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；阿芒使用电脑时自动出现在 /mnt/workspace/uploads。
+  async uploadFile(file: File): Promise<MessageFile> {
+    if (!this.token) throw new Error('请先登录');
+    const response = await fetch(this.baseURL + '/files?name=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + this.token,
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+      body: file,
+      signal: AbortSignal.timeout(300000),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || '文件上传失败');
+    return messageFileSchema.parse(await response.json());
+  }
+
   // send 发出一条消息并等服务器保存：成功时消息已经推进列表，失败时抛出错误，由输入框展示并保留内容。
   // clientMessageID 由输入框为同一份草稿复用，重发时服务器按它去重，不会存成两条。
   async send(parts: MessagePart[], clientMessageID: string) {
     const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
     const quotes = parts.flatMap((part) => (part.type === 'quote' ? [part.quote] : []));
     const images = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
+    const files = parts.flatMap((part) => (part.type === 'file' ? [part.file] : []));
     const trimmed = text.trim();
     if (
-      (!trimmed && quotes.length === 0 && images.length === 0) ||
+      (!trimmed && quotes.length === 0 && images.length === 0 && files.length === 0) ||
       Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 64000 ||
       !this.token
     )

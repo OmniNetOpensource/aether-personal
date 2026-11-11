@@ -1,8 +1,8 @@
-// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片上传和草稿，展示发送中与发送失败，发送成功后清空输入。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片与文件上传和草稿，展示发送中与发送失败，发送成功后清空输入。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { uploadImages } from '../../lib/messageAttachments.js';
+import { uploadAttachments } from '../../lib/messageAttachments.js';
 import type { MessagePart, MessageQuote } from '../../lib/messageAttachments.js';
 import { RichMessageInput } from './RichMessageInput.js';
 import type { RichMessageInputHandle } from './RichMessageInput.js';
@@ -68,18 +68,23 @@ export function MessageComposer({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  // addImages 统一处理选择、粘贴与拖放，失败保留其余草稿以便继续编辑。
-  const addImages = async (files: File[]) => {
+  // addFiles 统一处理选择、粘贴与拖放的图片和工作区文件，失败保留其余草稿以便继续编辑。
+  const addFiles = async (files: File[]) => {
     if (readingRef.current || files.length === 0) return;
     readingRef.current = true;
     setReading(true);
     try {
-      const existing = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
-      const images = await uploadImages(files, existing, (file) => controller.uploadImage(file));
-      input.current?.insert(images.map((image) => ({ type: 'image', image })));
+      const uploaded = await uploadAttachments(
+        files,
+        parts,
+        controller.desktopAvailable,
+        (file) => controller.uploadImage(file),
+        (file) => controller.uploadFile(file),
+      );
+      input.current?.insert(uploaded);
       setError('');
     } catch (error) {
-      setError(error instanceof Error ? error.message : '图片上传失败');
+      setError(error instanceof Error ? error.message : '附件上传失败');
     } finally {
       readingRef.current = false;
       setReading(false);
@@ -151,7 +156,7 @@ export function MessageComposer({
         onDrop={(event) => {
           if (event.dataTransfer.files.length) {
             event.preventDefault();
-            void addImages(Array.from(event.dataTransfer.files));
+            void addFiles(Array.from(event.dataTransfer.files));
           }
         }}
       >
@@ -159,11 +164,11 @@ export function MessageComposer({
           ref={fileInput}
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/gif,image/webp"
+          accept={controller.desktopAvailable ? undefined : 'image/png,image/jpeg,image/gif,image/webp'}
           hidden
-          aria-label="选择图片"
+          aria-label={controller.desktopAvailable ? '选择图片或文件' : '选择图片'}
           onChange={(event) => {
-            void addImages(Array.from(event.currentTarget.files ?? []));
+            void addFiles(Array.from(event.currentTarget.files ?? []));
             event.currentTarget.value = '';
           }}
         />
@@ -175,20 +180,24 @@ export function MessageComposer({
             setError('');
             clientMessageID.current = crypto.randomUUID();
           }}
-          onFiles={(files) => void addImages(files)}
+          onFiles={(files) => void addFiles(files)}
           onSubmit={() => void send()}
         />
         {reading && (
           <span className="upload-status" role="status">
-            正在上传图片…
+            正在上传附件…
           </span>
         )}
         <div className="composer-tools">
           <button
             type="button"
             className="attach-button"
-            aria-label="添加图片"
-            title="添加图片，也可粘贴或拖入"
+            aria-label={controller.desktopAvailable ? '添加图片或文件' : '添加图片'}
+            title={
+              controller.desktopAvailable
+                ? '添加图片或文件（上限 50 MB），也可粘贴或拖入'
+                : '添加图片，也可粘贴或拖入'
+            }
             disabled={reading}
             onClick={() => fileInput.current?.click()}
           >

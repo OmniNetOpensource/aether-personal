@@ -61,6 +61,22 @@ func chatMessagesFromRows(rows []database.ListChatRowsAfterRow) []chatMessage {
 }
 
 func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
+	if row.Role == "tool" {
+		var content struct {
+			Parts []messagePart `json:"parts"`
+		}
+		_ = json.Unmarshal(row.Content, &content)
+		if len(content.Parts) == 0 {
+			return nil
+		}
+		return []chatMessage{{
+			ID:        row.ID.String(),
+			Position:  row.ID,
+			Sender:    "main",
+			Parts:     content.Parts,
+			CreatedAt: row.CreatedAt,
+		}}
+	}
 	if row.Role != "assistant" {
 		var content struct {
 			Content  json.RawMessage `json:"content"`

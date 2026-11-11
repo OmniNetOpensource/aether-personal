@@ -620,6 +620,26 @@ button.link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.composer-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-inline-start: 5px;
+  font-size: 14px;
+}
+.composer-file-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-file-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 .composer-chip .image-thumbnail {
   flex-shrink: 0;
   border-radius: 6px;
@@ -904,6 +924,62 @@ button.link {
   gap: 8px;
   flex-wrap: wrap;
   margin: 4px 0 8px;
+}
+.message-files {
+  margin: 4px 0;
+}
+.file-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 210px;
+  max-width: min(360px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+}
+.user-bubble .file-card {
+  background: #ffffff80;
+}
+@media (prefers-color-scheme: dark) {
+  .user-bubble .file-card {
+    background: #00000033;
+  }
+}
+.file-card:hover {
+  border-color: var(--line-strong);
+}
+.file-card.is-unavailable {
+  opacity: 0.72;
+}
+.file-card-icon,
+.file-card-download {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--accent-text);
+}
+.file-card-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.file-card-name {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-card-size {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 18px;
 }
 .image-preview {
   max-width: 96vw;

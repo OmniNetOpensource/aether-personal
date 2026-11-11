@@ -45,13 +45,13 @@ type Store struct {
 	cacheBytes     int64
 }
 
-// client 将服务配置转换成官方 SDK 客户端；连接和读取受调用方超时控制。
+// client 将服务配置转换成官方 SDK 客户端；连接和读取受调用方超时控制，兜底上限覆盖 50 MB 文件流传输。
 func (s *Store) client(ctx context.Context) (*oss.Client, services.OSSSettings, error) {
 	settings, err := s.services.LoadOSS(ctx)
 	if err != nil {
 		return nil, settings, err
 	}
-	cfg := oss.LoadDefaultConfig().WithRegion(settings.Region).WithCredentialsProvider(credentials.NewStaticCredentialsProvider(settings.AccessKeyID, settings.AccessKeySecret)).WithHttpClient(&http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+	cfg := oss.LoadDefaultConfig().WithRegion(settings.Region).WithCredentialsProvider(credentials.NewStaticCredentialsProvider(settings.AccessKeyID, settings.AccessKeySecret)).WithHttpClient(&http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
 	return oss.NewClient(cfg), settings, nil
 }
 

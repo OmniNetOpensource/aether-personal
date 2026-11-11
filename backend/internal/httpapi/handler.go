@@ -63,6 +63,7 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, appConfig confi
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
 	mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
 	mux.HandleFunc("POST /images", s.uploadImage)
+	mux.HandleFunc("POST /files", s.uploadFile)
 	if appConfig.FrontendDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
 	}

@@ -34,7 +34,9 @@ type Tool struct {
 	Ordered bool
 	// ContentArray 表示成功结果使用文字和图片组成的内容数组。
 	ContentArray bool
-	Execute      func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
+	// UserVisibleParts 表示工具可返回对用户可见的聊天附件气泡（编码为含 content 与 parts 的 JSON）。
+	UserVisibleParts bool
+	Execute          func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
 }
 
 // all 是工具的唯一登记表，顺序即发给模型的顺序。新增工具时在这里登记，并同步 admin.sql 里的已知工具名。

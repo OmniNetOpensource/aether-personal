@@ -1,11 +1,12 @@
-// 本文件是用户消息气泡组件：按原顺序展示可折叠的文字、引用与图片，发送状态仍由输入框负责。
+// 本文件是用户消息气泡组件：按原顺序展示可折叠的文字、引用、图片与工作区文件，发送状态仍由输入框负责。
 
+import { FileAttachmentCard } from './FileAttachmentCard.js';
 import { ImagePreview } from './ImagePreview.js';
 import { CollapsibleMessage } from './CollapsibleMessage.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 import type { ChatMessage } from '../../lib/ChatController.js';
 
-// UserMessageBubble 共用整条正文的折叠容器，展开后仍可回看引用与预览图片。
+// UserMessageBubble 共用整条正文的折叠容器，展开后仍可回看引用、预览图片与下载附件。
 export function UserMessageBubble({
   message,
   joinedWithPrevious,
@@ -42,6 +43,10 @@ export function UserMessageBubble({
               ) : part.type === 'image' ? (
                 <div className="message-images" key={index}>
                   <ImagePreview image={part.image} />
+                </div>
+              ) : part.type === 'file' ? (
+                <div className="message-files" key={index}>
+                  <FileAttachmentCard file={part.file} />
                 </div>
               ) : (
                 <p className="user-text" key={index}>

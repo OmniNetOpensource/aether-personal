@@ -1,10 +1,12 @@
-// 本文件是助手消息气泡组件：渲染可折叠的 Markdown 正文，保留引用原文与同组消息的衔接样式。
+// 本文件是助手消息气泡组件：渲染可折叠的 Markdown 正文，或展示阿芒从工作区发回的独立图片与可下载文件气泡。
 
 import type { ChatMessage } from '../../lib/ChatController.js';
 import { Markdown } from '../markdown/Markdown.js';
 import { CollapsibleMessage } from './CollapsibleMessage.js';
+import { FileAttachmentCard } from './FileAttachmentCard.js';
+import { ImagePreview } from './ImagePreview.js';
 
-// AssistantMessageBubble 把折叠按钮放在引用正文之外，确保引用位置只计算原文。
+// AssistantMessageBubble 把折叠按钮放在引用正文之外，确保引用位置只计算原文；文件与图片附件独立渲染。
 export function AssistantMessageBubble({
   message,
   joinedWithPrevious,
@@ -18,6 +20,9 @@ export function AssistantMessageBubble({
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
 }) {
+  const attachments = message.parts.filter(
+    (part) => part.type === 'image' || part.type === 'file',
+  );
   return (
     <div className={`message-row ${joinedWithPrevious ? 'joined' : ''}`}>
       <article className="message-column assistant-column" aria-label="阿芒">
@@ -25,9 +30,22 @@ export function AssistantMessageBubble({
           className={`bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
           <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
-            <div data-quote-body data-message-id={message.id}>
-              <Markdown text={message.text} />
-            </div>
+            {message.text ? (
+              <div data-quote-body data-message-id={message.id}>
+                <Markdown text={message.text} />
+              </div>
+            ) : null}
+            {attachments.map((part, index) =>
+              part.type === 'image' ? (
+                <div className="message-images" key={index}>
+                  <ImagePreview image={part.image} />
+                </div>
+              ) : (
+                <div className="message-files" key={index}>
+                  <FileAttachmentCard file={part.file} />
+                </div>
+              ),
+            )}
           </CollapsibleMessage>
         </div>
       </article>
