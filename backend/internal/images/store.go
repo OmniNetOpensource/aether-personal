@@ -202,7 +202,7 @@ func (s *Store) ResolveMessages(ctx context.Context, messages []json.RawMessage)
 	return resolved, nil
 }
 
-// Inspect 从 OSS 读取对象元信息，消息入口用真实大小核对总量，不信任客户端回传的 size。
+// Inspect 优先从本机缓存核对真实字节大小与类型，未命中时再向 OSS 读取对象元信息，不信任客户端回传的 size。
 func (s *Store) Inspect(ctx context.Context, reference string) (int, string, error) {
 	client, settings, err := s.client(ctx)
 	if err != nil {
@@ -211,6 +211,17 @@ func (s *Store) Inspect(ctx context.Context, reference string) (int, string, err
 	key, err := objectKey(reference, settings.Bucket)
 	if err != nil {
 		return 0, "", err
+	}
+	cachedData, err := s.readCachedImage(reference)
+	if err != nil {
+		return 0, "", err
+	}
+	if cachedData != nil {
+		mime, err := ValidateBytes(cachedData)
+		if err != nil {
+			return 0, "", err
+		}
+		return len(cachedData), mime, nil
 	}
 	result, err := client.HeadObject(ctx, &oss.HeadObjectRequest{Bucket: oss.Ptr(settings.Bucket), Key: oss.Ptr(key)})
 	if err != nil || result.ContentLength <= 0 || result.ContentLength > MaxImageBytes || result.ContentType == nil {

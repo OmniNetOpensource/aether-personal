@@ -14,6 +14,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
+	"golang.org/x/sync/errgroup"
 )
 
 // uploadImage 只接收带 Bearer 令牌的图片请求，不使用 Cookie，跨站无法借用登录态上传。
@@ -78,17 +79,29 @@ func (s *server) chatMessagesWithPreviews(ctx context.Context, rows []database.L
 	return messages
 }
 
-// checkMessageImages 在写入前按 OSS 真实大小核对整条消息，网络请求发生在数据库事务之外。
+// checkMessageImages 在写入前并行核对每张图片的真实大小与类型，网络请求发生在数据库事务之外。
 func (s *server) checkMessageImages(ctx context.Context, frame *clientFrame) bool {
-	total := 0
-	for _, part := range frame.Parts {
+	sizes := make([]int, len(frame.Parts))
+	group, checkCtx := errgroup.WithContext(ctx)
+	for index, part := range frame.Parts {
 		if part.Image == nil {
 			continue
 		}
-		size, mime, err := s.images.Inspect(ctx, part.Image.StorageURL)
-		if err != nil || size != part.Image.Size || mime != part.Image.MIMEType {
-			return false
-		}
+		image := *part.Image
+		group.Go(func() error {
+			size, mime, err := s.images.Inspect(checkCtx, image.StorageURL)
+			if err != nil || size != image.Size || mime != image.MIMEType {
+				return errors.New("invalid message image")
+			}
+			sizes[index] = size
+			return nil
+		})
+	}
+	if group.Wait() != nil {
+		return false
+	}
+	total := 0
+	for _, size := range sizes {
 		total += size
 	}
 	return total <= images.MaxMessageImageBytes
