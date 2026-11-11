@@ -7,9 +7,9 @@ flowchart TD
     subgraph L2["第二层：Go 后端（对等无状态多容器：api-1 · api-2）"]
         API["API：聊天 WebSocket · 图片/文件上传 · 只读桌面流 · 管理接口"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送 · 页面历史搜索"]
-        IMAGES["存储与缓存：私有 OSS 读写签名 · 每容器独立图片磁盘缓存"]
+        IMAGES["存储与缓存：私有 OSS 读写签名 · Redis 共享图片缓存"]
         MANAGER["Manager：对等实例调度<br/>BLPOP 竞争取活 · 租约续期 · 本机字典打断思考 · 5 秒补偿"]
-        REDIS[("Redis 8（纯内存无持久化）：唤醒队列 · 用户临时租约 · 思考打断与聊天推送 Pub/Sub")]
+        REDIS[("Redis 8（纯内存无持久化）：唤醒队列 · 用户临时租约 · 思考打断与聊天推送 Pub/Sub · oss:// 图片缓存")]
         DB[("PostgreSQL：消息历史 · 租约栅栏代数 · 需求队列 · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
@@ -32,6 +32,7 @@ flowchart TD
         MAIN <-->|"工具调用 / 结果"| TOOLS
         API <-->|"用户输入 / 历史搜索 / 对外消息与事件"| MESSAGES
         API <-->|"POST /images · POST /files"| IMAGES
+        IMAGES <-->|"oss:// 键读写与容量淘汰"| REDIS
         MESSAGES <-->|"保存与读取消息"| DB
         MESSAGES <-->|"发布与订阅 chat:notify"| REDIS
         MESSAGES -->|"输入提交后唤醒"| MANAGER
@@ -47,8 +48,8 @@ flowchart TD
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
         SCHEDULE <-->|"安排与回执同事务"| DB
 
-        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 三阶段闲置后台工作"]
-        SCHEDULER <-->|"行锁防重插入不可见 schedule_event / memory_update / recent_followup / unknown_unknowns"| DB
+        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 闲置后台反思"]
+        SCHEDULER <-->|"行锁防重插入不可见 schedule_event / reflection"| DB
         SCHEDULER -->|"插入后经 Redis 唤醒"| MANAGER
     end
 

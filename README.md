@@ -2,7 +2,7 @@
 
 以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 与外部工具，以及 dev/prod 环境。
 
-当前版本包含邮箱验证码登录、Main 长期对话、页面与 Agent 历史检索、主题记忆、持久化需求队列、定时任务与三阶段闲置后台工作、联网搜索与网页/图片读取、阿里云 FC + AgenticFS 持久化个人电脑（含只读实时桌面与双向文件流转），以及 Poke 式的全屏 Web 聊天界面与独立管理看板。用户界面只显示与 Main 的消息和交付文件，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
+当前版本包含邮箱验证码登录、Main 长期对话、页面与 Agent 历史检索、主题记忆、持久化需求队列、定时任务与闲置后台反思、联网搜索与网页/图片读取、阿里云 FC + AgenticFS 持久化个人电脑（含只读实时桌面与双向文件流转），以及 Poke 式的全屏 Web 聊天界面与独立管理看板。用户界面只显示与 Main 的消息和交付文件，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
 
 ## 已确认方向
 
@@ -16,7 +16,7 @@
 | Go 版本 | `1.27.2` |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` |
 | HTTP 层 | Go 标准库 `net/http` |
-| 数据库与信号层 | `pgx v5.11.0 + sqlc v1.31.1`（PostgreSQL 持久事实与栅栏代数）+ `redis/go-redis v9`（纯内存唤醒、临时租约与 Pub/Sub） |
+| 数据库与信号层 | `pgx v5.11.0 + sqlc v1.31.1`（PostgreSQL 持久事实与栅栏代数）+ `redis/go-redis v9`（纯内存唤醒、临时租约、Pub/Sub 与图片缓存） |
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
@@ -146,4 +146,4 @@ make db-down   # 停止本地容器
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板合并为「运行过程」与「配置」两页：可按用户、时间范围、模型与请求结果筛选查看 Main 的输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话与压缩模型、压缩阈值、三阶段闲置后台工作时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、时间范围、模型与请求结果筛选查看 Main 的输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话与压缩模型、压缩阈值、闲置后台反思时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

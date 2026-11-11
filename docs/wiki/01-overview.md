@@ -29,7 +29,7 @@ flowchart LR
         RUNTIME["Agent 运行时<br/>Main"]
     end
     DB[("PostgreSQL 18<br/>全部持久状态 + 栅栏代数")]
-    REDIS[("Redis 8<br/>纯内存信号与临时租约")]
+    REDIS[("Redis 8<br/>纯内存信号、租约与图片缓存")]
     subgraph EXTERNAL["第三层：外部服务"]
         OPENROUTER["OpenRouter / ikun<br/>模型"]
         RESEND["Resend<br/>验证码邮件"]
@@ -94,7 +94,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `read_message` / `search_message` | 按 ID 读取、按关键词搜索历史消息 | `已实现` |
 | 主题记忆 | 根索引与详细主题均由 Main 通过单一 `memory` 工具渐进加载，不自动注入；明确的长期偏好与约定默认自动保存 | `开发中` |
 | 需求队列 | `tasks` 登记独立目标与补充，每用户一项执行中，完成后依次领取，见 [11](11-tasks.md) | `开发中` |
-| Schedule 与闲置反思 | 2026-11-08 重新加入：`schedule` 工具设置一次性或周期定时任务，对话闲置后投一次反思；调度器插入不可见触发消息并唤醒 Main，见 [10](10-schedules.md) | `开发中` |
+| Schedule 与闲置反思 | 2026-11-08 重新加入：`schedule` 工具设置一次性或周期定时任务；2026-11-11 起距离最近一次请求满闲置时长即周期投递后台反思。调度器插入不可见触发消息并唤醒 Main，见 [10](10-schedules.md) | `开发中` |
 | 压缩 | 超过回答间隔或上下文阈值后，在下一次模型请求前生成摘要；阈值由看板配置 | `开发中` |
 | 管理员只读观测接口 | 用户、Main、模型调用与历史步骤，见 [08](08-admin-observability.md) | `开发中` |
 | 管理员用户操作接口 | 删除用户等管理操作 | `待确认` |
@@ -106,7 +106,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | OpenRouter、ikun Gemini、ikun Claude | Main 对话与独立上下文压缩模型 | `已实现` |
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`search_twitter`、`fetch_url`、`read_image` | Serper、Parallel、EveryInfra 与直接图片读取，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
-| 阿里云私有 OSS（含本机磁盘缓存） | 聊天图片与 50 MiB 工作区文件的流式存取与临时签名 | `已实现` |
+| 阿里云私有 OSS（配 Redis 共享图片缓存） | 聊天图片与 50 MiB 工作区文件的流式存取与临时签名 | `已实现` |
 | 阿里云 FC Agent Sandbox + AgenticFS | 持久化 `/mnt/workspace` 个人 Linux 电脑、只读实时桌面与双向文件流转，见 [07](07-sandbox.md) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
 
@@ -144,7 +144,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 关键设计
 
-**持久状态全在 PostgreSQL，Redis 只传跨实例信号与临时租约，对等容器运行 Main（2026-11-11 更新）。** 对齐 LangSmith Data Plane 模式：消息、任务、记忆、工作区绑定与步骤轨迹 100% 保存在 PostgreSQL；同机纯内存 Redis（关闭磁盘持久化）只承担唤醒队列、每用户 30 秒临时租约、跨实例思考打断广播与聊天新消息推送广播，Redis 重启清空不丢失任何业务数据。生产部署两个完全对等的无状态后端容器（`api-1`、`api-2`），每个容器同时接收 WebSocket 与运行 Agent，并配合 `users.main_lease_epoch` 栅栏代数防脑裂覆盖，实现发版零停机滚动更新与单容器异常自动切流，详见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。此前 2026-11-09 曾简化为单进程，现已升级为本方案。
+**持久状态全在 PostgreSQL，Redis 只传跨实例信号、临时租约与旁路图片缓存，对等容器运行 Main（2026-11-11 更新）。** 对齐 LangSmith Data Plane 模式：消息、任务、记忆、工作区绑定与步骤轨迹 100% 保存在 PostgreSQL（文件原件在私有 OSS）；同机纯内存 Redis（关闭磁盘持久化）只承担唤醒队列、每用户 30 秒临时租约、跨实例思考打断与聊天新消息推送广播，以及以 `oss://` 为键的共享图片缓存，Redis 重启清空不丢失任何业务数据。生产部署两个完全对等的无状态后端容器（`api-1`、`api-2`），每个容器同时接收 WebSocket 与运行 Agent，并配合 `users.main_lease_epoch` 栅栏代数防脑裂覆盖，实现发版零停机滚动更新与单容器异常自动切流，详见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。此前 2026-11-09 曾简化为单进程，现已升级为本方案。
 
 **一切通信都是消息。** 用户与 Main 只通过消息联系，Main 的消息列表就是它的模型上下文（见 [02 数据模型](02-data-model.md)）。2026-10-30 起，Main 生成的正文就是它对用户说的话（整条生成结束后一次性推送）。
 
@@ -182,7 +182,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | 日志 | `log/slog`；dev 输出文本，prod 输出 JSON | 标准库 |
 | 数据库访问 | pgx `v5.11.0` + sqlc `v1.31.1` | 手写 SQL，sqlc 生成带类型的 Go 调用代码，由 pgx 执行 |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`），主键 `uuidv7()` | 业务持久事实、历史检索与租约栅栏代数共用一个数据库 |
-| 信号与临时协调 | Redis 8（`redis:8-alpine` 纯内存模式）+ `redis/go-redis` v9 | 跨实例唤醒队列、用户临时租约及思考打断/聊天推送 Pub/Sub，不存业务数据 |
+| 信号协调与图片缓存 | Redis 8（`redis:8-alpine` 纯内存模式）+ `redis/go-redis` v9 | 跨实例唤醒队列、用户临时租约、思考打断/聊天推送 Pub/Sub 及 `oss://` 图片旁路缓存，不存持久业务状态 |
 | 迁移 | goose `v3.29.0`（`go tool goose`） | 见 [02 数据模型](02-data-model.md#迁移) |
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
@@ -215,6 +215,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
 | `DATABASE_MAX_CONNS` | 单容器默认 20，最小 5；聊天推送已改走 Redis Pub/Sub，不再占用池外 PostgreSQL 长连接 |
 | `AGENT_CAPACITY` | 单容器默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；满载时暂停从 Redis 队列取活，新待办自动流向空闲容器 |
+| `IMAGE_CACHE_MAX_BYTES`、`IMAGE_CACHE_TTL` | 可选，Redis 共享图片缓存总字节上限（默认 `134217728` 即 128 MiB，至少 4 MiB）与绝对有效期（默认 `24h`，最小 `1s`） |
 | `FRONTEND_DIR` | 同源提供 Web/PWA 的构建目录 |
 | `POSTGRES_PORT`、`REDIS_PORT` | 可选，本地 dev 容器映射到本机的端口，默认 `5432` 与 `6379` |
 
@@ -232,7 +233,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 - 项目提供通用 Docker Compose 部署；阿里云新加坡仅为维护者自己实例的部署位置。
 - 2026-10-26 确认 Web 使用 Cloudflare，聊天域名为 `aether.forkicks.fun`。采用 Workers Static Assets 托管页面与同源代理，Go 与 PostgreSQL 运行在服务器，避免重写现有 Agent Runtime。配置、步骤与未完成的公众上线条件见 [09](09-deployment.md)。
 - 迁移作为单独命令执行，不在后端启动时自动执行（理由见 [02 数据模型](02-data-model.md#迁移)）。
-- 生产单机默认部署两个完全对等的后端容器 `api-1`、`api-2`（各自挂载独立图片缓存卷）与一个纯内存 `redis` 容器，由 Caddy 主动健康检查与轮询转发，发布时不停服滚动更新，详见 [09](09-deployment.md)。
+- 生产单机默认部署两个完全对等且零持久挂载卷的无状态后端容器 `api-1`、`api-2` 与一个纯内存 `redis` 容器，由 Caddy 主动健康检查与轮询转发，发布时不停服滚动更新，详见 [09](09-deployment.md)。
 
 ## 模型服务与费用
 
