@@ -40,12 +40,13 @@ erDiagram
 | `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `memory_files` | 用户私有 `/memories` 文本文件，包含 `memory.md` 根和详细主题 | `开发中` |
 | `schedules` | 定时任务：标题、到点交给 Main 的上下文、可空的 `cron` 与 `timezone`（同时为空即一次性）和下次触发时间，见 [10](10-schedules.md) | `开发中` |
+| `sandbox_workspaces` | 用户与独立 AgenticFS 工作区的绑定、加密实例令牌/流量令牌与聊天附件同步序号，见 [07](07-sandbox.md) | `已实现` |
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `model_calls` | 每次模型 HTTP 请求尝试、结果与可空用量 | `开发中` |
-| `model_settings` | 全局 Main 运行时模型选择、闲置反思时长、版本与最后修改者快照 | `开发中` |
-| `service_settings` | 六组服务凭证密文、Key 后缀、Gemini 地址、邮件发件人与更新时间；清除 Key 保留记录 | `开发中` |
+| `model_settings` | 全局 Main 与压缩运行时模型选择、三阶段闲置后台工作时长、版本与最后修改者快照 | `开发中` |
+| `service_settings` | 九组服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
 
@@ -283,7 +284,12 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00036_associate_assistant_messages_with_tasks.sql` | 旧自动消息归属原型，已由 `00041` 替代 | `历史` |
 | `00041_remove_assistant_task_binding.sql` | 移除助手消息的任务 ID 与强制归属约束；只保留任务和相关用户输入 | `开发中` |
 | `00045_add_schedules.sql` | 重新加入 `schedules` 表，一次性与周期安排共用，投递后删除或推进 `next_run_at` | `开发中` |
-| `00046_add_reflection_idle_minutes.sql` | `model_settings.reflection_idle_minutes`，闲置反思时长，默认 120 分钟 | `开发中` |
+| `00046_add_reflection_idle_minutes.sql` | `model_settings.reflection_idle_minutes`，后由 `00047` 拆分为三列 | `历史` |
+| `00047_split_idle_work_minutes.sql` | 将闲置时长拆分为 `memory_update_idle_minutes`、`recent_followup_idle_minutes`、`unknown_unknowns_idle_minutes`（默认 60/120/180 分钟） | `已实现` |
+| `00048_add_chat_search.sql` | `chat_message_text` 函数与可见聊天全文三元组 GIN 索引，供页面历史搜索与上下文窗口使用 | `已实现` |
+| `00049_add_sandbox_workspaces.sql` | `sandbox_workspaces` 工作区绑定表，并将 `aliyun_fc` 纳入服务目录 | `已实现` |
+| `00050_add_sandbox_traffic_token.sql` | 持久化加密的沙箱流量令牌，支持不唤醒实例的只读实时桌面观察 | `已实现` |
+| `00051_add_workspace_file_transfer.sql` | `sandbox_workspaces.synced_through_sequence` 记录已同步进 `/mnt/workspace/uploads` 的聊天附件序号，并在聊天搜索中纳入附件文件名 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

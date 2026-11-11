@@ -2,7 +2,7 @@
 
 以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 与外部工具，以及 dev/prod 环境。
 
-当前开发版本包含邮箱验证码登录、Main 长期对话、历史检索、联网搜索与网页读取，以及 Poke 联系人式的简版 Web 聊天。Main 另通过主题记忆工具自动维护明确的长期偏好与约定，用户可以在聊天中查看、纠正和删除。用户界面只显示与 Main 的消息流，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
+当前版本包含邮箱验证码登录、Main 长期对话、页面与 Agent 历史检索、主题记忆、持久化需求队列、定时任务与三阶段闲置后台工作、联网搜索与网页/图片读取、阿里云 FC + AgenticFS 持久化个人电脑（含只读实时桌面与双向文件流转），以及 Poke 式的全屏 Web 聊天界面与独立管理看板。用户界面只显示与 Main 的消息和交付文件，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
 
 ## 已确认方向
 
@@ -20,7 +20,7 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter 与可选的 ikun Gemini；Main 默认 `deepseek/deepseek-v4.1-flash-1017` |
+| 模型服务 | OpenRouter、ikun Gemini 与 ikun Claude；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，压缩可单独指定模型 |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
@@ -30,7 +30,7 @@
 | 需求队列 | `tasks` 持久化需求；补充更新原任务、新目标排队，当前任务结束后由模型读取任务列表选择下一项；只管理任务要求与状态，不绑定回答或文件产物，本地开发中 |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
 | 主题记忆 | 不自动注入记忆，Main 需要时通过 `memory` 先读根索引、再读相关主题；明确的长期偏好与约定默认自动维护，详细主题通过单一 `memory` 工具按需读写 |
-| Linux 沙盒工作环境 | 2026-10-29 起先不考虑，已有实现已删除 |
+| Linux 沙盒工作环境 | 阿里云 FC Agent Sandbox + AgenticFS 持久 `/mnt/workspace`，支持只读实时桌面观看与 50 MB 聊天双向文件互传，见 [沙盒与文件流转](docs/wiki/07-sandbox.md) |
 | 处理中收到新消息 | 当前模型请求或工具调用结束后，在下一次模型调用前加入新消息 |
 | 环境 | 实现时同时考虑 dev 和 prod |
 
@@ -93,20 +93,13 @@ make dev
 
 打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面与 WebSocket。页面打开后先显示 loading，WebSocket 就绪后本地 dev 自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
 
-另一个终端执行 `make admin`，进入 [管理看板](http://127.0.0.1:5174) 的“服务配置”页填写 OpenRouter、ikun Gemini、Resend、Serper、Parallel 和 EveryInfra 凭证。修改从下一次请求生效，无需重启。服务未配置时允许进入看板，使用该服务时报未配置。已有 `.env` 的升级方式见 [服务凭证管理](docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。
+另一个终端执行 `make admin`，进入 [管理看板](http://127.0.0.1:5174) 的“配置”页填写 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS 和阿里云 FC 凭证。修改从下一次请求生效，无需重启。服务未配置时允许进入看板，使用该服务时报未配置。已有 `.env` 的升级方式见 [服务凭证管理](docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。
 
-检查代码和真实数据库运行时：
+运行编译与静态类型检查（仓库不保留或运行任何本地测试类脚本）：
 
 ```sh
 make check
-make check-integration
 ```
-
-数据库集成测试创建和清理独立随机 schema，外部模型及工具接口使用本地 HTTP 响应。它验证队列、并发、重启和失败行为，不证明真实供应商可用。真实联网依赖各服务的有效密钥。
-
-`make check-live` 显式调用真实搜索和网页服务，会消耗相应供应商额度；未配置密钥的供应商显示为跳过，不能视为验证成功。
-
-`make check-research` 使用正式提示词和正常 Runner 重放真实研究任务，输出完整消息和执行证据供 review；该命令会调用真实服务并消耗额度。可通过 `RESEARCH_OUTPUT=/绝对路径` 指定结果目录。原 A/B 数据作为历史记录保留，见 [Main 职责与验证](docs/wiki/06-main-role-experiment.md)。
 
 仅运行后端时仍可使用：
 
@@ -152,4 +145,4 @@ make db-down   # 停止本地 PostgreSQL
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板包含运行概览、模型调用和模型配置。可按用户筛选调用，查看 Token、已知 USD 费用、延迟与失败；调用详情展示新采集的实际请求与响应 JSON，旧日志标记未记录。在“模型配置”页可切换模型，保存后无需重启。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、时间范围、模型与请求结果筛选查看 Main 的输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话与压缩模型、压缩阈值、三阶段闲置后台工作时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

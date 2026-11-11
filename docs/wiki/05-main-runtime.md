@@ -185,6 +185,8 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 | `schedule` | 创建、列出、修改、删除一次性或周期定时任务；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url` | Main 的搜索和网页读取工具 | `已实现` |
 | `read_image` | 读取一张 JPEG、PNG、GIF 或 WebP 的直接地址；字节写入该用户的 OSS，回执只留 `oss://`，发送前再转 base64 | `已实现` |
+| `sandbox_*` / `browser_*` | 阿里云 FC + AgenticFS 个人 Linux 电脑的命令、代码、文件与 GUI 浏览器工具，同一轮内按顺序串行执行，见 [07](07-sandbox.md) | `已实现` |
+| `sandbox_send_file` | 将 `/mnt/workspace` 中的最终产物（`<= 50 MiB`）存入私有 OSS 并以独立气泡发给用户，见 [07](07-sandbox.md) | `已实现` |
 
 工具参数写在工具描述中。每次请求注入的不可见指令明确 Main 的正文就是给用户的消息、且与工具同批的正文也会展示，要求正文只写用户该读的内容、不暴露内部推理与编排。参数无效时返回工具错误，模型可修正。
 

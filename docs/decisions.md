@@ -28,16 +28,16 @@
 | 项目定位 | 2026-10-30 改为以维护者自用为主的开源 personal agent，其他人也可自行部署或使用维护者实例；不再以企业 fork 服务其终端用户为首要目标 | [01](wiki/01-overview.md#项目定位) |
 | 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
 | 用户删除 | 仅管理员可删除，用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
-| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；保留运行概览、模型调用、模型配置，调用详情查看实际请求与响应 JSON，开发中；2026-11-03 页面改用 TanStack Start SPA（与聊天端同款，独立服务与部署不变） | [08](wiki/08-admin-observability.md#看板改用-tanstack-start2026-11-03) |
-| Agent 运行过程 | 2026-10-30 新增“运行过程”页并保留模型调用列表；按 Agent 时间降序（最新在上）显示输入、推理、工具调用与结果、压缩摘要、失败请求和不可见指令，长内容截断后按需加载；不显示待读消息与工具时长 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
-| API 额度面板 | 2026-10-30 新增：运行概览汇总与服务配置明细两处显示六个服务的剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel 不接受产品 API Key）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
+| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（模型配置与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合 | [08](wiki/08-admin-observability.md) |
+| Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、失败请求和不可见指令，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
+| API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，每用户一项执行中，当前任务结束后由模型读取 `list_tasks` 并用 `update_task(..., in_progress)` 选择下一项，后端不按 ID 或登记先后自动选取；删除冗余 `source_sequence`（`00039`）。任务记录以 `related_message_ids` 只关联提出需求和补充的用户输入；不绑定回答或文件、不提供结果追加工具，不设 `outcome`；`list_tasks` 统一返回列表，去掉 `task_id` 参数；不恢复 Subagent。同日稍后确认任务接入只靠固定指令中的任务段与三个 task tools：取消请求尾部 `task_context`、阶段工具范围与后端任务状态查询，`main_work` 由 `00042` 恢复为只看消息尾部；2026-11-07 部分恢复后端任务状态读取：模型收尾后若仍有 `in_progress` 或 `queued` 任务，Runner 以一轮不落库的 `task_reminder` 续跑，同一批任务只提醒一次，`waiting` 不触发，`main_work` 不变；2026-11-09 模型可把进行中任务用 `update_task` 改回 `queued`，再启动自己判断更该先做的排队任务，仍一次只做一项，不新增优先级字段，搁下与启动必须分两批 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
-| 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
-| 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏、菜单或外层卡片；2026-10-28 删除整个顶部栏；先验收 Web | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
-| 消息列表滚动 | 2026-11-03 改为虚拟滚动：只挂载视口附近的消息，高度按消息记住；贴底、上翻停留、加载历史保持位置和引用回看不变。同日改为发送不把列表拉回底部：已贴底时新内容仍跟随，正在看更早消息时发送后留在原地 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口；2026-11-11 修复离线冷启动：已缓存登录态离线打开时直接进入聊天页编辑草稿，恢复联网后自动连接补齐历史 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏或顶部栏；右上角悬浮圆形入口依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及 2026-11-11 确认新增的「账号与退出登录」小浮层 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 消息列表滚动 | 2026-11-03 改为虚拟滚动（现使用 `react-virtuoso`）：只挂载视口附近的消息，贴底、上翻停留、加载历史保持位置和引用回看不变；发送不把正在看更早消息的列表拉回底部 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 前端构建 | Node.js >=22.12.0 + npm 锁文件，TanStack Start 的 Rsbuild 插件预渲染 SPA 外壳，Web/PWA 部署产物仍为 frontend/build/web；build/server 仅供构建使用 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 产品图标 | 2026-10-26 用户提供的深绿背景黄色毛绒角色原图；用于客户端登录、Web 图标和管理看板品牌标识 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
@@ -46,13 +46,13 @@
 | Markdown 渲染 | 2026-11-02 对齐 Aether Start：unified / remark、中文与 GFM、KaTeX、Shiki 高亮和代码复制，沿用当前主题；整条消息解析，不引入流式动画 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端字号 | 2026-10-28 整体放大一档：正文与输入框 18px，辅助文字同步增加 2px，行高相应增加 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 助手消息宽度 | 2026-11-02 改为 `width: fit-content`、`max-width: 100%`，短回复按内容收缩，长回复不超出消息区域，保留外层 margin、留白和消息间距 | [04](wiki/04-messaging.md#助手消息宽度) |
-| 聊天输入框 | 2026-10-28 透明外围浮层，单行文字与图标居中，多行加号与发送按钮固定底部，左侧加号本次仅提供本地文件选择与移除入口，暂不上传或发送 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 聊天输入框 | 透明外围浮层，混排文字、引用、图片与（已绑定工作区账号的）任意工作区文件；断线重连期间在输入框上方显示轻量连接状态提示 | [01](wiki/01-overview.md#第一层web-与-pwa-前端)、[07](wiki/07-sandbox.md) |
 | 本地 Web 接入 | Go 用 `FRONTEND_DIR` 提供构建产物，与 HTTP API、WebSocket 同源；根目录 `make dev` 启动 | [01](wiki/01-overview.md#本地开发) |
 | 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
 | 配置来源 | 基础设施与模型默认值读取环境变量；运行时模型选择与服务凭证保存在数据库。主加密密钥由部署端提供；缺少业务 Key 允许先进入看板配置 | [01](wiki/01-overview.md#配置) |
-| 服务凭证 | 2026-10-30 确认在看板统一管理六组 Key，AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量。用户明确只有一个管理员，不新增多管理员并发保存处理 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
+| 服务凭证 | 2026-10-30 起在看板统一管理服务凭证（现含 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS、阿里云 FC 共九组），AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
 | 健康检查 | `GET /healthz`，同时检查数据库连接；连接池不预先连接数据库，但 Agent 启动时读不到持久待办即进程退出，由重启策略拉起 | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
 | 本地 dev 数据库 | Docker Compose，端口 `${POSTGRES_PORT:-5432}` | [01](wiki/01-overview.md#后端骨架-已实现) |
@@ -72,14 +72,14 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`messages`、`steps`、`login_codes`、`sessions`；2026-11-06 本地新增 `tasks` 与 `task_messages`（`00034`），开发中新增 `model_calls`（`subagents` 已由 `00025` 删除） | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`messages`、`steps`、`login_codes`、`sessions`、`tasks`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
-| 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息；2026-11-02 起定义为开启新上下文世代，新世代用摘要承接历史，指令由每次请求现注入、不随世代落库；2026-11-03 去掉摘要 token 上限；2026-11-06 确认 compact 保留同一固定指令、历史前缀及上次 Main 的工具定义，只在末尾追加压缩要求，同时禁用工具调用，以保留缓存复用条件；2026-11-08 工具定义改为与普通请求相同的当前定义，不再复用上次 Main 的供应商原文，因为每次 Main 请求都已发全部工具 | [02](wiki/02-data-model.md#压缩与上下文检索) |
+| 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息；开启新上下文世代，固定指令、待压历史与当前工具定义保留前缀复用条件并禁用工具调用；支持在看板为压缩单独指定模型（如 ikun Claude，`00044`），留空则跟随 Main | [02](wiki/02-data-model.md#压缩与上下文检索) |
 | 自动压缩触发 | 上下文达到 200,000 tokens（看板可改）时，下一次调用模型前检查并压缩；2026-11-03 取消 ikun Gemini 固定 400,000 的例外，所有模型共用看板阈值（仍受已知输入容量封顶）；开发中，本地已验证并启用。2026-10-30 取消闲置 6 小时触发（看板小时设置一并删除）；达到阈值且恰好是 Main 的用户新消息触发时只压其之前的历史、保留这条消息原文 | [02](wiki/02-data-model.md#自动压缩触发2026-10-26开发中) |
 | 请求输出上限 | 2026-11-03 取消手动输出额度：删除看板输入框、`MAX_OUTPUT_TOKENS` 与持久化字段（`00031`）；普通回复与压缩使用目录已知的模型最大输出，未知时省略参数、由供应商决定，不设置应用默认数字 | [08](wiki/08-admin-observability.md#一键切换模型2026-10-23开发中) |
-| 历史检索 | 关键词搜索；2026-10-30 确认范围为 `messages` 表全部内容（不按类型过滤、不跨用户），Main 搜该用户全部记录；参数含 `keyword` 与 `who`，按命中次数与新旧排序 | [02](wiki/02-data-model.md#历史检索-已实现) |
+| 历史检索 | Agent 侧 `search_message` / `read_message` 搜当前用户 `messages` 全表；页面侧新增独立「搜索历史聊天」浮层与前后上下文窗口（`00048`），只搜用户可见消息（含附件文件名，`00051`），不移动实时推送与历史翻页游标 | [02](wiki/02-data-model.md#历史检索-已实现)、[04](wiki/04-messaging.md) |
 | 主题记忆 | 2026-11-04 确认默认自动保存明确的长期偏好与约定；2026-11-06 改为单一 `memory` 工具，以六个文件命令操作 PostgreSQL `memory_files`。取消来源、版本、恢复和根联动参数，选择理由是减少模型参数与重复正文；每个命令复用现有事务和回执恢复，不另建后台提炼、不全量回填历史、不动态改写请求头；本地开发中，未推送 | [02](wiki/02-data-model.md#主题记忆)、[05](wiki/05-main-runtime.md#工具) |
 | 记忆根文档 | 2026-11-06 最终确认取消自动注入，根文档 `/memories/memory.md` 只保存核心约定与主题索引，详细内容独立成文件。固定 Main 指令只说明记忆入口与读取时机：需要长期偏好、已确认约定或项目背景时通过 `memory` 先读根、再读相关主题；无关请求不读记忆。请求组装、启动、重启和 compact 后均不自动读取或保存根快照。明确的长期偏好仍默认自动保存；选择理由是按需控制上下文，避免每次请求都携带根正文；本地开发中，未推送 | [02](wiki/02-data-model.md#主题记忆)、[05](wiki/05-main-runtime.md#工具) |
 | 向量检索（已删除） | 2026-11-02 删除：embedding 异步补算与语义搜索效果从未实测、体感收益不明确，整体移除；`00024` 删 `embedding` 列与 pgvector 扩展；镜像待迁移在生产落地后单独换回 `postgres:18`（删 HNSW 索引需 pgvector 库在场，本地已实测） | [02](wiki/02-data-model.md#历史检索-已实现) |
@@ -128,7 +128,7 @@
 | 实现顺序 | 最小对话 → 边生成边显示 → 更多工具 → 压缩与历史检索（Subagent 已于 2026-11-02 删除） | [05](wiki/05-main-runtime.md#实现顺序) |
 | 主对话 | 每用户一条长期主对话，同一份 `messageList` | [05](wiki/05-main-runtime.md) |
 | Schedule | 2026-11-08 重新加入：Main 用 `schedule` 工具设置一次性（带偏移时间）或周期（五段 cron 加 IANA 时区）定时任务；后台调度器每 5 秒扫描，到期把保存的上下文作为不可见 `schedule_event` 消息投进对话并唤醒 Main，投递与推进同事务、不重复投递，停机错过的周期触发合并成一次；一次性安排投递后删除。聊天界面不加任何东西，查看与修改通过对话完成。理由是提醒与周期检查都是常见用法，复用消息尾部判断有活，agent loop 不需改动。此前 2026-11-03 曾删除旧实现（`00030`） | [10](wiki/10-schedules.md) |
-| 闲置反思 | 2026-11-08 新增：用户发来新消息后，对话闲置满看板可调的时长（默认 120 分钟）时投一次不可见 `reflection` 消息，Main 回看近期对话；每段新对话只触发一次，最近用户消息早于闲置时长加一天的不补跑。理由是只在有新内容可回看时花费模型调用。2026-11-09 改指令：更新对用户的理解，先列候选再挑一两条跟进（可接着近期话题，也可推荐用户没接触过但可能需要的新东西），倾向发出、只有确实没有有用的候选才沉默；在记忆 `/memories/topics/suggestions.md` 维护推荐记录去重。理由是原先“有值得说的才发”让模型核对完记忆就沉默结束 | [10](wiki/10-schedules.md#闲置反思) |
+| 闲置后台工作 | 2026-11-08 新增闲置反思，随后由 `00047` 拆分为按序运行的三阶段后台工作：`memory_update`（默认 60 分钟，只整理记忆不发消息）、`recent_followup`（默认 120 分钟，跟进近期未决问题与下一步）、`unknown_unknowns`（默认 180 分钟，基于整体了解联网推荐用户不知道自己需要的新东西并在 `/memories/topics/suggestions.md` 去重）；前一种投递过才轮到后一种，每段新对话各运行一次 | [10](wiki/10-schedules.md#闲置后台工作) |
 | 回复用户 | 2026-11-06 决定先去掉任务与产物绑定，只保留任务记录的创建、读取、更新和状态管理；删除助手消息的任务 ID，正文仍在完整生成后推送。完成任务只更新状态，不登记或校验产物，见 [11](wiki/11-tasks.md)。 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | 连续消息与多个请求 | 2026-11-04：按目标判断消息关系，不同目标分别处理，同一目标的补充与修正合并处理；换话题不自动取消旧请求，结束前逐个核对结果、必要澄清或阻塞原因。压缩摘要保留各请求状态，避免漏答。2026-11-06 改为持久化任务队列：先登记新输入、补充更新原任务、新目标排队，当前任务结束后再领取下一项 | [05](wiki/05-main-runtime.md#连续消息与多个请求2026-11-04) |
 | 运行循环 | 2026-11-08 按三阶段重排：请求前（清理上次进程退出的残留、补跑缺回执的工具、开步骤、压缩与组装）、请求（发出并收回完整回复）、请求后（保存回复并执行工具、重试、失败收尾），循环主体只判断还有没有活；残留清理由运行开头挪到每轮请求前开头，重试改为循环的下一轮，删除 Manager 对临时数据库错误的退避重试、启动读不到待办即退出。理由是代码直接展现三个阶段，修改时容易定位并限定范围，且不再防御走不到的场景，见 [05](wiki/05-main-runtime.md#agent-loop-三阶段2026-11-08)。2026-11-06 改为单进程 Manager 直接唤醒、启动时恢复，取代仅通知调度，见 [05](wiki/05-main-runtime.md#停机与开机2026-11-09)。同日曾增加队列状态与未登记输入判断，稍后取消并由 `00042` 恢复为只由消息尾部决定，见 [11](wiki/11-tasks.md)。2026-11-07 增加收尾任务提醒：消息尾部已收尾时 Runner 查一次进行中与排队任务、带 `task_reminder` 续跑一轮，`main_work` 不变，见 [11](wiki/11-tasks.md)。以下为原有基础：2026-11-02 简化：用户消息入库、一批工具回执齐全后唤醒 Runner；Runner 只看消息尾部决定执行缺回执的工具、回复或停下，要不要运行由视图 `main_work`（最新一条消息）判断；失败收尾记 `users.main_failed_through_sequence`，有更新的消息才再试；assistant 消息与 step 同事务落库，删除 `steps.model_reply`。理由是消息表成为唯一事实，不再另外维护已读位置与未完成步骤。2026-11-03 改为 Runner 只认 PostgreSQL 通知：删每秒与启动扫描和各处进程内直接唤醒，接受漏通知后靠下一次通知顺带恢复、无时限保证，理由是调度只留一条事件路径 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
@@ -141,7 +141,7 @@
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
 | Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；2026-11-02 起提醒改为组装时插入、不落库：从最近一条用户消息起，每 4 轮没有可见正文的工具调用插一条不可见 user 提醒，写出正文或用户新消息即重新计数，不设上限（原为连续 5 轮、同一次沉默最多 3 次）。不写正文即沉默 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值。2026-10-30 用户指定维护者线上使用 ikun Gemini 4 Argon，生产已保存 `ikun:gemini-4-argon` | [05](wiki/05-main-runtime.md#模型)、[08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
-| ikun Gemini | 2026-10-30 确认接入 Aether 的 Gemini 原生渠道，供 Main 与压缩使用；保留 OpenRouter。凭证由看板管理；用户指定默认地址 `https://api.ikuncode.cc`，页面只需填写 Key | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
+| ikun Gemini 与 Claude | 接入 ikun Gemini 原生协议（`ikun:gemini-*`）与 ikun Claude 原生 Messages 协议（`ikun:claude-*`），保留 OpenRouter；均供 Main 与独立上下文压缩选择，凭证由看板加密管理 | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
 | 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理），并要求耗时任务主动汇报进度；2026-11-02 起不以 system 角色发送，改为每次请求以代码常量现注入第一条不可见 user 指令、不落库；2026-11-03 起表达要求冷静客观平实，少用浮夸语言与比喻，不阿谀奉承；同日改为多讲：展开用户可能还不清楚或不了解的背景、术语和原因，不再要求短问题给短答案 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 请求组装与缓存 | 2026-11-02 先确认合并组装（已结束对话并成一条 user 消息），同日改为原生组装：指令注入后接上一个 compact 以来的全部消息原文（user/assistant 原样、tool 靠 tool_call_id 对应），前缀只追加、不改写。同日运行循环简化后：工具回执紧跟其 assistant 消息、按调用顺序排列；每条用户本人消息后插一条不可见 user 当前时间，取该消息的 `created_at`；时间与进度提醒都在组装时由消息算出、不落库，同一段历史每次组装逐字相同。发出前检查工具回执齐全（缺失在内存补中断回执）且最后一条为 user 或 tool；2026-11-08 删除该检查，由组装前补跑工具、只在还有活时组装来保证。理由是原生只追加同样利于前缀缓存，且省去合并转换层；压缩是唯一开启新世代的动作 | [05](wiki/05-main-runtime.md#请求组装规则2026-11-02) |
@@ -153,9 +153,10 @@
 | 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra，供 Main 使用 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | X（Twitter）搜索 | 2026-10-30 接入独立 `search_twitter(query, limit?, sort?)`，Main 使用看板 EveryInfra Key；默认 Top，不保证严格时间排序或全量结果；失败不自动重试，零结果正常返回，缺失计数不补零 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | 读取图片 | 2026-11-09 增加 `read_image(url)`：下载直接图片地址，校验后写入该用户的 OSS，回执只保存 `oss://`，发送前再转 base64。拒绝本机、内网和链路本地地址。理由是模型需要看见图片本身，同时不把 base64 写进消息表 | [05](wiki/05-main-runtime.md#read_image-已实现) |
-| 当前执行能力 | 2026-10-29 起先不考虑沙盒，已有实现删除；执行工具只保留搜索与网页读取 | [07](wiki/07-sandbox.md) |
-| 引用与多模态输入 | 2026-11-02 对齐 Aether Start，Tiptap 内混排文字、引用和图片，Enter 换行、Ctrl+Enter 发送；选区引用可回看原文，消息保留编辑顺序；输入框统一附件高度与间距，节点外壳留白避免光标重合 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
-| 图片存储 | 私有阿里云 OSS Bucket 保存图片，消息保存对象引用，后端调用模型前读取并转 base64；凭证由看板加密管理 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
+| 个人电脑沙箱与只读桌面 | 接入阿里云 FC Agent Sandbox + AgenticFS 持久化 `/mnt/workspace`（`00049`、`00050`）；电脑工具按序串行执行，支持 noVNC + 后端只读 RFB 过滤的被动桌面观看（不唤醒或续期实例，入口按工作区绑定显示） | [07](wiki/07-sandbox.md) |
+| 聊天与工作区双向文件流转 | 2026-11-11 确认：单文件与单条附件合计上限 50 MiB，全程流式读写私有 OSS；用户发送的文件与图片在使用电脑时自动同步进 `/mnt/workspace/uploads/`（零导入工具调用）；阿芒通过 `sandbox_send_file` 将最终产物作为独立气泡（`<= 4 MiB` 图片预览或带原文件名下载卡片）发回聊天 | [07](wiki/07-sandbox.md#聊天--mntworkspace-双向文件流转2026-11-11) |
+| 引用与多模态输入 | 2026-11-02 对齐 Aether Start，Tiptap 内混排文字、引用、图片与工作区文件，Enter 换行、Ctrl+Enter 发送；选区引用可回看原文，消息保留编辑顺序 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
+| 图片存储与缓存 | 私有阿里云 OSS Bucket 保存聊天图片与工作区文件，后端为图片维护持久化磁盘缓存（7 天绝对 TTL + LRU 容量淘汰），调用模型前优先从本机缓存转 base64、发消息校验优先命中缓存并并行检查 | [04](wiki/04-messaging.md#引用图片与多模态输入框) |
 
 ## 待确认问题
 

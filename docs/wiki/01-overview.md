@@ -73,7 +73,7 @@ flowchart LR
 
 PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/build-pwa.mjs` 从现有图标生成普通图标、Apple 图标与带安全边距的 maskable 图标，随后按构建内容生成 Service Worker。缓存只包含本次构建的公开静态资源，不缓存认证响应、消息 API 或 WebSocket。入口缓存 `/`，避免 Go 对 `/index.html` 的重定向影响离线导航。
 
-PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-02 迁移验收发现，外壳可以离线加载，但已有聊天控制器在离线冷启动时一直等待后端 `ready`，仍停留在 loading，草稿编辑尚不能进入；这段初始化逻辑在迁移前已存在。聊天历史仍从服务器读取，重新打开后的离线界面不提供历史消息副本。发送消息、Main 推理和历史同步需要网络。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知、后台持续连接尚未实现。
+PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱与「退出登录」的账号浮层。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
 
 2026-11-02，用户要求前端改为 TanStack Start。Start 基于现有 React、React DOM 与 TypeScript，接管文件路由、HTML 外壳和构建时预渲染，底层构建工具保留 Rsbuild。当前采用 [Start 官方 SPA 模式](https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode)：构建时生成公开的 HTML 外壳，登录与聊天在浏览器启动后通过既有 Go WebSocket 恢复。聊天数据属于登录用户，当前无需为了搜索引擎渲染消息，因此继续静态部署，避免新增常驻 JavaScript 服务或第二套认证与消息 API。
 
@@ -101,11 +101,12 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 | 服务 | 用途 | 状态 |
 | --- | --- | --- |
-| OpenRouter 对话接口 | Main 使用 `deepseek/deepseek-v4.1-flash-1017`（`MAIN_MODEL` 可改） | `已实现` |
+| OpenRouter、ikun Gemini、ikun Claude | Main 对话与独立上下文压缩模型 | `已实现` |
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
-| `search`、`fetch_url` | Serper、Parallel、EveryInfra，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
+| `search`、`search_twitter`、`fetch_url`、`read_image` | Serper、Parallel、EveryInfra 与直接图片读取，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
+| 阿里云私有 OSS（含本机磁盘缓存） | 聊天图片与 50 MiB 工作区文件的流式存取与临时签名 | `已实现` |
+| 阿里云 FC Agent Sandbox + AgenticFS | 持久化 `/mnt/workspace` 个人 Linux 电脑、只读实时桌面与双向文件流转，见 [07](07-sandbox.md) | `已实现` |
 | 其余 HTTP API、MCP | 后续外部执行工具 | `待确认` |
-| Linux 沙盒工作环境 | 2026-10-29 起先不考虑，已有实现已删除，见 [07](07-sandbox.md) | 不在当前范围 |
 
 ## 语义澄清
 
@@ -236,7 +237,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 本地开发
 
-根目录 `make dev` 构建 Web/PWA、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 检查 Go 和 TypeScript；`make check-integration` 在独立 schema 运行真实 PostgreSQL 集成测试。完整步骤见根目录 README。
+根目录 `make dev` 构建 Web/PWA、启动数据库、迁移并运行后端。Go 按 `FRONTEND_DIR` 提供页面，与 API 和 WebSocket 同源，避免独立开发端口的跨源问题。`make check` 运行 Go、前端、看板与 Cloudflare Worker 的编译及静态检查。完整步骤见根目录 README。
 
 用户在 2026-10-22 明确技术实现由开发者决定，仅产品决策询问用户。该要求替代此前逐项询问技术微决策的工作方式，已确认产品选择继续记录在 Wiki 与决策总览。
 
@@ -248,7 +249,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 现在的规则：不写测试文件；不运行测试、端到端验证或临时验证脚本；不为验证去起临时数据库或后端进程；新迁移不在本地执行、回滚或再执行来验证。编译和静态检查不算测试，用户确认“可以运行”：`go build ./...`、`go vet ./...`、`sqlc generate` 后的生成代码检查与前端类型检查照常做。
 
-本页“本地开发”开头提到的 `make check-integration`，以及根目录 Makefile 中会调用真实服务的 `check-live`、`check-research`，都属于测试类命令，代理不再运行。各页记录的以往本地验证保留为历史，不作为今后的做法先例。
+历史中曾存在的 `make check-integration`、`check-live`、`check-research` 等测试类命令已于 2026-11-11 从根目录 `Makefile` 中移除。各页记录的以往本地验证保留为历史，不作为今后的做法先例。
 
 ## 代码注释
 

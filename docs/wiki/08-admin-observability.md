@@ -89,12 +89,11 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 | `POST /admin/login` | 校验 `{password}` 并返回管理令牌 |
 | `POST /admin/logout` | 撤销当前管理会话 |
 | `GET /admin/me` | 当前共享管理员名称 |
-| `GET /admin/snapshot` | 汇总、趋势、模型与工具分布、用户和选中用户的 Agent |
-| `GET /admin/calls` | 单次模型请求日志 |
-| `GET /admin/calls/{id}` | 按调用 ID 读取请求、响应 JSON，独立管理会话鉴权 |
-| `GET /admin/timeline` | `user_id` 的一页运行时间线；`before` 游标翻到更早，首页附带不可见指令 |
-| `GET /admin/timeline/messages/{id}` | 单条消息的全文与截图，供时间线展开截断内容 |
-| `GET /admin/quotas` | 六个服务的剩余额度，后端用已保存的 Key 并行向供应商实时查询，见下文额度面板 |
+| `GET /admin/snapshot` | 时间窗口内出现过的模型候选、用户下拉列表及当前选中用户的 Main 状态（2026-11-11 删除页面合并后不再读取的趋势/工具/旧步骤聚合） |
+| `GET /admin/calls/{id}` | 按调用 ID 读取请求、响应 JSON，独立管理会话鉴权（原未使用的列表接口 `GET /admin/calls` 已于 2026-11-11 移除） |
+| `GET /admin/timeline` | `user_id` 的一页运行时间线（关联助手回复与压缩摘要的成功请求及失败请求）；`before` 游标翻到更早，首页附带不可见指令 |
+| `GET /admin/timeline/messages/{id}` | 单条消息的全文与私有 OSS 签名截图，供时间线展开截断内容（`admin/server.mjs` CSP `img-src` 放行 `https://*.aliyuncs.com`） |
+| `GET /admin/quotas` | 各服务的剩余额度，后端用已保存的 Key 并行向供应商实时查询，见下文额度面板 |
 
 时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
 

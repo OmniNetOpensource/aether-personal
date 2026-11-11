@@ -38,7 +38,7 @@
 - 数据库：PostgreSQL 18 + pgvector，主键 `uuidv7()`。
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
-- 模型：OpenRouter 与 ikun Gemini 原生协议；邮件：Resend（直接用 `net/http` 调用）。
+- 模型：OpenRouter、ikun Gemini 原生协议与 ikun Claude 原生 Messages 协议（支持独立上下文压缩模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（含本机磁盘图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
 - 前端：React + React DOM + TypeScript，纯 Web 应用，移动端使用 PWA；工程位于 `frontend/`，构建输出 `frontend/build/web`。
 
 ## 常用命令（在 `backend/` 下）

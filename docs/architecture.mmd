@@ -1,58 +1,67 @@
 flowchart TD
     subgraph L1["第一层：TanStack Start Web 应用 · 移动端 PWA"]
-        CLIENT["Main 聊天界面：WebSocket · 断线恢复"]
+        CLIENT["Main 聊天界面：WebSocket · 历史搜索 · 离线草稿 · 账号退出"]
+        DESKTOP_UI["只读实时桌面（noVNC / RFB）<br/>按工作区绑定显示入口"]
     end
 
-    subgraph L2["第二层：Go 后端"]
-        API["API：认证 · 收发消息 · WebSocket · 只读管理"]
-        MESSAGES["消息服务：保存消息 · 聊天变更推送"]
+    subgraph L2["第二层：Go 后端（单进程）"]
+        API["API：聊天 WebSocket · 图片/文件上传 · 只读桌面流 · 管理接口"]
+        MESSAGES["消息服务：保存消息 · 聊天变更推送 · 页面历史搜索"]
+        IMAGES["存储与缓存：私有 OSS 读写签名 · 本机图片磁盘缓存"]
         MANAGER["Manager：单进程调度<br/>提交后直接唤醒 · 启动时恢复待办 · 每用户一个 Runner"]
-        DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 定时任务 · 步骤与模型请求日志")]
+        DB[("PostgreSQL：消息历史 · 需求队列 · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与模型调用日志")]
 
         subgraph MAINBOX["每用户固定一个 Main Agent"]
-            MAIN["Main Runtime：messageList 上下文 · 按用户串行处理"]
-            TASKS["需求队列：登记输入 · 更新任务<br/>每用户一项执行中 · 模型选择下一项"]
+            MAIN["Main Runtime：三阶段 Agent Loop · messageList 上下文 · 按用户串行处理"]
+            TASKS["需求队列：登记输入 · 自主选择与让位<br/>每用户一项执行中"]
             SEARCH["search_message"]
             READ["read_message"]
             MEMORY["memory 工具渐进加载<br/>需要时先读 memory.md 索引 · 再读相关主题"]
             SCHEDULE["schedule 工具<br/>一次性 / 周期 cron 定时任务"]
 
-            MAIN <-->|"登记补充 / 继续当前任务"| TASKS
+            MAIN <-->|"登记补充 / 切换与更新状态"| TASKS
             MAIN <-->|"搜索 / 消息 ID"| SEARCH
             MAIN <-->|"读取 / 完整内容"| READ
             MAIN <-->|"根索引与主题按需读写"| MEMORY
             MAIN <-->|"创建 / 列出 / 修改 / 删除安排"| SCHEDULE
-            MAIN -->|"正文回复用户（生成完一次性推送）"| MESSAGES
+            MAIN -->|"正文或独立文件气泡回复用户"| MESSAGES
         end
 
-        TOOLS["Main 执行工具<br/>已实现：search · fetch_url · read_image<br/>待实现：其他 HTTP/MCP"]
+        TOOLS["Main 执行工具<br/>联网：search · search_twitter · fetch_url · read_image<br/>电脑：sandbox_* · browser_* · sandbox_send_file"]
         MAIN <-->|"工具调用 / 结果"| TOOLS
-        API <-->|"用户输入 / 对外消息与事件"| MESSAGES
+        API <-->|"用户输入 / 历史搜索 / 对外消息与事件"| MESSAGES
+        API <-->|"POST /images · POST /files"| IMAGES
         MESSAGES <-->|"保存与读取消息"| DB
         MESSAGES -->|"输入提交后唤醒"| MANAGER
         MANAGER -->|"启动时读取 main_work"| DB
         MANAGER -->|"按容量启动该用户的 Runner"| MAIN
         MAIN <-->|"载入 messageList / 保存本轮轨迹"| DB
+        MAIN <-->|"发送前将 oss:// 解析为 base64"| IMAGES
 
-        TASKS <-->|"任务、相关用户输入与登记位置 / 回执同事务"| DB
+        TASKS <-->|"任务与状态 / 回执同事务"| DB
         SEARCH <-->|"按用户搜索历史"| DB
         READ <-->|"按 ID 读取"| DB
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
         SCHEDULE <-->|"安排与回执同事务"| DB
 
-        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 闲置到期的对话"]
-        SCHEDULER <-->|"插入不可见 schedule_event / reflection 消息<br/>同事务推进或删除安排"| DB
+        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 三阶段闲置后台工作"]
+        SCHEDULER <-->|"插入不可见 schedule_event / memory_update / recent_followup / unknown_unknowns"| DB
         SCHEDULER -->|"插入后唤醒"| MANAGER
-
     end
 
     subgraph L3["第三层：外部服务"]
-        MODEL["模型供应商 API"]
-        EXTERNAL["外部服务：搜索 · HTTP API · MCP"]
+        MODEL["模型供应商：OpenRouter · ikun Gemini · ikun Claude"]
+        EXTERNAL["联网服务：Serper · Parallel · EveryInfra · Resend"]
+        OSS["阿里云私有 OSS：聊天图片与工作区文件"]
+        SANDBOX["阿里云 FC Sandbox + AgenticFS<br/>持久 /mnt/workspace · AIO MCP · VNC"]
     end
 
-    ADMIN["管理看板：admin/ · 模型调用观测与模型配置<br/>同一仓库 / 独立部署，开发中"]
-    ADMIN <-->|"独立密码登录 / 管理会话 / 观测与模型配置"| API
-    CLIENT <-->|"WebSocket 登录 / 历史 / 收发消息与推送"| API
-    MAIN <-->|"模型推理 / 消息与执行工具请求"| MODEL
-    TOOLS <-->|"外部服务调用 / 结果"| EXTERNAL
+    ADMIN["管理看板：admin/ · 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署"]
+    ADMIN <-->|"独立密码登录 / 时间线、调用详情与配置"| API
+    CLIENT <-->|"WebSocket 登录 / 历史 / 搜索 / 收发与推送"| API
+    DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API
+    API <-->|"被动观察桌面流（不唤醒实例）"| SANDBOX
+    IMAGES <-->|"流式读写与临时签名"| OSS
+    MAIN <-->|"模型推理与独立上下文压缩"| MODEL
+    TOOLS <-->|"联网搜索与网页读取"| EXTERNAL
+    TOOLS <-->|"自动同步 uploads · 有序执行命令/浏览器 · 发回产物"| SANDBOX
