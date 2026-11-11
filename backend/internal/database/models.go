@@ -121,7 +121,6 @@ type SandboxWorkspace struct {
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 	TrafficTokenCiphertext []byte
-	SyncedThroughSequence  int64
 }
 
 type Schedule struct {

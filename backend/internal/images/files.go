@@ -182,7 +182,7 @@ func (s *Store) InspectFile(ctx context.Context, reference string) (int64, strin
 	return result.ContentLength, mimeType, nil
 }
 
-// OpenObject 打开当前 Bucket 下任意聊天图片或文件的读取流，供沙箱在启动时把附件同步进 /mnt/workspace/uploads。
+// OpenObject 打开当前 Bucket 下任意聊天图片或文件的读取流，供 sandbox_import_file 按需流式写入 /mnt/workspace。
 func (s *Store) OpenObject(ctx context.Context, reference string) (io.ReadCloser, error) {
 	client, settings, err := s.client(ctx)
 	if err != nil {

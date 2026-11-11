@@ -465,7 +465,7 @@ export class ChatController {
     return messageImageSchema.parse(await response.json());
   }
 
-  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；阿芒使用电脑时自动出现在 /mnt/workspace/uploads。
+  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；消息只携带服务端生成的 OSS 引用，阿芒需要时经 sandbox_import_file 导入电脑。
   async uploadFile(file: File): Promise<MessageFile> {
     if (!this.token) throw new Error('请先登录');
     const response = await fetch(this.baseURL + '/files?name=' + encodeURIComponent(file.name), {

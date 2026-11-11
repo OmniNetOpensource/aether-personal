@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/sandbox"
 	"github.com/google/uuid"
 )
 
@@ -24,11 +23,8 @@ type messageQuote struct {
 // messageImage 共用 OSS 存储引用与展示结构，签名 URL 只在发往前端时填入。
 type messageImage = images.Image
 
-// messageFile 保存工作区文件的持久引用与自动同步的目标路径，签名下载 URL 只在发往前端时填入。
-type messageFile struct {
-	images.File
-	WorkspacePath string `json:"workspace_path,omitempty"`
-}
+// messageFile 共用工作区文件的 OSS 持久引用与展示结构，签名下载 URL 只在发往前端时填入。
+type messageFile = images.File
 
 // messagePart 保留用户与助手消息的多模态顺序，外部输入在 validMessageInput 校验后才落库。
 type messagePart struct {
@@ -117,11 +113,10 @@ func normalizeMessageInput(frame clientFrame) (clientFrame, bool) {
 	return frame, true
 }
 
-// userMessageContent 将引用与工作区附件路径写入模型可读文本块、视觉图片保留为 image_url 段；界面元信息单独保存在 parts 中。
+// userMessageContent 将引用与工作区附件的持久 oss:// 引用写入模型可读文本块、视觉图片同时保留为 image_url 段；界面元信息单独保存在 parts 中。
 func userMessageContent(frame clientFrame) json.RawMessage {
 	blocks := []any{}
 	persisted := make([]messagePart, len(frame.Parts))
-	attachmentIndex := 0
 	for index, part := range frame.Parts {
 		persisted[index] = part
 		switch part.Type {
@@ -134,22 +129,18 @@ func userMessageContent(frame clientFrame) json.RawMessage {
 			image.URL = ""
 			image.Name = images.CleanFileName(image.Name)
 			persisted[index].Image = &image
-			workspacePath := sandbox.UploadPath(attachmentIndex, image.Name)
-			attachmentIndex++
 			blocks = append(blocks,
 				map[string]any{"type": "image_url", "image_url": map[string]string{"url": image.StorageURL}},
-				map[string]string{"type": "text", "text": fmt.Sprintf("[Attached image: %s (%d bytes, %s) — available at %s when using the computer]", image.Name, image.Size, image.MIMEType, workspacePath)},
+				map[string]string{"type": "text", "text": fmt.Sprintf("[Attached image: %s (%d bytes, %s, source: %s)]", image.Name, image.Size, image.MIMEType, image.StorageURL)},
 			)
 		case "file":
 			file := *part.File
 			file.URL = ""
 			file.Name = images.CleanFileName(file.Name)
-			file.WorkspacePath = sandbox.UploadPath(attachmentIndex, file.Name)
-			attachmentIndex++
 			persisted[index].File = &file
 			blocks = append(blocks, map[string]string{
 				"type": "text",
-				"text": fmt.Sprintf("[Attached file: %s (%d bytes, %s) — automatically available at %s when using the computer]", file.Name, file.Size, file.MIMEType, file.WorkspacePath),
+				"text": fmt.Sprintf("[Attached file: %s (%d bytes, %s, source: %s) — call sandbox_import_file to copy it into /mnt/workspace before reading it on the computer]", file.Name, file.Size, file.MIMEType, file.StorageURL),
 			})
 		}
 	}

@@ -36,7 +36,6 @@ export const messageFileSchema = z.object({
     .regex(/^oss:\/\/[a-z0-9-]+\/aether-chat\/[a-f0-9-]+\/files\/[a-f0-9-]+$/),
   size: z.number().int().positive().max(maxFileBytes),
   mime_type: z.string().min(1),
-  workspace_path: z.string().optional(),
 });
 
 export type MessageQuote = z.infer<typeof messageQuoteSchema>;

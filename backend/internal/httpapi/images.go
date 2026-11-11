@@ -59,7 +59,7 @@ func (s *server) uploadImage(w http.ResponseWriter, r *http.Request) {
 	writeAdminJSON(w, image)
 }
 
-// uploadFile 接收已绑定工作区用户的任意文件（上限 50 MiB），流式写入私有 OSS 供后续同步到 /mnt/workspace/uploads。
+// uploadFile 接收已绑定工作区用户的任意文件（上限 50 MiB），流式写入私有 OSS 供后续按需导入 /mnt/workspace。
 func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()

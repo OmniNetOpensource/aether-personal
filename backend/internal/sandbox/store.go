@@ -116,9 +116,6 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 	if result.ExitCode != 0 {
 		return nil, "", fmt.Errorf("workspace services exited with code %d: %s", result.ExitCode, result.Stderr)
 	}
-	if err := s.syncUploadedFiles(ctx, userID, instance, workspace.SyncedThroughSequence); err != nil {
-		return nil, "", fmt.Errorf("sync workspace uploads: %w", err)
-	}
 	return instance, token, nil
 }
 

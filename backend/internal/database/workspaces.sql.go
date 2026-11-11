@@ -11,27 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
-const advanceSandboxWorkspaceSync = `-- name: AdvanceSandboxWorkspaceSync :exec
-UPDATE sandbox_workspaces
-SET synced_through_sequence = greatest(synced_through_sequence, $2), updated_at = now()
-WHERE user_id = $1
-`
-
-type AdvanceSandboxWorkspaceSyncParams struct {
-	UserID                uuid.UUID
-	SyncedThroughSequence int64
-}
-
-func (q *Queries) AdvanceSandboxWorkspaceSync(ctx context.Context, arg AdvanceSandboxWorkspaceSyncParams) error {
-	_, err := q.db.Exec(ctx, advanceSandboxWorkspaceSync, arg.UserID, arg.SyncedThroughSequence)
-	return err
-}
-
 const bindSandboxWorkspace = `-- name: BindSandboxWorkspace :one
 INSERT INTO sandbox_workspaces (user_id, server_addr, role_arn)
 VALUES ($1, $2, $3)
 ON CONFLICT (user_id) DO NOTHING
-RETURNING user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext, synced_through_sequence
+RETURNING user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext
 `
 
 type BindSandboxWorkspaceParams struct {
@@ -52,17 +36,16 @@ func (q *Queries) BindSandboxWorkspace(ctx context.Context, arg BindSandboxWorks
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TrafficTokenCiphertext,
-		&i.SyncedThroughSequence,
 	)
 	return i, err
 }
 
 const getSandboxWorkspace = `-- name: GetSandboxWorkspace :one
 
-SELECT user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext, synced_through_sequence FROM sandbox_workspaces WHERE user_id = $1
+SELECT user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext FROM sandbox_workspaces WHERE user_id = $1
 `
 
-// 本文件保存用户与长期工作区的绑定、实例位置及附件同步进度；sqlc 生成类型，云端状态由 FC 判断。
+// 本文件保存用户与长期工作区的绑定及当前实例位置；sqlc 生成类型，云端状态由 FC 判断。
 func (q *Queries) GetSandboxWorkspace(ctx context.Context, userID uuid.UUID) (SandboxWorkspace, error) {
 	row := q.db.QueryRow(ctx, getSandboxWorkspace, userID)
 	var i SandboxWorkspace
@@ -75,48 +58,8 @@ func (q *Queries) GetSandboxWorkspace(ctx context.Context, userID uuid.UUID) (Sa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TrafficTokenCiphertext,
-		&i.SyncedThroughSequence,
 	)
 	return i, err
-}
-
-const listUnsyncedWorkspaceMessages = `-- name: ListUnsyncedWorkspaceMessages :many
-SELECT id, sequence, content
-FROM messages
-WHERE user_id = $1 AND role = 'user' AND sender = 'user' AND sequence > $2
- AND jsonb_typeof(content -> 'parts') = 'array'
-ORDER BY sequence
-`
-
-type ListUnsyncedWorkspaceMessagesParams struct {
-	UserID   uuid.UUID
-	Sequence int64
-}
-
-type ListUnsyncedWorkspaceMessagesRow struct {
-	ID       uuid.UUID
-	Sequence int64
-	Content  []byte
-}
-
-func (q *Queries) ListUnsyncedWorkspaceMessages(ctx context.Context, arg ListUnsyncedWorkspaceMessagesParams) ([]ListUnsyncedWorkspaceMessagesRow, error) {
-	rows, err := q.db.Query(ctx, listUnsyncedWorkspaceMessages, arg.UserID, arg.Sequence)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUnsyncedWorkspaceMessagesRow
-	for rows.Next() {
-		var i ListUnsyncedWorkspaceMessagesRow
-		if err := rows.Scan(&i.ID, &i.Sequence, &i.Content); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const saveSandboxInstance = `-- name: SaveSandboxInstance :exec

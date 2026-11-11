@@ -1,4 +1,4 @@
-// 本文件负责聊天与沙箱 /mnt/workspace 的双向文件同步：把用户附件自动流式放入 /mnt/workspace/uploads，并把工作区产物发回聊天。
+// 本文件负责聊天与沙箱 /mnt/workspace 的双向文件流转：按需把用户的聊天附件流式导入工作区，并把工作区产物发回聊天。
 
 package sandbox
 
@@ -15,107 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
 	e2b "github.com/aliyun-fc/e2b-go-sdk"
 	"github.com/google/uuid"
 )
 
 const workspaceRoot = "/mnt/workspace"
-const workspaceUploadsDir = "/mnt/workspace/uploads"
-
-// UploadPath 生成用户第 index 个附件在工作区中的确定性目标路径，供消息上下文与自动同步共用。
-func UploadPath(index int, rawName string) string {
-	clean := images.CleanFileName(rawName)
-	if index == 0 {
-		return workspaceUploadsDir + "/" + clean
-	}
-	ext := filepath.Ext(clean)
-	stem := strings.TrimSuffix(clean, ext)
-	return fmt.Sprintf("%s/%s_%d%s", workspaceUploadsDir, stem, index+1, ext)
-}
-
-// syncUploadedFiles 在每次使用沙箱前，把尚未同步过的用户图片与文件流式写入 /mnt/workspace/uploads 并推进序号。
-func (s *Store) syncUploadedFiles(ctx context.Context, userID uuid.UUID, instance *e2b.Sandbox, syncedThrough int64) error {
-	rows, err := s.queries.ListUnsyncedWorkspaceMessages(ctx, database.ListUnsyncedWorkspaceMessagesParams{
-		UserID:   userID,
-		Sequence: syncedThrough,
-	})
-	if err != nil || len(rows) == 0 {
-		return err
-	}
-	madeUploadsDir := false
-	for _, row := range rows {
-		var payload struct {
-			Parts []struct {
-				Type  string `json:"type"`
-				Image *struct {
-					Name       string `json:"name"`
-					StorageURL string `json:"storage_url"`
-				} `json:"image"`
-				File *struct {
-					Name          string `json:"name"`
-					StorageURL    string `json:"storage_url"`
-					WorkspacePath string `json:"workspace_path"`
-				} `json:"file"`
-			} `json:"parts"`
-		}
-		if err := json.Unmarshal(row.Content, &payload); err != nil {
-			return err
-		}
-		attachmentIndex := 0
-		for _, part := range payload.Parts {
-			var storageURL, targetPath string
-			switch {
-			case part.Type == "file" && part.File != nil && part.File.StorageURL != "":
-				storageURL = part.File.StorageURL
-				targetPath = part.File.WorkspacePath
-				if !strings.HasPrefix(targetPath, workspaceUploadsDir+"/") {
-					targetPath = UploadPath(attachmentIndex, part.File.Name)
-				}
-				attachmentIndex++
-			case part.Type == "image" && part.Image != nil && part.Image.StorageURL != "":
-				storageURL = part.Image.StorageURL
-				targetPath = UploadPath(attachmentIndex, part.Image.Name)
-				attachmentIndex++
-			default:
-				continue
-			}
-			if !madeUploadsDir {
-				if _, err := instance.Files.MakeDir(ctx, workspaceUploadsDir, e2b.WithFileUser("user"), e2b.WithFileRequestTimeout(30*time.Second)); err != nil {
-					return err
-				}
-				madeUploadsDir = true
-			}
-			if err := s.copyObjectToSandbox(ctx, instance, storageURL, targetPath); err != nil {
-				return err
-			}
-		}
-		if err := s.queries.AdvanceSandboxWorkspaceSync(ctx, database.AdvanceSandboxWorkspaceSyncParams{
-			UserID:                userID,
-			SyncedThroughSequence: row.Sequence,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copyObjectToSandbox 将 OSS 对象读取流直接写入沙箱目标路径，不在宿主机落临时文件或整块读入内存。
-func (s *Store) copyObjectToSandbox(ctx context.Context, instance *e2b.Sandbox, storageURL, targetPath string) error {
-	stream, err := s.images.OpenObject(ctx, storageURL)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-	_, err = instance.Files.Write(ctx, targetPath, stream,
-		e2b.WithFileUser("user"),
-		e2b.WithOctetStreamUpload(true),
-		e2b.WithFileRequestTimeout(4*time.Minute),
-		e2b.WithFileStreamIdleTimeout(60*time.Second),
-	)
-	return err
-}
 
 // cleanWorkspacePath 校验模型给出的工作区绝对路径，拒绝跳出 /mnt/workspace 的路径穿越。
 func cleanWorkspacePath(raw string) (string, error) {
@@ -128,6 +33,52 @@ func cleanWorkspacePath(raw string) (string, error) {
 		return "", fmt.Errorf("path must point to a file inside /mnt/workspace")
 	}
 	return cleaned, nil
+}
+
+// ImportFile 将当前用户的聊天图片或文件从私有 OSS 流式写入 /mnt/workspace 下的指定路径，路径与归属校验先于实例唤醒。
+func (s *Store) ImportFile(ctx context.Context, userID uuid.UUID, rawSource, rawPath string) (summary string, err error) {
+	source := strings.TrimSpace(rawSource)
+	if !images.OwnedFileReference(source, userID) && !images.OwnedReference(source, userID) {
+		return "Error: source must be an oss:// attachment reference belonging to this user", nil
+	}
+	targetPath, err := cleanWorkspacePath(rawPath)
+	if err != nil {
+		return "Error: " + err.Error(), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	instance, _, err := s.ensure(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer stop()
+		if timeoutErr := instance.SetTimeout(cleanup, int(s.config.Timeout.Seconds())); timeoutErr != nil {
+			err = errors.Join(err, fmt.Errorf("update sandbox idle timeout after importing file: %w", timeoutErr))
+		}
+	}()
+	// 若目标位于子目录，先按 mkdir -p 语义确保父目录存在，模型无需提前单独建目录。
+	if parentDir := path.Dir(targetPath); parentDir != workspaceRoot {
+		if _, err := instance.Files.MakeDir(ctx, parentDir, e2b.WithFileUser("user"), e2b.WithFileRequestTimeout(30*time.Second)); err != nil {
+			return "", fmt.Errorf("create workspace directory %s: %w", parentDir, err)
+		}
+	}
+	// 等沙箱就绪后再打开 OSS 读取流，直接将对象字节流式推入工作区，不在宿主机落临时文件或整块读入内存。
+	stream, err := s.images.OpenObject(ctx, source)
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	if _, err := instance.Files.Write(ctx, targetPath, stream,
+		e2b.WithFileUser("user"),
+		e2b.WithOctetStreamUpload(true),
+		e2b.WithFileRequestTimeout(4*time.Minute),
+		e2b.WithFileStreamIdleTimeout(60*time.Second),
+	); err != nil {
+		return "", fmt.Errorf("write %s to %s: %w", source, targetPath, err)
+	}
+	return fmt.Sprintf("Imported %s to %s.", source, targetPath), nil
 }
 
 // SendFile 从 /mnt/workspace 读取指定文件并存入私有 OSS：4 MiB 以内支持格式图片作为预览图发送，其余作为可下载文件发送。
