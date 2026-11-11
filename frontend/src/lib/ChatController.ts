@@ -82,6 +82,7 @@ export class ChatController {
   email = '';
   iconURL = '/app-icon.png';
   devLoginAvailable = false;
+  desktopAvailable = false;
   turnstileSiteKey = '';
   error: string | null = null;
   token: string | null = null;
@@ -201,6 +202,7 @@ export class ChatController {
         if (event.authenticated) {
           this.lastChangeCursor = event.change_cursor;
           this.connected = true;
+          this.desktopAvailable = event.desktop_available === true;
           this.email = event.email ?? this.email;
           if (event.history) {
             this.mergeHistory(event.history);
@@ -208,6 +210,7 @@ export class ChatController {
           this.initializing = false;
         } else {
           this.connected = false;
+          this.desktopAvailable = false;
           if (this.token) {
             this.token = null;
             clearSession();
@@ -232,6 +235,7 @@ export class ChatController {
           .then(() => {
             this.token = event.token;
             this.email = event.email;
+            this.desktopAvailable = event.desktop_available === true;
             this.connected = true;
             this.mergeHistory(event.history);
             this.error = null;
@@ -287,6 +291,7 @@ export class ChatController {
 
   private clearLocalSession() {
     this.token = null;
+    this.desktopAvailable = false;
     this.mainThinking = false;
     this.mainFailed = false;
     this.historyLoaded = false;

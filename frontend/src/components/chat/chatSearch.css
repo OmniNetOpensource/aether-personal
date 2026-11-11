@@ -1,9 +1,5 @@
 /* 本文件定义历史搜索浮层与独立上下文窗口，桌面和手机共用现有配色并适配系统深色外观。 */
 .chat-search-launch {
-  position: absolute;
-  top: max(16px, env(safe-area-inset-top));
-  right: max(20px, env(safe-area-inset-right));
-  z-index: 3;
   display: grid;
   place-items: center;
   width: 44px;

@@ -230,6 +230,15 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	if !devLogin {
 		ready.TurnstileSiteKey = s.appConfig.TurnstileSiteKey
 	}
+	if authenticated {
+		desktopAvailable, err := s.sandbox.Available(ctx, userID)
+		if err != nil {
+			slog.Error("check desktop availability failed", "error", err)
+			connection.Close(websocket.StatusInternalError, "internal server error")
+			return
+		}
+		ready.DesktopAvailable = desktopAvailable
+	}
 	if authenticated && hello.LastPosition == nil && hello.LastChangeCursor == nil {
 		history, err := s.historyPage(ctx, userID, uuid.Max)
 		if err != nil {
@@ -472,8 +481,13 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 		slog.Error("load initial history failed", "error", err)
 		return false
 	}
+	desktopAvailable, err := s.sandbox.Available(ctx, session.UserID)
+	if err != nil {
+		slog.Error("check desktop availability failed", "error", err)
+		return false
+	}
 	return relay.send(ctx, authenticatedEvent{
-		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, History: history, ChangeCursor: *changeCursor,
+		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, DesktopAvailable: desktopAvailable, History: history, ChangeCursor: *changeCursor,
 	}) == nil
 }
 

@@ -24,6 +24,21 @@ type Desktop struct {
 	trafficToken string
 }
 
+// Available 判断当前部署是否已配置沙箱基础设施且该用户已绑定工作区，供聊天首屏决定是否展示“查看电脑”入口。
+func (s *Store) Available(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if s.config.Validate() != nil {
+		return false, nil
+	}
+	_, err := s.queries.GetSandboxWorkspace(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Desktop 查询已有绑定和控制面；缺少流能力的旧实例等待维护者更新，不自动替换用户电脑。
 func (s *Store) Desktop(ctx context.Context, userID uuid.UUID) (Desktop, error) {
 	workspace, err := s.queries.GetSandboxWorkspace(ctx, userID)

@@ -692,6 +692,71 @@ button.link {
   line-height: 20px;
 }
 
+/* 右上角悬浮按钮组统一排列，桌面按钮隐藏时其余入口自动贴齐。 */
+.chat-floating-actions {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(20px, env(safe-area-inset-right));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-account-wrap {
+  position: relative;
+}
+.chat-account-launch {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid var(--forest-border);
+  border-radius: 50%;
+  color: var(--on-forest);
+  background: var(--forest-hover);
+  box-shadow: 0 3px 12px var(--shadow);
+}
+.chat-account-launch svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chat-account-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(260px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 36px var(--shadow);
+}
+.chat-account-email {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-account-logout {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--error-soft);
+  color: var(--error);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+}
 @media (pointer: coarse) {
   .composer-tools .attach-button,
   .composer-tools .send-button {

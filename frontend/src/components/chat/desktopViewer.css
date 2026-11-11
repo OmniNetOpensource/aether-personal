@@ -1,9 +1,5 @@
 /* 本文件定义只读桌面窗口：与聊天配色一致，手机占满可视视口，画面按比例缩放。 */
 .chat-desktop-launch {
-  position: absolute;
-  top: max(16px, env(safe-area-inset-top));
-  right: calc(max(20px, env(safe-area-inset-right)) + 54px);
-  z-index: 3;
   display: grid;
   place-items: center;
   width: 44px;
