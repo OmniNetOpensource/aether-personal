@@ -2,6 +2,9 @@
 .DS_Store
 /.local/
 
+# 本地临时文件
+/tmp/
+
 # 编辑器
 .idea/
 .vscode/
