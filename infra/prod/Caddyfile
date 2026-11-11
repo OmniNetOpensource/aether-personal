@@ -1,10 +1,17 @@
+# 本文件配置生产反向代理：校验 Cloudflare 源站密钥，向两个对等后端容器做健康检查与轮询转发，并隔离管理入口。
 {$ORIGIN_DOMAIN} {
 	route {
 		@admin path /admin /admin/*
 		respond @admin 404
 		@authorized header X-Aether-Origin-Key {$ORIGIN_AUTH_SECRET}
-		reverse_proxy @authorized api:8080 {
+		reverse_proxy @authorized api-1:8080 api-2:8080 {
 			header_up -X-Aether-Origin-Key
+			lb_policy round_robin
+			lb_try_duration 5s
+			lb_try_interval 250ms
+			health_uri /healthz
+			health_interval 5s
+			health_timeout 3s
 		}
 		respond "Forbidden" 403
 	}

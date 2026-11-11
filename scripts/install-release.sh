@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本文件在应用主机安装已校验的发布包：保留生产配置，先备份再迁移，并记录失败后继续所需的阶段。
+# 本文件在应用主机安装已校验的发布包：在线热备数据库并执行迁移，再逐台滚动更新双后端容器与网关。
 set -euo pipefail
 umask 077
 
@@ -24,8 +24,12 @@ if [[ ${1:-} != --check ]]; then
     exec 9>"$publish_root/publish/install.lock"
     flock -n 9 || { echo '另一个主机发布正在运行' >&2; exit 1; }
 fi
-api=$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=api)
-[[ -n $api && $api != *$'\n'* ]] || { echo '无法唯一定位现有生产 API 容器' >&2; exit 1; }
+# 优先读取双容器架构下的 api-1，首次从旧单容器升级时回退读取 api。
+api=$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=api-1)
+if [[ -z $api ]]; then
+    api=$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=api)
+fi
+[[ -n $api && $api != *$'\n'* ]] || { echo '无法唯一定位现有生产后端容器' >&2; exit 1; }
 previous_config=$(docker inspect "$api" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}')
 [[ $previous_config == /*/infra/prod/compose.yaml && $previous_config != *,* ]] || { echo '当前 Compose 配置路径不符合仓库布局' >&2; exit 1; }
 [[ -r ${previous_config%/*}/.env ]] || { echo '缺少原生产 .env' >&2; exit 1; }
@@ -59,13 +63,10 @@ compose() {
     docker compose --project-name "$project" --env-file "${config%/*}/.env" -f "$config" "$@"
 }
 
-# 迁移开始前可重启旧服务；迁移开始后旧结构可能已改变，只保留诊断和可恢复的发布包。
+# 备份在线完成不中断现有服务；迁移或滚动更新中断时保留诊断记录供同一发布包继续。
 finish() {
     local status=$?
     if (( status != 0 )); then
-        if [[ -f $state/writers-stopped && ! -f $state/migration-started ]]; then
-            compose "$previous_config" up -d --wait --pull never api admin || true
-        fi
         printf '主机发布未完成。源码：%s；阶段：%s；备份：%s\n' "$release" "$state" "$backup" >&2
         echo '修正原因后重试同一发布包；不要自动 goose down 或恢复旧镜像。' >&2
     fi
@@ -106,11 +107,10 @@ if [[ ! -f $state/prepared ]]; then
     touch "$state/prepared"
 fi
 
-# 已健康安装的包不再停机或迁移，允许本地接着完成备份下载和 Worker 发布。
+# 已健康安装的包不再迁移或滚动重启，允许本地接着完成备份下载和 Worker 发布。
 if [[ ! -f $state/installed ]]; then
-    touch "$state/writers-stopped"
-    compose "$previous_config" stop api admin
     if [[ ! -f $state/backup-ready ]]; then
+        # 利用 PostgreSQL MVCC 一致性快照在线导出备份，不停止正在服务流量的后端容器。
         compose "$previous_config" exec -T postgres pg_dump -U aether -d aether -Fc > "$backup.partial"
         compose "$previous_config" exec -T postgres pg_restore --list < "$backup.partial" >/dev/null
         mv "$backup.partial" "$backup"
@@ -119,14 +119,18 @@ if [[ ! -f $state/installed ]]; then
         touch "$state/backup-ready"
         printf '备份完成：%s\n' "$backup"
     fi
-    # 必须先持久化迁移边界；goose 每项迁移单独提交，失败不能推断仍是旧版本。
+    # 先持久化迁移边界，再依次滚动更新 api-1 与 api-2，保证全程至少一个后端健康，最后更新网关并移除旧孤儿容器。
     touch "$state/migration-started"
     compose "$release/infra/prod/compose.yaml" run --rm --pull never migrate
-    compose "$release/infra/prod/compose.yaml" up -d --wait --pull never api admin gateway
+    compose "$release/infra/prod/compose.yaml" up -d --wait --pull never redis api-1
+    compose "$release/infra/prod/compose.yaml" up -d --wait --pull never api-2
+    compose "$release/infra/prod/compose.yaml" up -d --wait --pull never --remove-orphans api-1 api-2 admin gateway
 fi
 
-# 每次重试仍验证实际运行镜像；成功记录由真实容器与数据库值生成。
-for service in api admin; do
+# 每次重试仍验证实际运行镜像与健康状态；成功记录由真实容器与数据库值生成。
+redis_container=$(compose "$release/infra/prod/compose.yaml" ps -q redis)
+[[ $(docker inspect "$redis_container" --format '{{.State.Health.Status}}') == "healthy" ]] || { echo 'redis 未处于健康状态' >&2; exit 1; }
+for service in api-1 api-2 admin; do
     container=$(compose "$release/infra/prod/compose.yaml" ps -q "$service")
     actual=$(docker inspect "$container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}} {{.State.Health.Status}}')
     [[ $actual == "$revision healthy" ]] || { echo "$service 未运行本次健康镜像" >&2; exit 1; }

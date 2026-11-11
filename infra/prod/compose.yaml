@@ -1,4 +1,52 @@
+# 本文件编排生产单机多容器环境：PostgreSQL 持久化业务数据，纯内存 Redis 传递跨实例信号，两个对等后端容器各自挂载独立图片缓存卷。
 name: aether-personal-prod
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: '10m', max-file: '3' }
+
+x-database-url: &database-url postgres://aether:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=disable
+
+x-api: &api-service
+  image: aether-personal-backend:${RELEASE_TAG:-local}
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 20s
+  environment:
+    APP_ENV: prod
+    PORT: '8080'
+    DATABASE_URL: *database-url
+    REDIS_URL: redis://redis:6379/0
+    DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-20}
+    AGENT_CAPACITY: ${AGENT_CAPACITY:-}
+    SERVICE_ENCRYPTION_KEY: ${SERVICE_ENCRYPTION_KEY:?Set SERVICE_ENCRYPTION_KEY}
+    TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+    TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+    TURNSTILE_HOSTNAME: ${TURNSTILE_HOSTNAME:-}
+    MAIN_MODEL: ${MAIN_MODEL:-}
+    ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+    SANDBOX_REGION: ${SANDBOX_REGION:-ap-southeast-1}
+    SANDBOX_TEMPLATE: ${SANDBOX_TEMPLATE:-}
+    SANDBOX_VPC_ID: ${SANDBOX_VPC_ID:-}
+    SANDBOX_SECURITY_GROUP_ID: ${SANDBOX_SECURITY_GROUP_ID:-}
+    SANDBOX_VSWITCH_IDS: ${SANDBOX_VSWITCH_IDS:-}
+    SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-10m}
+    IMAGE_CACHE_DIR: /var/cache/aether/images
+    IMAGE_CACHE_MAX_BYTES: ${IMAGE_CACHE_MAX_BYTES:-1073741824}
+    IMAGE_CACHE_TTL: ${IMAGE_CACHE_TTL:-168h}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  healthcheck:
+    test: [CMD, curl, --fail, --silent, 'http://127.0.0.1:8080/healthz']
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 15s
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  logging: *logging
 
 services:
   postgres:
@@ -15,53 +63,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    logging: &logging
-      driver: json-file
-      options: { max-size: '10m', max-file: '3' }
+    logging: *logging
 
-  api:
-    image: aether-personal-backend:${RELEASE_TAG:-local}
+  redis:
+    image: redis:8-alpine
+    command: [redis-server, --save, '', --appendonly, 'no']
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  api-1:
+    <<: *api-service
     build:
       context: ../..
       dockerfile: infra/prod/Dockerfile.backend
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 20s
-    environment:
-      APP_ENV: prod
-      PORT: '8080'
-      DATABASE_URL: &database-url postgres://aether:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=disable
-      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-20}
-      AGENT_CAPACITY: ${AGENT_CAPACITY:-}
-      SERVICE_ENCRYPTION_KEY: ${SERVICE_ENCRYPTION_KEY:?Set SERVICE_ENCRYPTION_KEY}
-      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
-      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
-      TURNSTILE_HOSTNAME: ${TURNSTILE_HOSTNAME:-}
-      MAIN_MODEL: ${MAIN_MODEL:-}
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
-      SANDBOX_REGION: ${SANDBOX_REGION:-ap-southeast-1}
-      SANDBOX_TEMPLATE: ${SANDBOX_TEMPLATE:-}
-      SANDBOX_VPC_ID: ${SANDBOX_VPC_ID:-}
-      SANDBOX_SECURITY_GROUP_ID: ${SANDBOX_SECURITY_GROUP_ID:-}
-      SANDBOX_VSWITCH_IDS: ${SANDBOX_VSWITCH_IDS:-}
-      SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-10m}
-      IMAGE_CACHE_DIR: /var/cache/aether/images
-      IMAGE_CACHE_MAX_BYTES: ${IMAGE_CACHE_MAX_BYTES:-1073741824}
-      IMAGE_CACHE_TTL: ${IMAGE_CACHE_TTL:-168h}
     volumes:
-      - image-cache:/var/cache/aether/images
-    depends_on:
-      postgres: { condition: service_healthy }
-    healthcheck:
-      test: [CMD, curl, --fail, --silent, 'http://127.0.0.1:8080/healthz']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    read_only: true
-    tmpfs: [/tmp]
-    security_opt: [no-new-privileges:true]
-    logging: *logging
+      - image-cache-1:/var/cache/aether/images
+
+  api-2:
+    <<: *api-service
+    volumes:
+      - image-cache-2:/var/cache/aether/images
 
   migrate:
     image: aether-personal-backend:${RELEASE_TAG:-local}
@@ -77,7 +104,7 @@ services:
     security_opt: [no-new-privileges:true]
     logging: *logging
 
-  # 显式升级旧部署时执行一次；日常 api 容器不接收这些旧服务 Key。
+  # 显式升级旧部署时执行一次；日常后端容器不接收这些旧服务 Key。
   import-services:
     image: aether-personal-backend:${RELEASE_TAG:-local}
     profiles: [tools]
@@ -108,7 +135,8 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      api: { condition: service_healthy }
+      api-1: { condition: service_healthy }
+      api-2: { condition: service_healthy }
     healthcheck:
       test: [CMD, node, -e, 'fetch("http://127.0.0.1:5174/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 10s
@@ -134,13 +162,15 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      api: { condition: service_healthy }
+      api-1: { condition: service_healthy }
+      api-2: { condition: service_healthy }
       admin: { condition: service_healthy }
     security_opt: [no-new-privileges:true]
     logging: *logging
 
 volumes:
   postgres-data:
-  image-cache:
+  image-cache-1:
+  image-cache-2:
   caddy-data:
   caddy-config:

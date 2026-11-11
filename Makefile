@@ -34,7 +34,7 @@ prod-import-services:
 	$(PROD_COMPOSE) run --rm import-services
 
 prod-up:
-	$(PROD_COMPOSE) up -d --wait api admin gateway
+	$(PROD_COMPOSE) up -d --wait redis api-1 api-2 admin gateway
 
 prod-status:
 	$(PROD_COMPOSE) ps

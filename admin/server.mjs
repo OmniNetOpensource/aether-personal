@@ -1,4 +1,4 @@
-// 本文件是管理看板的独立服务入口：托管 TanStack Start 构建出的静态页面，并把管理 API 请求按白名单代理到后端。
+// 本文件是管理看板的独立服务入口：托管 TanStack Start 构建出的静态页面，并把管理 API 请求按白名单轮询及故障切换代理到后端实例。
 
 import http from 'node:http';
 import https from 'node:https';
@@ -7,10 +7,20 @@ import path from 'node:path';
 
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 5174);
-const upstream = new URL(process.env.API_UPSTREAM || 'http://127.0.0.1:8080');
-if (!['http:', 'https:'].includes(upstream.protocol) || upstream.username || upstream.password || upstream.pathname !== '/' || upstream.search || upstream.hash) {
-  throw new Error('API_UPSTREAM must be an HTTP(S) origin without credentials, path, query or fragment');
-}
+// API_UPSTREAM 支持逗号分隔多个对等后端源站；单实例滚动重启时连接失败会自动切换下一个实例。
+const upstreams = (process.env.API_UPSTREAM || 'http://127.0.0.1:8080')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => {
+    const parsed = new URL(entry);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      throw new Error('API_UPSTREAM entries must be HTTP(S) origins without credentials, path, query or fragment');
+    }
+    return parsed;
+  });
+if (upstreams.length === 0) throw new Error('API_UPSTREAM must contain at least one origin');
+let nextUpstream = 0;
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
 // 静态产物来自 `npm run build` 的 build/web；带哈希的资源文件名由 Rsbuild 生成，这里按扩展名给类型。
 const staticRoot = new URL('./build/web/', import.meta.url);
@@ -57,33 +67,51 @@ async function proxy(request, response, url) {
   const headers = { Accept: 'application/json' };
   if (request.headers.authorization) headers.Authorization = request.headers.authorization;
   if (request.headers['content-type']) headers['Content-Type'] = request.headers['content-type'];
-  const target = new URL(path + url.search, upstream);
-  const transport = target.protocol === 'https:' ? https : http;
-  const forwarded = transport.request(target, { method: request.method, headers }, (received) => {
-    if (streamed) {
-      response.writeHead(received.statusCode || 502, { 'Content-Type': received.headers['content-type'] || 'application/json' });
-      received.on('error', () => response.destroy());
-      received.pipe(response);
-      return;
-    }
-    const output = [];
-    let size = 0;
-    received.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > 2 * 1024 * 1024) { received.destroy(); fail(response, 502, 'Upstream response too large'); return; }
-      output.push(chunk);
+  const body = Buffer.concat(chunks);
+  const startIndex = nextUpstream;
+  nextUpstream = (nextUpstream + 1) % upstreams.length;
+
+  // 在尚未收到响应头前若遇到连接拒绝或超时，换下一个对等后端实例重试，保证滚动发版期间看板不报 502。
+  const forwardTo = (attempt) => {
+    if (response.writableEnded || response.destroyed) return;
+    const upstream = upstreams[(startIndex + attempt) % upstreams.length];
+    const target = new URL(path + url.search, upstream);
+    const transport = target.protocol === 'https:' ? https : http;
+    let connected = false;
+    const forwarded = transport.request(target, { method: request.method, headers }, (received) => {
+      connected = true;
+      if (streamed) {
+        response.writeHead(received.statusCode || 502, { 'Content-Type': received.headers['content-type'] || 'application/json' });
+        received.on('error', () => response.destroy());
+        received.pipe(response);
+        return;
+      }
+      const output = [];
+      let size = 0;
+      received.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 2 * 1024 * 1024) { received.destroy(); fail(response, 502, 'Upstream response too large'); return; }
+        output.push(chunk);
+      });
+      received.on('end', () => {
+        if (response.writableEnded || response.destroyed) return;
+        response.writeHead(received.statusCode || 502, { 'Content-Type': received.headers['content-type'] || 'application/json', ...(received.headers['retry-after'] ? { 'Retry-After': received.headers['retry-after'] } : {}) });
+        response.end(Buffer.concat(output));
+      });
+      received.on('error', () => fail(response, 502, 'Backend connection failed'));
     });
-    received.on('end', () => {
-      if (response.writableEnded || response.destroyed) return;
-      response.writeHead(received.statusCode || 502, { 'Content-Type': received.headers['content-type'] || 'application/json', ...(received.headers['retry-after'] ? { 'Retry-After': received.headers['retry-after'] } : {}) });
-      response.end(Buffer.concat(output));
+    forwarded.setTimeout(15_000, () => forwarded.destroy(new Error('timeout')));
+    forwarded.on('error', () => {
+      if (!connected && !response.headersSent && attempt + 1 < upstreams.length) {
+        forwardTo(attempt + 1);
+        return;
+      }
+      fail(response, 502, 'Backend unavailable');
     });
-    received.on('error', () => fail(response, 502, 'Backend connection failed'));
-  });
-  forwarded.setTimeout(15_000, () => forwarded.destroy(new Error('timeout')));
-  forwarded.on('error', () => fail(response, 502, 'Backend unavailable'));
-  response.on('close', () => { if (!response.writableEnded) forwarded.destroy(); });
-  forwarded.end(Buffer.concat(chunks));
+    response.once('close', () => { if (!response.writableEnded) forwarded.destroy(); });
+    forwarded.end(body);
+  };
+  forwardTo(0);
 }
 // serveStatic 从 build/web 读取真实文件；不存在的无扩展名路径回退到预渲染的 index.html，让前端路由刷新也能打开。
 async function serveStatic(request, response, url) {
