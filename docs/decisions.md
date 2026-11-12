@@ -62,6 +62,7 @@
 | 部署方式 | 通用 Docker Compose；维护者实例使用 Cloudflare Workers Static Assets 托管 Web，阿里云新加坡单机运行两个对等无状态 Go 后端容器（`api-1`、`api-2`）、纯内存 Redis 8 与 PostgreSQL 18，由 Caddy 轮询及健康检查，零新增云服务账单 | [09](wiki/09-deployment.md) |
 | 一键发布 | 2026-11-03 以 `make publish` 更新已有实例；2026-11-11 改为不停服滚动更新：在线 MVCC `pg_dump` 热备份后执行迁移，先更新 `api-1` 等健康再更新 `api-2`、看板与网关，随后发布 Cloudflare 并校验；生产密钥留在服务器 | [09](wiki/09-deployment.md#一键更新现有部署) |
 | Push 自动发布 | 2026-11-03 用户确认以 GitHub Actions 在 `main` push 后自动发布；固定事件提交、串行迁移、专用部署凭证，备份用 age 加密后保存 90 天，解密私钥留在维护者本机 | [09](wiki/09-deployment.md#push-后自动发布) |
+| 发布备份轮换 | 2026-11-12 生产盘写满后，用户确认主机保留最近三份发布备份，旧备份只有在确认异机副本后才清理。发布前检查磁盘空间，主机安装成功后清理上传包 | [09](wiki/09-deployment.md#一键更新现有部署) |
 | 维护者 Web 域名 | 2026-10-26 确认 `aether.forkicks.fun`，公众开放注册 | [09](wiki/09-deployment.md) |
 | 模型与发信费用 | Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 | [01](wiki/01-overview.md#模型服务与费用) |
 | 项目资料 | `README.md`、`docs/architecture.mmd`、`docs/wiki/`（自包含的详细说明）、`docs/decisions.md`（本总览） | [Wiki](wiki/README.md#维护) |

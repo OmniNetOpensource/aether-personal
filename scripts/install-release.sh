@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本文件在应用主机安装已校验的发布包：在线热备数据库并执行迁移，再逐台滚动更新双后端容器与网关。
+# 本文件检查应用主机空间，在线备份并滚动安装已校验的发布包，完成后清理上传文件。
 set -euo pipefail
 umask 077
 
@@ -10,6 +10,37 @@ project=${PUBLISH_PROJECT:-aether-personal-prod}
 [[ $publish_root == /* && $publish_root != / && $project =~ ^[a-z][a-z0-9-]*$ ]] || exit 1
 command -v flock >/dev/null
 docker compose version >/dev/null
+
+# 预留一份新备份的空间和 2 GiB 工作余量，供镜像解包和运行中的数据库写入。
+check_disk_space() {
+    local upload_bytes=$1 backup_bytes=0 available staging_available newest_backup
+    local publish_disk=$publish_root
+    if [[ ! -d $publish_disk ]]; then
+        publish_disk=$(dirname -- "$publish_disk")
+    fi
+    if [[ -d $publish_root/backups && ! -f ${state:-/dev/null}/backup-ready ]]; then
+        newest_backup=$(find "$publish_root/backups" -maxdepth 1 -type f -name 'pre-*.dump' -printf '%T@ %s\n' |
+            sort -nr | sed -n '1p')
+        backup_bytes=${newest_backup#* }
+        backup_bytes=${backup_bytes:-0}
+    fi
+    available=$(df -B1 --output=avail "$publish_disk" | awk 'NR == 2 { print $1 }')
+    if [[ $(stat -c %d "$publish_disk") == "$(stat -c %d /tmp)" ]]; then
+        backup_bytes=$((backup_bytes + upload_bytes))
+    else
+        staging_available=$(df -B1 --output=avail /tmp | awk 'NR == 2 { print $1 }')
+        if (( staging_available < upload_bytes )); then
+            echo '发布上传目录磁盘空间不足' >&2
+            return 1
+        fi
+    fi
+    local required=$((backup_bytes + 2 * 1024 * 1024 * 1024))
+    if (( available < required )); then
+        printf '生产磁盘空间不足：可用 %s 字节，发布至少需要 %s 字节\n' "$available" "$required" >&2
+        return 1
+    fi
+}
+
 # 安装模式先校验输入并取得锁，再读取当前配置，避免并发发布后复制到过时的 .env。
 if [[ ${1:-} != --check ]]; then
     [[ $# == 3 ]] || { echo '用法：install-release.sh <上传目录> <发布编号> <完整提交 SHA>' >&2; exit 1; }
@@ -40,10 +71,21 @@ esac
 
 # 预检仅查询 Docker 与路径，不建立发布目录、不停服务、不运行迁移。
 if [[ ${1:-} == --check ]]; then
+    [[ ${2:-0} =~ ^[0-9]+$ ]] || exit 1
+    if [[ -n ${3:-} ]]; then
+        [[ $3 =~ ^[a-f0-9]{12}-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$ ]] || exit 1
+        state=$publish_root/publish/$3
+    fi
+    check_disk_space "${2:-0}"
     docker info --format 'Docker: {{.OSType}}/{{.Architecture}}'
     docker inspect "$api" --format '当前提交：{{index .Config.Labels "org.opencontainers.image.revision"}}'
     printf '主机预检通过；Compose 项目：%s\n' "$project"
     exit 0
+fi
+
+# 上传后在安装锁内再查一次，覆盖构建和传输期间的磁盘变化。
+if [[ ! -f $state/installed ]]; then
+    check_disk_space 0
 fi
 # 镜像标签只取发布目录内的 .env，避免调用环境覆盖新旧 Compose 各自的标签。
 unset RELEASE_TAG
@@ -110,6 +152,8 @@ fi
 # 已健康安装的包不再迁移或滚动重启，允许本地接着完成备份下载和 Worker 发布。
 if [[ ! -f $state/installed ]]; then
     if [[ ! -f $state/backup-ready ]]; then
+        # 镜像加载已经占用磁盘，确认仍有足够空间再写数据库备份。
+        check_disk_space 0
         # 利用 PostgreSQL MVCC 一致性快照在线导出备份，不停止正在服务流量的后端容器。
         compose "$previous_config" exec -T postgres pg_dump -U aether -d aether -Fc > "$backup.partial"
         compose "$previous_config" exec -T postgres pg_restore --list < "$backup.partial" >/dev/null
@@ -138,10 +182,20 @@ done
 database_version=$(compose "$release/infra/prod/compose.yaml" exec -T postgres psql -U aether -d aether -Atc 'SELECT max(version_id) FROM goose_db_version WHERE is_applied')
 latest_migration=$(basename "$(find "$release/backend/db/migrations" -name '[0-9]*_*.sql' | sort | tail -1)")
 [[ $database_version -eq $((10#${latest_migration%%_*})) ]] || { echo '数据库版本与本次源码不一致' >&2; exit 1; }
-backup_sha256=$(sha256sum "$backup" | cut -d ' ' -f 1)
-printf '{"revision":"%s","database_version":%s,"backup":"%s","backup_sha256":"%s"}\n' \
-    "$revision" "$database_version" "$backup" "$backup_sha256" > "$state/result.json.partial"
-mv "$state/result.json.partial" "$state/result.json"
-touch "$state/installed"
+# 安装结果记录原备份摘要，继续已完成的发布时仍可核对异机副本。
+if [[ ! -f $state/installed ]]; then
+    backup_sha256=$(sha256sum "$backup" | cut -d ' ' -f 1)
+    printf '{"revision":"%s","database_version":%s,"backup":"%s","backup_sha256":"%s"}\n' \
+        "$revision" "$database_version" "$backup" "$backup_sha256" > "$state/result.json.partial"
+    mv "$state/result.json.partial" "$state/result.json"
+    touch "$state/installed"
+fi
 compose "$release/infra/prod/compose.yaml" ps
+
+# 源码、镜像和阶段记录已经落盘。上传包可以清理，继续发布时会按原清单重新上传。
+if [[ $bundle == "/tmp/aether-publish-$release_id" ]]; then
+    cd /
+    rm -- "$bundle/source.tar.gz" "$bundle/images.tar.gz" "$bundle/install-release.sh" "$bundle/SHA256SUMS"
+    rmdir --ignore-fail-on-non-empty -- "$bundle"
+fi
 printf '主机发布完成：%s\n' "$release"

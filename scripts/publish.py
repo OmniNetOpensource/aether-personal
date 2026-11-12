@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 本文件编排固定提交的发布，复用构建缓存并记录命令耗时，再备份、更新主机和核对 Cloudflare。
+# 本文件编排固定提交的发布，构建并更新主机和 Cloudflare，再按已确认的异机副本清理旧备份。
 
 import argparse
 import fcntl
@@ -20,6 +20,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG = None
+RELEASE_ID = r"[a-f0-9]{12}-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 
 
 # 所有外部命令以参数数组运行；输出同时留在发布目录，失败保留原始退出状态。
@@ -63,6 +64,50 @@ def sha256(path):
     return digest.hexdigest()
 
 
+# Actions 读取仍可用的已加密产物，本机读取已经落盘的异机文件。主机重新核对摘要后才删除。
+def rotate_backups(ssh):
+    script = (ROOT / "scripts/prune-publish-backups.sh").read_text()
+    command = ["sudo", "-n", "bash", "-c", script, "prune-publish-backups"]
+    ci = os.environ.get("GITHUB_ACTIONS") == "true"
+
+    # runner 会在任务结束后销毁。只有上传成功后才能记录异机副本。
+    if ci and os.environ.get("BACKUP_ARTIFACT_HAS_DUMP") == "true":
+        release = json.loads((Path(os.environ["BACKUP_RELEASE_DIR"]) / "release.json").read_text())
+        artifact_digest = os.environ["BACKUP_ARTIFACT_DIGEST"].removeprefix("sha256:")
+        remote(ssh, [
+            *command, "--record-artifact", release["release_id"], release["server"]["backup_sha256"],
+            os.environ["BACKUP_ARTIFACT_ID"], "sha256:" + artifact_digest,
+        ], quiet=True)
+
+    # 用当前产物列表排除已过期或已删除的副本，清理范围最终由主机锁内的排序决定。
+    candidates = [line.split() for line in remote(ssh, [*command, "--list"], quiet=True).splitlines()]
+    if not candidates:
+        return
+    proofs = {}
+    if ci:
+        repository = os.environ["GITHUB_REPOSITORY"]
+        artifacts = run([
+            "gh", "api", "--paginate", f"repos/{repository}/actions/artifacts?per_page=100",
+            "--jq", '.artifacts[] | select(.expired == false) | [.id, .digest] | @tsv',
+        ], quiet=True)
+        available = {tuple(artifact.split()) for artifact in artifacts.splitlines()}
+        for backup, *receipt in candidates:
+            if receipt:
+                checksum, artifact_id, artifact_digest = receipt
+                if (artifact_id, artifact_digest) in available:
+                    proofs[backup] = checksum
+    else:
+        for backup, *_ in candidates:
+            match = re.fullmatch(rf"pre-({RELEASE_ID})\.dump", backup)
+            if match:
+                copy = ROOT / ".local/publish" / match[1] / "database.dump"
+                if copy.is_file():
+                    proofs[backup] = sha256(copy)
+    verified = "".join(f"{checksum} {backup}\n" for backup, checksum in proofs.items())
+    if verified:
+        print(remote(ssh, command, stdin=verified, quiet=True))
+
+
 # 主流程保留本地构建与生产变更的清晰边界；恢复时复用原目录里的不可变产物。
 def main():
     global LOG
@@ -73,6 +118,7 @@ def main():
     mode.add_argument("--prepare-only", action="store_true", help="只构建发布包，不连接或修改生产")
     mode.add_argument("--resume", metavar="RELEASE_ID", help="从已有发布目录继续，不重新构建")
     mode.add_argument("--ci", action="store_true", help="发布 GitHub Actions main 事件的准确提交，不拉取后续提交")
+    mode.add_argument("--rotate-backups", action="store_true", help="只清理已有异机副本的旧发布备份")
     args = parser.parse_args()
     os.umask(0o077)
     # CI 只信任 main 的受支持事件；先核对 checkout 的提交，禁止发布运行期间新出现的 main。
@@ -91,7 +137,8 @@ def main():
         if current_main[0] != revision:
             print("main 已推进到后续提交，跳过本次过时发布。")
             return
-    for command in ("git", "docker", "npm", "npx", "go", "make", "tar", "gzip", "curl", "ssh", "scp"):
+    commands = ("ssh",) if args.rotate_backups else ("git", "docker", "npm", "npx", "go", "make", "tar", "gzip", "curl", "ssh", "scp")
+    for command in commands:
         if not shutil.which(command):
             raise RuntimeError(f"缺少命令：{command}")
 
@@ -135,11 +182,16 @@ def main():
             ssh = ["ssh", *options, host]
             scp = ["scp", *options]
 
+        # 备份轮换可独立重试，复用发布连接和工作区锁。
+        if args.rotate_backups:
+            rotate_backups(ssh)
+            return
+
         # 检查只读取生产状态；无法无人值守登录时，在构建和停服务之前退出。
         run(["docker", "info", "--format", "{{.OSType}}"], quiet=True)
         if not args.prepare_only:
             installer = (ROOT / "scripts/install-release.sh").read_text()
-            remote(ssh, ["sudo", "-n", "bash", "-s", "--", "--check"], stdin=installer)
+            remote(ssh, ["sudo", "-n", "bash", "-s", "--", "--check", "0", args.resume or ""], stdin=installer)
             edge = ROOT / "infra/cloudflare"
             run(["npm", "ci"], cwd=edge)
             if not args.ci:
@@ -151,7 +203,7 @@ def main():
                 return
 
         if args.resume:
-            if not re.fullmatch(r"[a-f0-9]{12}-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", args.resume):
+            if not re.fullmatch(RELEASE_ID, args.resume):
                 raise RuntimeError("无效的发布编号")
             release_dir = ROOT / ".local/publish" / args.resume
             manifest = json.loads((release_dir / "release.json").read_text())
@@ -230,6 +282,8 @@ def main():
         for name, digest in manifest["sha256"].items():
             if sha256(release_dir / name) != digest:
                 raise RuntimeError(f"本地发布包校验失败：{name}")
+        upload_bytes = sum((release_dir / name).stat().st_size for name in (*manifest["sha256"], "SHA256SUMS"))
+        remote(ssh, ["sudo", "-n", "bash", "-s", "--", "--check", str(upload_bytes), release_id], stdin=installer)
         upload = f"/tmp/aether-publish-{release_id}"
         remote(ssh, ["mkdir", "-p", "-m", "700", upload])
         run([*scp, *[release_dir / name for name in (*manifest["sha256"], "SHA256SUMS")], f"{host}:{upload}/"])
@@ -242,17 +296,22 @@ def main():
         backup = Path(server_result["backup"])
         if backup.parent != Path("/opt/aether-personal/backups") or backup.name != f"pre-{release_id}.dump":
             raise RuntimeError("服务器返回了不属于本次发布的备份路径")
-        print("下载并校验数据库备份……", flush=True)
-        backup_started = time.monotonic()
-        with (release_dir / "database.dump.partial").open("wb") as output:
-            subprocess.run([*ssh, shlex.join(["sudo", "-n", "cat", str(backup)])], stdout=output, check=True)
-        if sha256(release_dir / "database.dump.partial") != server_result["backup_sha256"]:
-            raise RuntimeError("异机备份校验失败；服务器备份与新后端保留")
-        (release_dir / "database.dump.partial").replace(release_dir / "database.dump")
-        backup_timing = f"数据库备份下载及校验耗时 {time.monotonic() - backup_started:.1f}s\n"
-        print(backup_timing, end="", flush=True)
-        LOG.write(backup_timing)
-        LOG.flush()
+        local_backup = release_dir / "database.dump"
+        if not local_backup.is_file() or sha256(local_backup) != server_result["backup_sha256"]:
+            print("下载并校验数据库备份……", flush=True)
+            backup_started = time.monotonic()
+            partial_backup = release_dir / "database.dump.partial"
+            with partial_backup.open("wb") as output:
+                subprocess.run([*ssh, shlex.join(["sudo", "-n", "cat", str(backup)])], stdout=output, check=True)
+            if sha256(partial_backup) != server_result["backup_sha256"]:
+                raise RuntimeError("异机备份校验失败；服务器备份与新后端保留")
+            partial_backup.replace(local_backup)
+            backup_timing = f"数据库备份下载及校验耗时 {time.monotonic() - backup_started:.1f}s\n"
+            print(backup_timing, end="", flush=True)
+            LOG.write(backup_timing)
+            LOG.flush()
+        if not args.ci:
+            rotate_backups(ssh)
 
         # 后端健康后才更新 Worker；失败保留可恢复目录，不自动回退已迁移的数据库。
         edge = snapshot / "infra/cloudflare"

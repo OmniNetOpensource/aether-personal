@@ -1,4 +1,4 @@
-# 本工作流在 main push 后发布同一提交；迁移串行执行，数据库备份加密后才允许上传产物。
+# 本工作流在 main push 后串行发布。数据库备份加密上传后，按仍可用的异机副本轮换主机备份。
 name: Deploy production
 run-name: Deploy ${{ github.sha }}
 
@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # 发布不能因后续 push 被取消，避免中断数据库迁移或留下前后端版本不一致。
 concurrency:
@@ -115,6 +116,7 @@ jobs:
 
       # 公开仓库的产物可被下载，产物目录只包含 age 密文和不含连接信息的发布摘要。
       - name: Encrypt the verified database backup
+        id: backup
         if: ${{ !cancelled() && steps.publish.outputs.release_dir != '' }}
         env:
           RELEASE_DIR: ${{ steps.publish.outputs.release_dir }}
@@ -137,11 +139,17 @@ jobs:
           manifest = json.loads((release / 'release.json').read_text()) if (release / 'release.json').is_file() else {}
           summary = {key: manifest[key] for key in ('release_id', 'revision', 'status', 'worker_version') if key in manifest}
           summary['database_version'] = manifest.get('server', {}).get('database_version')
-          Path('.local/publish-artifacts/release.json').write_text(json.dumps(summary, indent=2) + '\n')
+          artifact_dir = Path('.local/publish-artifacts')
+          if (artifact_dir / 'database.dump.age').is_file():
+              summary['backup_sha256'] = manifest['server']['backup_sha256']
+              with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+                  output.write('has_dump=true\n')
+          (artifact_dir / 'release.json').write_text(json.dumps(summary, indent=2) + '\n')
           PY
 
       - name: Save encrypted backup and release summary
-        if: ${{ !cancelled() && steps.publish.outputs.release_dir != '' }}
+        id: backup_upload
+        if: ${{ !cancelled() && steps.backup.outcome == 'success' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: production-${{ github.run_id }}-${{ github.run_attempt }}
@@ -151,6 +159,17 @@ jobs:
           include-hidden-files: true
           # age 密文不可压缩，避免上传时再次消耗 CPU 压缩。
           compression-level: 0
+
+      # 只根据已上传且未过期的加密产物清理，解密私钥仍由维护者保管。
+      - name: Rotate production database backups
+        if: ${{ !cancelled() && steps.backup_upload.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_RELEASE_DIR: ${{ steps.publish.outputs.release_dir }}
+          BACKUP_ARTIFACT_HAS_DUMP: ${{ steps.backup.outputs.has_dump }}
+          BACKUP_ARTIFACT_ID: ${{ steps.backup_upload.outputs.artifact-id }}
+          BACKUP_ARTIFACT_DIGEST: ${{ steps.backup_upload.outputs.artifact-digest }}
+        run: python3 scripts/publish.py --rotate-backups
 
       - name: Remove runner credentials and plaintext backups
         if: ${{ always() }}
