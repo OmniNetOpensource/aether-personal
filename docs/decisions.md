@@ -32,11 +32,11 @@
 | Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、失败请求和不可见指令，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
-| 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，每用户一项执行中，当前任务结束后由模型读取 `list_tasks` 并用 `update_task(..., in_progress)` 选择下一项，后端不按 ID 或登记先后自动选取；删除冗余 `source_sequence`（`00039`）。任务记录以 `related_message_ids` 只关联提出需求和补充的用户输入；不绑定回答或文件、不提供结果追加工具，不设 `outcome`；`list_tasks` 统一返回列表，去掉 `task_id` 参数；不恢复 Subagent。同日稍后确认任务接入只靠固定指令中的任务段与三个 task tools：取消请求尾部 `task_context`、阶段工具范围与后端任务状态查询，`main_work` 由 `00042` 恢复为只看消息尾部；2026-11-07 部分恢复后端任务状态读取：模型收尾后若仍有 `in_progress` 或 `queued` 任务，Runner 以一轮不落库的 `task_reminder` 续跑，同一批任务只提醒一次，`waiting` 不触发，`main_work` 不变；2026-11-09 模型可把进行中任务用 `update_task` 改回 `queued`，再启动自己判断更该先做的排队任务，仍一次只做一项，不新增优先级字段，搁下与启动必须分两批 | [11](wiki/11-tasks.md) |
+| 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，每用户一项执行中，当前任务结束后由模型读取 `list_tasks` 并用 `update_task(..., in_progress)` 选择下一项，后端不按 ID 或登记先后自动选取；删除冗余 `source_sequence`（`00039`）。任务记录以 `related_message_ids` 只关联提出需求和补充的用户输入；不绑定回答或文件、不提供结果追加工具，不设 `outcome`；`list_tasks` 统一返回列表，去掉 `task_id` 参数；不恢复 Subagent。同日稍后确认任务接入只靠固定指令中的任务段与三个 task tools：取消请求尾部 `task_context`、阶段工具范围与后端任务状态查询，`main_work` 由 `00042` 恢复为只看消息尾部；2026-11-07 部分恢复后端任务状态读取：模型收尾后若仍有 `in_progress` 或 `queued` 任务，Runner 以一轮不落库的 `task_reminder` 续跑，同一批任务只提醒一次，`waiting` 不触发，`main_work` 不变；2026-11-09 模型可把进行中任务用 `update_task` 改回 `queued`，再启动自己判断更该先做的排队任务，仍一次只做一项，不新增优先级字段，搁下与启动必须分两批；2026-11-12 新增前端实时只读任务进展展示：随 `ready`、`authenticated` 与 `messages` 帧同步未关闭任务及最近 30 项历史任务快照，有未完成任务时在输入框上方显示进度胶囊并在右上角任务入口显示角标，点击打开只读任务清单浮层，修改或取消仍通过聊天指令完成 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口；2026-11-11 修复离线冷启动：已缓存登录态离线打开时直接进入聊天页编辑草稿，恢复联网后自动连接补齐历史 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
-| 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏或顶部栏；右上角悬浮圆形入口依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及 2026-11-11 确认新增的「账号与退出登录」小浮层 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏或顶部栏；右上角悬浮圆形入口依次为按工作区绑定条件显示的「查看电脑」、带未完成角标的「任务进展」、「搜索历史聊天」以及 2026-11-11 确认新增的「账号与退出登录」小浮层 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 消息列表滚动 | 2026-11-03 改为虚拟滚动（现使用 `react-virtuoso`）：只挂载视口附近的消息，贴底、上翻停留、加载历史保持位置和引用回看不变；发送不把正在看更早消息的列表拉回底部 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 前端构建 | Node.js >=22.12.0 + npm 锁文件，TanStack Start 的 Rsbuild 插件预渲染 SPA 外壳，Web/PWA 部署产物仍为 frontend/build/web；build/server 仅供构建使用 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端显示名称 | 中文名「阿芒」，英文名 Aether；npm 工程名 aether-personal | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
@@ -46,7 +46,7 @@
 | Markdown 渲染 | 2026-11-02 对齐 Aether Start：unified / remark、中文与 GFM、KaTeX、Shiki 高亮和代码复制，沿用当前主题；整条消息解析，不引入流式动画 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端字号 | 2026-10-28 整体放大一档：正文与输入框 18px，辅助文字同步增加 2px，行高相应增加 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 助手消息宽度 | 2026-11-02 改为 `width: fit-content`、`max-width: 100%`，短回复按内容收缩，长回复不超出消息区域，保留外层 margin、留白和消息间距 | [04](wiki/04-messaging.md#助手消息宽度) |
-| 聊天输入框 | 透明外围浮层，混排文字、引用、图片与（已绑定工作区账号的）任意工作区文件；断线重连期间在输入框上方显示轻量连接状态提示 | [01](wiki/01-overview.md#第一层web-与-pwa-前端)、[07](wiki/07-sandbox.md) |
+| 聊天输入框 | 透明外围浮层，混排文字、引用、图片与（已绑定工作区账号的）任意工作区文件；有未结束任务时在输入框上方实时显示当前任务与排队数胶囊，断线重连期间显示轻量连接状态提示 | [01](wiki/01-overview.md#第一层web-与-pwa-前端)、[07](wiki/07-sandbox.md)、[11](wiki/11-tasks.md#前端实时展示任务进展2026-11-12) |
 | 本地 Web 接入 | Go 用 `FRONTEND_DIR` 提供构建产物，与 HTTP API、WebSocket 同源；根目录 `make dev` 启动 | [01](wiki/01-overview.md#本地开发) |
 | 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |

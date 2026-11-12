@@ -1,12 +1,39 @@
-// 本文件是聊天业务控制器：管理登录、实时消息、发送与上传，并通过事件中转提供独立的历史搜索和上下文读取。
+// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送与上传，并通过事件中转提供独立的历史搜索和上下文读取。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
 import type { ClientCommand } from './ServerEventRelay.js';
-import type { ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
+import type {
+  ChatPage,
+  ChatTask,
+  RequestFailedCode,
+  ServerEvent,
+  TaskStatus,
+} from './serverEvents.js';
 
 import { messageFileSchema, messageImageSchema } from './messageAttachments.js';
 import type { MessageFile, MessageImage, MessagePart } from './messageAttachments.js';
+
+// isOpenTask 判断任务是否处于未结束状态，供右上角角标、输入框胶囊与任务清单分组共用。
+export function isOpenTask(task: ChatTask): boolean {
+  return task.status === 'in_progress' || task.status === 'queued' || task.status === 'waiting';
+}
+
+// taskStatusLabel 返回任务状态的中文展示文案，保持输入框胶囊与任务清单用词一致。
+export function taskStatusLabel(status: TaskStatus): string {
+  switch (status) {
+    case 'in_progress':
+      return '进行中';
+    case 'queued':
+      return '排队中';
+    case 'waiting':
+      return '等待回复';
+    case 'completed':
+      return '已完成';
+    case 'cancelled':
+      return '已取消';
+  }
+}
 
 // ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
 export interface ChatMessage {
@@ -73,6 +100,7 @@ interface PendingRequest {
 // 并通过中转发送聊天命令；图片字节单独通过 HTTP 上传，不直接接触原始 WebSocket 帧。
 export class ChatController {
   messages: ChatMessage[] = [];
+  tasks: ChatTask[] = [];
   initializing = true;
   connected = false;
   mainThinking = false;
@@ -204,6 +232,9 @@ export class ChatController {
           this.connected = true;
           this.desktopAvailable = event.desktop_available === true;
           this.email = event.email ?? this.email;
+          if (event.tasks !== undefined) {
+            this.tasks = event.tasks;
+          }
           if (event.history) {
             this.mergeHistory(event.history);
           }
@@ -211,6 +242,7 @@ export class ChatController {
         } else {
           this.connected = false;
           this.desktopAvailable = false;
+          this.tasks = [];
           if (this.token) {
             this.token = null;
             clearSession();
@@ -236,6 +268,7 @@ export class ChatController {
             this.token = event.token;
             this.email = event.email;
             this.desktopAvailable = event.desktop_available === true;
+            this.tasks = event.tasks ?? [];
             this.connected = true;
             this.mergeHistory(event.history);
             this.error = null;
@@ -267,6 +300,9 @@ export class ChatController {
         this.connected = true;
         this.mainThinking = event.main_thinking === true;
         this.mainFailed = event.main_failed === true;
+        if (event.tasks !== undefined) {
+          this.tasks = event.tasks;
+        }
         this.error = null;
         this.merge(event);
         break;
@@ -300,6 +336,7 @@ export class ChatController {
     this.oldestHistoryPosition = undefined;
     this.hasMoreHistory = true;
     this.messages = [];
+    this.tasks = [];
     clearSession();
   }
 

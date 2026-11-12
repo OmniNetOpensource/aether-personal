@@ -1,0 +1,407 @@
+/* 本文件定义右上角任务入口、输入框上方实时进度胶囊与任务进展浮层的亮暗响应式样式。 */
+
+/* 右上角悬浮任务按钮与未完成数量角标，尺寸和描边对齐相邻悬浮入口。 */
+.chat-tasks-launch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid var(--forest-border);
+  border-radius: 50%;
+  color: var(--on-forest);
+  background: var(--forest-hover);
+  box-shadow: 0 3px 12px var(--shadow);
+}
+.chat-tasks-launch svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chat-tasks-launch:focus-visible,
+.task-sheet-dialog button:focus-visible,
+.composer-task-bar:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+.chat-tasks-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 2px solid var(--forest);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gold);
+  color: var(--on-gold);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+/* 输入框上方实时进度胶囊：仅在有未结束任务时出现，随外层容器自动撑开消息列表底部留白。 */
+.composer-task-bar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 4px 16px var(--shadow);
+  text-align: left;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+.composer-task-bar:hover {
+  background: var(--surface-muted);
+  border-color: var(--forest-border);
+}
+.composer-task-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.composer-task-title {
+  min-width: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-task-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.composer-task-meta svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 状态胶囊标签在输入框进度条与任务清单卡片之间共用。 */
+.task-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.task-status-pill.is-in_progress {
+  background: var(--gold-soft);
+  color: var(--accent-text);
+}
+.task-status-pill.is-queued {
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+.task-status-pill.is-waiting {
+  background: var(--gold-soft);
+  color: var(--warning);
+}
+.task-status-pill.is-completed {
+  background: var(--surface-muted);
+  color: var(--accent-text);
+}
+.task-status-pill.is-cancelled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+.task-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.task-live-dot.is-pulsing {
+  animation: task-pulse 1.4s ease-in-out infinite;
+}
+@keyframes task-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+/* 任务进展只读浮层：桌面停靠右上角，手机全屏展开，与历史搜索浮层保持一致的几何与层级。 */
+.task-sheet-dialog {
+  position: fixed;
+  inset: calc(var(--app-top, 0px) + 18px) 22px auto auto;
+  width: 470px;
+  height: 640px;
+  max-width: calc(100vw - 44px);
+  max-height: calc(var(--app-height, 100dvh) - 36px);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 16px 52px #081a184d;
+  font-size: 18px;
+}
+.task-sheet-dialog::backdrop {
+  background: #0c211833;
+}
+.task-sheet-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.task-sheet-header {
+  flex: none;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.task-sheet-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.task-sheet-title h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+  font-weight: 650;
+}
+.task-sheet-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 27px;
+}
+.task-sheet-close:hover {
+  background: var(--quote-surface);
+}
+.task-sheet-mobile-close {
+  display: none;
+}
+.task-sheet-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+.task-sheet-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--text-secondary);
+}
+
+/* 浮层滚动内容区：按当前待办与近期已结束分组展示卡片。 */
+.task-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 14px 18px 18px;
+}
+.task-sheet-empty {
+  margin: 0;
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 28px;
+}
+.task-group + .task-group {
+  margin-top: 20px;
+}
+.task-group-heading {
+  margin: 0 4px 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-card {
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.task-card.is-in_progress {
+  border-color: var(--forest-border);
+  box-shadow: 0 2px 10px var(--shadow);
+}
+.task-card.is-completed,
+.task-card.is-cancelled {
+  background: var(--quote-surface);
+}
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.task-card-time {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.task-card-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.task-card.is-cancelled .task-card-title {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.task-card-description {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-card-description.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.task-card-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.task-card-toggle:hover {
+  text-decoration: underline;
+}
+.task-sheet-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+.task-sheet-footer kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+
+/* 手机端使用全屏任务清单，并缩短输入框进度胶囊次要文字以优先展示任务标题。 */
+@media (max-width: 600px) {
+  .task-sheet-dialog {
+    inset: var(--app-top, 0px) 0 auto;
+    width: 100%;
+    max-width: 100%;
+    height: var(--app-height, 100dvh);
+    max-height: var(--app-height, 100dvh);
+    border: 0;
+    border-radius: 0;
+  }
+  .task-sheet-header {
+    padding: calc(12px + env(safe-area-inset-top)) 18px 14px;
+  }
+  .task-sheet-close {
+    font-size: 15px;
+  }
+  .task-sheet-desktop-close,
+  .task-sheet-escape {
+    display: none;
+  }
+  .task-sheet-mobile-close {
+    display: inline;
+  }
+  .task-sheet-body {
+    padding: 12px 14px 16px;
+  }
+  .task-sheet-footer {
+    justify-content: center;
+    text-align: center;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-live-dot.is-pulsing {
+    animation: none;
+  }
+  .composer-task-bar {
+    transition: none;
+  }
+}
