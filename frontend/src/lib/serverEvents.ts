@@ -35,6 +35,8 @@ export const requestFailedCodeSchema = z.enum([
   'login_unavailable',
   'invalid_request',
   'not_found',
+  'invalid_share',
+  'share_not_found',
 ]);
 
 // 搜索只携带列表片段；上下文窗口复用完整聊天消息结构。
@@ -43,6 +45,22 @@ export const chatSearchHitSchema = z.object({
   sender: z.enum(['user', 'main']),
   created_at: z.iso.datetime({ offset: true }),
   excerpt: z.string(),
+});
+
+// 分享记录摘要用于创建回执与「已分享列表」展示。
+export const messageShareSummarySchema = z.object({
+  id: z.uuid(),
+  token: z.string().min(22),
+  created_at: z.iso.datetime({ offset: true }),
+  message_count: z.number().int().nonnegative(),
+  preview: z.string(),
+});
+
+// 公开分享载荷供免登录访客在 /s/<token> 页面校验后端 HTTP 响应。
+export const publicMessageShareSchema = z.object({
+  token: z.string().min(22),
+  created_at: z.iso.datetime({ offset: true }),
+  messages: z.array(chatMessageRowSchema),
 });
 
 // 任务快照随连接就绪、登录和消息事件整表同步，前端只读展示。
@@ -99,6 +117,21 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     has_more_before: z.boolean(),
     has_more_after: z.boolean(),
   }),
+  z.object({
+    type: z.literal('share_created'),
+    request_id: z.uuid(),
+    share: messageShareSummarySchema,
+  }),
+  z.object({
+    type: z.literal('share_list'),
+    request_id: z.uuid(),
+    shares: z.array(messageShareSummarySchema),
+  }),
+  z.object({
+    type: z.literal('share_deleted'),
+    request_id: z.uuid(),
+    share_id: z.uuid(),
+  }),
   chatPageSchema.extend({
     type: z.literal('messages'),
     change_cursor: z.string().regex(/^\d+$/).optional(),
@@ -119,5 +152,7 @@ export type ServerEvent = z.infer<typeof serverEventSchema>;
 export type ChatPage = z.infer<typeof chatPageSchema>;
 export type RequestFailedCode = z.infer<typeof requestFailedCodeSchema>;
 export type ChatSearchHit = z.infer<typeof chatSearchHitSchema>;
+export type MessageShareSummary = z.infer<typeof messageShareSummarySchema>;
+export type PublicMessageShare = z.infer<typeof publicMessageShareSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type ChatTask = z.infer<typeof chatTaskSchema>;

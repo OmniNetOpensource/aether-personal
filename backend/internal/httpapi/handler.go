@@ -1,4 +1,4 @@
-// 本文件是 httpapi 包的总入口：创建 server 并注册健康检查、管理与 WebSocket 等全部 HTTP 路由。
+// 本文件是 httpapi 包的总入口：创建 server 并注册健康检查、公开消息分享、管理与 WebSocket 等全部 HTTP 路由。
 
 package httpapi
 
@@ -6,6 +6,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
@@ -64,13 +66,31 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *re
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
 	mux.HandleFunc("GET /ws", s.chatWebSocket)
+	mux.HandleFunc("GET /shares/{token}", s.getPublicShare)
 	mux.HandleFunc("GET /sandbox/desktop", s.sandboxDesktop)
 	mux.HandleFunc("POST /images", s.uploadImage)
 	mux.HandleFunc("POST /files", s.uploadFile)
 	if appConfig.FrontendDir != "" {
+		mux.HandleFunc("GET /s/{token}", s.serveFrontendShell)
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
 	}
 	return mux
+}
+
+// serveFrontendShell 为公开分享等前端子路由直接返回 SPA 的 index.html 外壳，避免 http.ServeFile 对特定后缀产生重定向。
+func (s *server) serveFrontendShell(w http.ResponseWriter, r *http.Request) {
+	file, err := os.Open(filepath.Join(s.appConfig.FrontendDir, "index.html"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, "index.html", info.ModTime(), file)
 }
 
 // healthz 同时探测 PostgreSQL 与 Redis 连通性，供网关主动健康检查在单实例异常时自动切流。

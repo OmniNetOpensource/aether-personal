@@ -27,6 +27,8 @@ const (
 	requestFailedLoginUnavailable     = "login_unavailable"
 	requestFailedInvalidRequest       = "invalid_request"
 	requestFailedNotFound             = "not_found"
+	requestFailedInvalidShare         = "invalid_share"
+	requestFailedShareNotFound        = "share_not_found"
 )
 
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
@@ -81,6 +83,27 @@ type messageContextEvent struct {
 	HasMoreBefore bool   `json:"has_more_before"`
 	HasMoreAfter  bool   `json:"has_more_after"`
 	chatMessages
+}
+
+// shareCreatedEvent 返回新生成的公开分享链接摘要，供前端复制链接并刷新管理列表。
+type shareCreatedEvent struct {
+	Type      string              `json:"type"`
+	RequestID string              `json:"request_id"`
+	Share     messageShareSummary `json:"share"`
+}
+
+// shareListEvent 返回当前用户创建过的全部公开分享记录。
+type shareListEvent struct {
+	Type      string                `json:"type"`
+	RequestID string                `json:"request_id"`
+	Shares    []messageShareSummary `json:"shares"`
+}
+
+// shareDeletedEvent 确认指定分享记录已撤销删除，原公开链接随即失效。
+type shareDeletedEvent struct {
+	Type      string    `json:"type"`
+	RequestID string    `json:"request_id"`
+	ShareID   uuid.UUID `json:"share_id"`
 }
 
 // messagesEvent 推送增量可见消息，并携带 Main 处理状态与当前任务队列快照。

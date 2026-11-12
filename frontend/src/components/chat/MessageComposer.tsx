@@ -20,10 +20,12 @@ export function MessageComposer({
   controller,
   composerRef,
   onOpenTasks,
+  hidden = false,
 }: {
   controller: ChatController;
   composerRef: RefObject<MessageComposerHandle | null>;
   onOpenTasks?: () => void;
+  hidden?: boolean;
 }) {
   const draftKey = `aether_draft:${controller.email}`;
   const [parts, setParts] = useState<MessagePart[]>(() => {
@@ -64,14 +66,17 @@ export function MessageComposer({
   }, [parts, draftKey]);
   useLayoutEffect(() => {
     const element = composerPadding.current;
-    if (!element) return;
-    const resize = () =>
-      element.parentElement?.style.setProperty('--composer-height', `${element.offsetHeight}px`);
+    if (!element || hidden) return;
+    const resize = () => {
+      if (!element.hidden) {
+        element.parentElement?.style.setProperty('--composer-height', `${element.offsetHeight}px`);
+      }
+    };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [hidden]);
   // addFiles 统一处理选择、粘贴与拖放的图片和工作区文件，失败保留其余草稿以便继续编辑。
   const addFiles = async (files: File[]) => {
     if (readingRef.current || files.length === 0) return;
@@ -152,7 +157,7 @@ export function MessageComposer({
   }
 
   return (
-    <div className="composer-padding" ref={composerPadding}>
+    <div className="composer-padding" ref={composerPadding} hidden={hidden}>
       {leadTask && (
         <button
           type="button"

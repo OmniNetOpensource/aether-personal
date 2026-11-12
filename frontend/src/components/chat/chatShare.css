@@ -1,0 +1,595 @@
+/* 本文件定义多选消息分享模式、底部生成链接操作栏、「已分享记录」管理浮层与公开分享阅读页的深浅色响应式样式。 */
+
+.composer-padding[hidden] {
+  display: none;
+}
+
+/* 右上角悬浮分享入口，激活多选模式时切换为暖金高亮便于识别当前状态。 */
+.chat-share-launch {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid var(--forest-border);
+  border-radius: 50%;
+  color: var(--on-forest);
+  background: var(--forest-hover);
+  box-shadow: 0 3px 12px var(--shadow);
+}
+.chat-share-launch.is-active {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.chat-share-launch svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chat-share-launch:focus-visible,
+.share-sheet-dialog button:focus-visible,
+.share-sheet-dialog a:focus-visible,
+.share-bar button:focus-visible,
+.share-bar a:focus-visible,
+.shared-page a:focus-visible,
+.shared-page button:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* 多选模式下的消息行：左侧留出圆形勾选框，整行可点击切换选中状态。 */
+.chat-list-row.is-selectable {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.chat-list-row.is-selectable > .chat-row-content {
+  display: flow-root;
+  flex: 1;
+  min-width: 0;
+}
+.share-select-check {
+  flex: none;
+  margin-top: 20px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 2px solid var(--on-forest-muted);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #00000024;
+  color: transparent;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.chat-list-row.is-selected .share-select-check {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.share-select-check svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chat-list-row.is-selected .bubble {
+  box-shadow: 0 0 0 2px var(--gold);
+}
+
+/* 底部多选分享操作栏与生成后的链接提示条，复用输入框外围宽度与安全区留白。 */
+.share-result-banner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 4px 16px var(--shadow);
+}
+.share-result-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.share-result-status {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.share-result-url {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-result-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.share-bar-error {
+  pointer-events: auto;
+  margin-bottom: 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--error);
+  font-size: 14px;
+  line-height: 20px;
+}
+.share-bar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px 8px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 25px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 6px 24px var(--shadow);
+}
+.share-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.share-bar-count {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.share-bar-manage {
+  padding: 6px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.share-bar-manage:hover {
+  background: var(--surface-muted);
+}
+.share-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.share-btn-secondary {
+  min-height: 38px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.share-btn-secondary:hover {
+  border-color: var(--line-strong);
+}
+.share-btn-primary {
+  min-height: 38px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--gold);
+  color: var(--on-gold);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.share-btn-primary:disabled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+/* 「已分享记录」管理浮层：桌面端贴右上角，手机端铺满视口。 */
+.share-sheet-dialog {
+  position: fixed;
+  inset: calc(var(--app-top, 0px) + 18px) 22px auto auto;
+  width: 470px;
+  height: 580px;
+  max-width: calc(100vw - 44px);
+  max-height: calc(var(--app-height, 100dvh) - 36px);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 16px 52px #081a184d;
+  font-size: 16px;
+}
+.share-sheet-dialog::backdrop {
+  background: #0c211833;
+}
+.share-sheet-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.share-sheet-header {
+  flex: none;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.share-sheet-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.share-sheet-title h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 30px;
+  font-weight: 650;
+}
+.share-sheet-close {
+  display: grid;
+  place-items: center;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 26px;
+}
+.share-sheet-close:hover {
+  background: var(--quote-surface);
+}
+.share-sheet-mobile-close {
+  display: none;
+}
+.share-sheet-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+.share-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 18px;
+}
+.share-sheet-empty,
+.share-sheet-status {
+  padding: 36px 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 24px;
+}
+.share-sheet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.share-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.share-card-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.share-card-preview {
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.share-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+.share-card-action {
+  padding: 5px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+}
+.share-card-action:hover {
+  background: var(--surface-muted);
+}
+.share-card-revoke {
+  padding: 5px 11px;
+  border-radius: 8px;
+  background: var(--error-soft);
+  color: var(--error);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+.share-sheet-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.share-sheet-footer kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+
+/* 公开分享阅读页：沿用森林绿画布与聊天气泡样式，提供免登录沉浸阅读体验。 */
+.shared-page {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--forest);
+}
+.shared-page .date {
+  color: var(--on-forest-muted);
+}
+.shared-header {
+  flex: none;
+  border-bottom: 1px solid #ffffff1a;
+  background: var(--forest-deep);
+}
+.shared-header-inner {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 12px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.shared-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.shared-brand-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex: none;
+}
+.shared-brand-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.shared-brand-title {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--on-forest);
+}
+.shared-brand-meta {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--on-forest-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shared-open-home {
+  flex: none;
+  padding: 7px 14px;
+  border: 1px solid var(--forest-border);
+  border-radius: 999px;
+  background: var(--forest-hover);
+  color: var(--on-forest);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.shared-open-home:hover {
+  border-color: var(--gold);
+}
+.shared-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-color: var(--forest-border) transparent;
+}
+.shared-messages {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 18px 32px calc(36px + env(safe-area-inset-bottom));
+}
+.shared-quote-hint {
+  position: fixed;
+  z-index: 10;
+  left: 50%;
+  bottom: max(24px, calc(16px + env(safe-area-inset-bottom)));
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+  box-shadow: 0 6px 20px var(--shadow);
+  white-space: nowrap;
+}
+.shared-empty-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.shared-empty-card {
+  width: 400px;
+  max-width: 100%;
+  padding: 32px 28px;
+  border-radius: 24px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 14px 40px var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+.shared-empty-card h1 {
+  font-size: 21px;
+  line-height: 30px;
+  font-weight: 600;
+}
+.shared-empty-card p {
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--text-muted);
+}
+.shared-empty-action {
+  margin-top: 8px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: var(--forest);
+  color: var(--on-forest);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (max-width: 699px) {
+  .shared-header-inner,
+  .shared-messages {
+    padding-inline: 16px;
+  }
+  .chat-list-row.is-selectable {
+    gap: 8px;
+  }
+  .share-result-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .share-result-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 600px) {
+  .share-sheet-dialog {
+    inset: var(--app-top, 0px) 0 auto;
+    width: 100%;
+    max-width: 100%;
+    height: var(--app-height, 100dvh);
+    max-height: var(--app-height, 100dvh);
+    border: 0;
+    border-radius: 0;
+  }
+  .share-sheet-header {
+    padding: calc(12px + env(safe-area-inset-top)) 18px 14px;
+  }
+  .share-sheet-close {
+    font-size: 15px;
+  }
+  .share-sheet-desktop-close,
+  .share-sheet-escape {
+    display: none;
+  }
+  .share-sheet-mobile-close {
+    display: inline;
+  }
+  .share-sheet-footer {
+    justify-content: center;
+    text-align: center;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-select-check {
+    transition: none;
+  }
+}

@@ -70,6 +70,18 @@ type Message struct {
 	SubagentID             *uuid.UUID
 }
 
+type MessageShare struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Token     string
+	CreatedAt time.Time
+}
+
+type MessageShareItem struct {
+	ShareID   uuid.UUID
+	MessageID uuid.UUID
+}
+
 type ModelCall struct {
 	ID                     uuid.UUID
 	StepID                 uuid.UUID

@@ -1,4 +1,4 @@
-// 本文件用 Virtuoso 展示聊天历史，负责翻页、一次性回底、长消息展开与引用回看。
+// 本文件用 Virtuoso 展示聊天历史，负责翻页、一次性回底、长消息展开、引用回看与分享多选勾选。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -29,10 +29,16 @@ export function ChatMessageList({
   controller,
   onQuote,
   latestRequest,
+  selectionMode = false,
+  selectedIDs,
+  onToggleSelect,
 }: {
   controller: ChatController;
   onQuote: (quote: MessageQuote) => void;
   latestRequest: number;
+  selectionMode?: boolean;
+  selectedIDs?: ReadonlySet<string>;
+  onToggleSelect?: (messageID: string, shiftKey: boolean) => void;
 }) {
   const list = useRef<VirtuosoHandle>(null);
   const viewport = useRef<HTMLDivElement | null>(null);
@@ -233,20 +239,60 @@ export function ChatMessageList({
         }}
         itemContent={(itemIndex, message) => {
           const index = itemIndex - firstItemIndex;
+          const entry = (
+            <ChatMessageEntry
+              messages={messages}
+              index={index}
+              expanded={expandedMessages.has(message.id)}
+              onExpandedChange={(expanded) => changeExpanded(message, index, expanded)}
+              onQuoteNavigate={(quote) => void navigateQuote(quote)}
+            />
+          );
+          if (!selectionMode) {
+            return (
+              <div className="chat-list-row" data-chat-row={message.id}>
+                {entry}
+              </div>
+            );
+          }
+          const selected = selectedIDs?.has(message.id) === true;
           return (
-            <div className="chat-list-row" data-chat-row={message.id}>
-              <ChatMessageEntry
-                messages={messages}
-                index={index}
-                expanded={expandedMessages.has(message.id)}
-                onExpandedChange={(expanded) => changeExpanded(message, index, expanded)}
-                onQuoteNavigate={(quote) => void navigateQuote(quote)}
-              />
+            <div
+              className={`chat-list-row is-selectable${selected ? ' is-selected' : ''}`}
+              data-chat-row={message.id}
+              onClick={(event) => {
+                if (
+                  event.target instanceof Element &&
+                  event.target.closest('button, a, dialog')
+                ) {
+                  return;
+                }
+                onToggleSelect?.(message.id, event.shiftKey);
+              }}
+            >
+              <button
+                type="button"
+                className="share-select-check"
+                role="checkbox"
+                aria-checked={selected}
+                aria-label={selected ? '取消选中此消息' : '选中此消息用于分享'}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleSelect?.(message.id, event.shiftKey);
+                }}
+              >
+                {selected && (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m5 12.5 4.5 4.5L19 7.5" />
+                  </svg>
+                )}
+              </button>
+              <div className="chat-row-content">{entry}</div>
             </div>
           );
         }}
       />
-      <QuoteSelection container={viewport} onQuote={onQuote} />
+      {!selectionMode && <QuoteSelection container={viewport} onQuote={onQuote} />}
       {!atBottom && (
         <button
           type="button"

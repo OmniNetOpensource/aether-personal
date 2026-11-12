@@ -1,4 +1,4 @@
-// 本文件是 Cloudflare Worker 入口：把聊天、只读桌面流和图片请求安全转发到后端源站，其余路径交给静态资源托管。
+// 本文件是 Cloudflare Worker 入口：把聊天、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
 
 const apiMethods = new Map([
   // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
@@ -9,13 +9,25 @@ const apiMethods = new Map([
   ['/healthz', 'GET'],
 ]);
 
+// resolveApiMethod 识别固定 API 路径与动态公开分享读取路径对应的允许 HTTP 方法。
+function resolveApiMethod(pathname) {
+  const exact = apiMethods.get(pathname);
+  if (exact) return exact;
+  if (/^\/shares\/[^/]+$/.test(pathname)) return 'GET';
+  return undefined;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const method = apiMethods.get(url.pathname);
+    const method = resolveApiMethod(url.pathname);
     if (!method) {
-      if (/^\/(auth|admin|sandbox)(\/|$)/.test(url.pathname)) {
+      if (/^\/(auth|admin|sandbox|shares)(\/|$)/.test(url.pathname)) {
         return new Response('Not found', { status: 404 });
+      }
+      // 公开分享阅读页 /s/<token> 复用 SPA 根外壳，缺失的脚本与静态资源路径仍原样返回 404。
+      if (/^\/s\/[^/]+$/.test(url.pathname) && (request.method === 'GET' || request.method === 'HEAD')) {
+        return env.ASSETS.fetch(new Request(new URL('/', url.origin), request));
       }
       return env.ASSETS.fetch(request);
     }

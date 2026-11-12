@@ -1,4 +1,4 @@
-// 本文件配置 TanStack Start 与 Rsbuild，生成静态 SPA 外壳并代理同源聊天、图片与只读桌面连接。
+// 本文件配置 TanStack Start 与 Rsbuild，生成静态 SPA 外壳并代理同源聊天、公开分享、图片文件与只读桌面连接。
 
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
@@ -18,6 +18,8 @@ export default defineConfig({
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
       '/sandbox/desktop': { target: 'http://127.0.0.1:8080', ws: true },
       '/images': { target: 'http://127.0.0.1:8080' },
+      '/files': { target: 'http://127.0.0.1:8080' },
+      '/shares': { target: 'http://127.0.0.1:8080' },
     },
   },
   // 服务端产物仅供构建时预渲染，不进入 Go 或 Cloudflare 分发的静态目录。

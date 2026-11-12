@@ -1,4 +1,4 @@
-// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送与上传，并通过事件中转提供独立的历史搜索和上下文读取。
+// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送与上传，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
@@ -6,6 +6,7 @@ import type { ClientCommand } from './ServerEventRelay.js';
 import type {
   ChatPage,
   ChatTask,
+  MessageShareSummary,
   RequestFailedCode,
   ServerEvent,
   TaskStatus,
@@ -87,6 +88,10 @@ function requestFailedMessage(code: RequestFailedCode): string {
       return '请输入 1 至 200 个字符的搜索词';
     case 'not_found':
       return '找不到这条历史消息';
+    case 'invalid_share':
+      return '请选择 1 至 200 条可分享的消息';
+    case 'share_not_found':
+      return '该分享不存在或已被取消';
   }
 }
 
@@ -291,6 +296,9 @@ export class ChatController {
       case 'code_sent':
       case 'search_results':
       case 'message_context':
+      case 'share_created':
+      case 'share_list':
+      case 'share_deleted':
         this.resolvePendingRequest(event.request_id, event);
         break;
       case 'history':
@@ -469,6 +477,37 @@ export class ChatController {
     });
     if (event.type !== 'message_context') throw new Error('历史消息返回了错误的事件类型');
     return event;
+  }
+
+  // createShare 将所选消息打包为公开只读分享链接，返回新生成的分享记录摘要。
+  async createShare(messageIDs: string[]): Promise<MessageShareSummary> {
+    const event = await this.sendRequest({
+      type: 'create_share',
+      request_id: crypto.randomUUID(),
+      message_ids: messageIDs,
+    });
+    if (event.type !== 'share_created') throw new Error('创建分享返回了错误的事件类型');
+    return event.share;
+  }
+
+  // listShares 查询当前账号已创建的全部公开分享记录。
+  async listShares(): Promise<MessageShareSummary[]> {
+    const event = await this.sendRequest({
+      type: 'list_shares',
+      request_id: crypto.randomUUID(),
+    });
+    if (event.type !== 'share_list') throw new Error('读取分享列表返回了错误的事件类型');
+    return event.shares;
+  }
+
+  // deleteShare 撤销指定的公开分享链接，使原分享地址立即失效。
+  async deleteShare(shareID: string): Promise<void> {
+    const event = await this.sendRequest({
+      type: 'delete_share',
+      request_id: crypto.randomUUID(),
+      share_id: shareID,
+    });
+    if (event.type !== 'share_deleted') throw new Error('取消分享返回了错误的事件类型');
   }
 
   // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻。

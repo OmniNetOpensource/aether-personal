@@ -17,6 +17,9 @@ export type ClientCommand =
       message_id: string;
       direction: 'around' | 'older' | 'newer';
     }
+  | { type: 'create_share'; request_id: string; message_ids: string[] }
+  | { type: 'list_shares'; request_id: string }
+  | { type: 'delete_share'; request_id: string; share_id: string }
   | { type: 'logout'; request_id: string }
   | {
       type: 'send_message';

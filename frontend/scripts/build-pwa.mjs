@@ -66,8 +66,8 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin || request.headers.has('Authorization')) return;
-  // The explicit asset list excludes all API calls, messages and authentication responses.
-  if (url.pathname === '/' || url.pathname === '/index.html') {
+  // The explicit asset list excludes all API calls, messages, shares API and authentication responses.
+  if (url.pathname === '/' || url.pathname === '/index.html' || /^\/s\/[^/]+$/.test(url.pathname)) {
     event.respondWith(caches.open(CACHE).then(async (cache) => (await cache.match('/')) || fetch(request)));
   } else if (PATHS.has(url.pathname)) {
     event.respondWith(caches.open(CACHE).then(async (cache) => (await cache.match(url.pathname)) || fetch(request)));

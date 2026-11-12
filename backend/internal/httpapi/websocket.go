@@ -39,6 +39,8 @@ type clientFrame struct {
 	Before           *uuid.UUID     `json:"before"`
 	Keyword          string         `json:"keyword"`
 	MessageID        uuid.UUID      `json:"message_id"`
+	MessageIDs       []uuid.UUID    `json:"message_ids"`
+	ShareID          uuid.UUID      `json:"share_id"`
 	Direction        string         `json:"direction"`
 	ClientMessageID  uuid.UUID      `json:"client_message_id"`
 	Text             string         `json:"text"`
@@ -377,6 +379,20 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 					response = requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: failure}
 				}
 				if err := relay.send(ctx, response); err != nil {
+					return
+				}
+			case "create_share", "list_shares", "delete_share":
+				if frame.RequestID == "" {
+					connection.Close(websocket.StatusPolicyViolation, "missing share request id")
+					return
+				}
+				if !authenticated {
+					if err := relay.send(ctx, requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: requestFailedUnauthorized}); err != nil {
+						return
+					}
+					continue
+				}
+				if !s.handleShareFrame(ctx, relay, userID, frame) {
 					return
 				}
 			case "request_code", "verify_code", "dev_login":

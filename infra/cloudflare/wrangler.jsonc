@@ -11,7 +11,7 @@
     "binding": "ASSETS",
     "run_worker_first": [
       "/auth", "/auth/*", "/messages", "/sandbox", "/sandbox/*",
-      "/ws", "/healthz", "/admin", "/admin/*"
+      "/ws", "/healthz", "/admin", "/admin/*", "/shares", "/shares/*", "/s/*"
     ]
   },
   "vars": {
