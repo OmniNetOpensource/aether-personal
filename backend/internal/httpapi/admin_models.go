@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
@@ -126,9 +125,6 @@ func (s *server) openRouterModels(ctx context.Context, apiKey string) ([]adminMo
 			TopProvider         struct {
 				MaxCompletionTokens *int32 `json:"max_completion_tokens"`
 			} `json:"top_provider"`
-			Architecture struct {
-				OutputModalities []string `json:"output_modalities"`
-			} `json:"architecture"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &catalog); err != nil {
@@ -136,8 +132,11 @@ func (s *server) openRouterModels(ctx context.Context, apiKey string) ([]adminMo
 	}
 	models := []adminModel{}
 	for _, entry := range catalog.Data {
-		if entry.ID == "" || len(entry.ID) > 160 || entry.Name == "" || utf8.RuneCountInString(entry.Name) > 200 || !slices.Contains(entry.SupportedParameters, "tools") || !slices.Contains(entry.Architecture.OutputModalities, "text") {
+		if entry.ID == "" || len(entry.ID) > 160 || !slices.Contains(entry.SupportedParameters, "tools") {
 			continue
+		}
+		if entry.Name == "" {
+			entry.Name = entry.ID
 		}
 		if entry.TopProvider.MaxCompletionTokens != nil && *entry.TopProvider.MaxCompletionTokens > 0 {
 			entry.adminModel.MaxCompletionTokens = entry.TopProvider.MaxCompletionTokens

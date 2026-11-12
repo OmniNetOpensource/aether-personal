@@ -15,7 +15,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
-// ikunClaudeModels 提供 Claude 模型候选；目录缺少能力字段时，只有已核对官方容量的 Opus 型号可以使用。
+// ikunClaudeModels 提供 Claude 模型候选；目录缺少能力字段时保持未知，不排除可用型号。
 func (s *server) ikunClaudeModels(ctx context.Context, credentials services.Settings) ([]adminModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -77,14 +77,18 @@ func (s *server) ikunClaudeModels(ctx context.Context, credentials services.Sett
 					entry.OutputTokens = 128000
 				}
 			}
-			if entry.InputTokens <= 0 || entry.OutputTokens <= 0 {
-				continue
-			}
 			if entry.Name == "" {
 				entry.Name = entry.ID
 			}
-			limit := entry.OutputTokens
-			models = append(models, adminModel{ID: "ikun:" + entry.ID, Name: entry.Name + " · ikun", Provider: "ikun Claude", ContextLength: entry.InputTokens, MaxCompletionTokens: &limit})
+			model := adminModel{ID: "ikun:" + entry.ID, Name: entry.Name + " · ikun", Provider: "ikun Claude"}
+			if entry.InputTokens > 0 {
+				model.ContextLength = entry.InputTokens
+			}
+			if entry.OutputTokens > 0 {
+				limit := entry.OutputTokens
+				model.MaxCompletionTokens = &limit
+			}
+			models = append(models, model)
 		}
 		if !page.HasMore {
 			break
@@ -95,7 +99,7 @@ func (s *server) ikunClaudeModels(ctx context.Context, credentials services.Sett
 		after = page.LastID
 	}
 	if len(models) == 0 {
-		return nil, fmt.Errorf("Claude model catalog has no models with known input and output limits")
+		return nil, fmt.Errorf("Claude model catalog has no agent model candidates")
 	}
 	return models, nil
 }

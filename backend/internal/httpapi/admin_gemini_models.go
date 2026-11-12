@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,7 +16,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
 
-// ikunGeminiModels 提供 Gemini 文本候选，排除图片、语音等专用模型；目录明确不支持 generateContent 时不显示。
+// ikunGeminiModels 提供 Gemini 模型候选，处理分页并提供输入、输出容量。
 func (s *server) ikunGeminiModels(ctx context.Context, credentials services.Settings) ([]adminModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -66,10 +65,7 @@ func (s *server) ikunGeminiModels(ctx context.Context, credentials services.Sett
 		}
 		for _, entry := range page.Models {
 			name := strings.TrimPrefix(entry.Name, "models/")
-			if !strings.HasPrefix(name, "gemini-") || strings.ContainsAny(name, "/?#:") || len(name) > 155 || (len(entry.GenerationMethods) > 0 && !slices.Contains(entry.GenerationMethods, "generateContent")) {
-				continue
-			}
-			if slices.ContainsFunc([]string{"image", "tts", "native-audio", "robotics", "computer-use", "embedding"}, func(suffix string) bool { return strings.Contains(name, suffix) }) || seenModels[name] {
+			if !strings.HasPrefix(name, "gemini-") || strings.ContainsAny(name, "/?#:") || len(name) > 155 || seenModels[name] {
 				continue
 			}
 			seenModels[name] = true
