@@ -24,7 +24,7 @@
 
 - 消息、任务、记忆和轨迹 100% 保存在 PostgreSQL，进程与 Redis 均不保存业务持久状态。
 - WebSocket 负载均衡无需配置 Sticky Session：HTTP `Upgrade` 完成后即固定在所连容器，跨容器实时推送通过 Redis Pub/Sub 频道 `chat:notify` 广播用户 ID，持有该用户连接的容器收到后各自查表推送。
-- 用户消息提交后，`Manager.Wake` 通过单次 Redis Pipeline 同时发布 `chat:notify`（聊天推送）、`agent:input`（跨实例打断未占位思考）与 `agent:wake_queue`（唤醒空闲容器竞争消费）。
+- 用户消息提交后，`Manager.Wake` 通过单次 Redis Pipeline 发布 `agent:input`（跨实例打断未占位思考）并去重推入 `agent:wake_queue`（唤醒空闲容器竞争消费）。
 - PostgreSQL 不再占用池外 `LISTEN` 长连接，完全回归短事务读写。
 
 ## 一条消息的完整路径
@@ -42,17 +42,20 @@ sequenceDiagram
     WS-->>App: ready {authenticated, history, change_cursor}
     App->>WS: send_message {client_message_id, parts}
     WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence）
-    WS->>Redis: Pipeline：PUBLISH chat:notify + agent:input，去重入队 wake_queue
-    WS-->>App: messages {这条用户消息, main_thinking}
+    WS->>Redis: Pipeline：PUBLISH agent:input，去重入队 wake_queue
+    WS-->>App: messages {这条用户消息, main_thinking: false}
     WS-->>App: delivered {client_message_id}
     Redis-->>Runner: BLPOP 取出 user_id，抢租约并递增 main_lease_epoch
+    Runner->>Redis: 抢锁成功，PUBLISH chat:notify
+    Redis-->>WS: 收到该用户广播，唤醒连接查表
+    WS-->>App: messages {main_thinking: true}
     Runner->>DB: 读取上下文
     Runner->>Model: 指令注入（不可见 user）+ 按组装规则展开的原生消息 + 工具
     Model-->>Runner: assistant 消息（正文即回复，可含工具调用）
     Runner->>DB: 事务：校验 main_lease_epoch，保存模型输出与工具结果
-    Runner->>Redis: PUBLISH chat:notify
+    Runner->>Redis: 释放租约，PUBLISH chat:notify
     Redis-->>WS: 收到该用户广播，唤醒连接查表
-    WS-->>App: messages {Main 的回复}
+    WS-->>App: messages {Main 的回复, main_thinking: false}
 ```
 
 ### 用户发消息
@@ -61,7 +64,7 @@ sequenceDiagram
 2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用和图片组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 64,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。2026-11-08，用户把这一上限从 32,000 调到 64,000。
 3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存。
 4. 先把这条消息推给当前连接，再在同一连接上回复 `delivered`。顺序反过来时，输入框清空与消息出现在列表之间会有一瞬间两边都看不到这条消息。App 收到 `delivered` 即发送成功，输入框清空；15 秒未收到或连接断开即发送失败，输入框显示错误并保留内容，再按发送就用同一个 `client_message_id` 重发。
-5. 调用 `Manager.Wake` 通过 Redis Pipeline 同时广播 `chat:notify`（让该用户的其他设备连接收到消息）、广播 `agent:input`（若该用户的 Runner 正在任一容器思考则立即打断重读）并将用户去重推入 `agent:wake_queue` 供空闲容器消费。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
+5. 调用 `Manager.Wake` 通过 Redis Pipeline 广播 `agent:input`（若该用户的 Runner 正在任一容器思考则立即打断重读）并将用户去重推入 `agent:wake_queue` 供空闲容器消费。空闲 Runner 抢到 Redis 执行租约后广播 `chat:notify` 亮起思考气泡；运行结束释放租约后再次广播收起思考气泡并推回 AI 回复。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
 
 ## WebSocket
 
@@ -183,7 +186,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 2026-10-23，用户要求：“我希望main在thinking的时候，展示小气泡”。聊天列表底部显示一个与 Main 消息同色的小气泡，三个圆点依次浮动；完成、失败或断线后收起。不新增聊天消息，不展示思考内容，也不根据回复文本或固定计时猜测是否结束。
 
-WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 有待处理的工作时为 true（2026-11-02 起以 `main_work` 判断：最新一条消息是用户消息、工具回执或带工具调用的 assistant 消息，且不在失败停住状态），覆盖排队、模型调用与工具执行；Main 已停下时为 false。状态依据数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Main 运行退出时通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
+WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 持有 Redis 执行租约或有运行中的后台 Subagent 时为 true（2026-11-12 起由持有租约与后台运行状态决定，排队等待领单期间保持 false，真正认领开跑时才亮起）；Main 已释放租约且无运行中 Subagent 时为 false。状态依据 Redis 租约与数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Runner 抢占租约与释放租约时均通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
 
 前端尊重系统的减少动画设置；用户上翻历史时，不因气泡变化强制滚动。读屏标签为“Aether 正在思考”。选择理由是用户能确认 Main 仍在处理，同时保持只有消息列表和输入框的界面。
 

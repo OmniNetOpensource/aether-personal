@@ -505,8 +505,8 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在事务里落库，提交后经 Redis 跨实例广播聊天更新并唤醒 Agent；
-// 成功后先把这条消息推给本连接，再回 delivered 确认，前端清空输入框时消息已经在列表里。
+// saveUserMessage 在事务里落库，提交后将用户推入 Redis 唤醒队列并广播打断；
+// 随后把这条消息推给本连接并回 delivered 确认，前端清空输入框时消息已经在列表里，Runner 认领后另行通知亮起思考气泡。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
 	var sequence int64
@@ -566,8 +566,17 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		slog.Error("list chat tasks failed", "user_id", userID, "error", err)
 		return err
 	}
+	thinking := (s.agents != nil && s.agents.HasActiveLease(ctx, userID))
+	if !thinking {
+		subagentsRunning, err := s.queries.HasRunningSubagents(ctx, userID)
+		if err != nil {
+			slog.Error("check running subagents failed", "user_id", userID, "error", err)
+			return err
+		}
+		thinking = subagentsRunning
+	}
 	return relay.send(ctx, messagesEvent{
-		Type: "messages", MainThinking: status.Thinking, MainFailed: status.Failed, Tasks: tasks, ChangeCursor: *changeCursor,
+		Type: "messages", MainThinking: thinking, MainFailed: status.Failed, Tasks: tasks, ChangeCursor: *changeCursor,
 		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows)},
 	})
 }

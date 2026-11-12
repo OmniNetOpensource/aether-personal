@@ -71,6 +71,15 @@ func leaseKey(userID uuid.UUID) string {
 	return "agent:lease:" + userID.String()
 }
 
+// HasActiveLease 检查指定用户的 Main 是否正被任一实例持有有效执行租约。
+func (m *Manager) HasActiveLease(ctx context.Context, userID uuid.UUID) bool {
+	if m == nil || m.redisClient == nil {
+		return false
+	}
+	count, err := m.redisClient.Exists(ctx, leaseKey(userID)).Result()
+	return err == nil && count > 0
+}
+
 // Manager 在对等实例内分别管理 Main 与 Subagent 的独立并发槽位和活跃 Runner，保证后台 Subagent 不会挤占 Main 响应用户消息的容量。
 type Manager struct {
 	databasePool  *pgxpool.Pool
@@ -113,7 +122,7 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 	}
 }
 
-// Wake 在新输入或 subagent_event 提交后单次往返广播聊天推送、跨实例思考打断信号与去重唤醒队列；使用独立超时避免客户端断线截断信号。
+// Wake 在新输入或 subagent_event 提交后广播跨实例思考打断信号并将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
 func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
 	m.mutex.Lock()
 	runner := m.runners[userID]
@@ -126,7 +135,6 @@ func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
 	defer cancel()
 	userText := userID.String()
 	pipeline := m.redisClient.Pipeline()
-	pipeline.Publish(wakeCtx, ChatNotifyChannel, userText)
 	pipeline.Publish(wakeCtx, agentInputChannel, fmt.Sprintf("%s:%d", userText, sequence))
 	pipeline.Eval(wakeCtx, enqueueWakeLua, []string{agentWakeQueueKey}, userText)
 	if _, err := pipeline.Exec(wakeCtx); err != nil {
@@ -473,6 +481,8 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 			m.keepKeyLeaseAlive(renewCtx, key, leaseToken, cancelRunner)
 		}()
 
+		runner.notifyChat()
+
 		runErr := runner.run(runnerCtx)
 		stopRenew()
 		<-renewDone
@@ -482,6 +492,8 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		delete(m.runners, userID)
 		m.mutex.Unlock()
 		m.releaseKeyLease(key, leaseToken)
+
+		runner.notifyChat()
 
 		lostLease := errors.Is(runErr, errLostLease) || errors.Is(context.Cause(runnerCtx), errLostLease)
 		if !lostLease {
@@ -604,6 +616,8 @@ func (m *Manager) tryStartSubagentRunner(ctx context.Context, subagentID uuid.UU
 			m.keepKeyLeaseAlive(renewCtx, key, leaseToken, cancelRunner)
 		}()
 
+		runner.notifyChat()
+
 		runErr := runner.run(runnerCtx)
 		stopRenew()
 		<-renewDone
@@ -613,6 +627,8 @@ func (m *Manager) tryStartSubagentRunner(ctx context.Context, subagentID uuid.UU
 		delete(m.subagentStops, subagentID)
 		m.mutex.Unlock()
 		m.releaseKeyLease(key, leaseToken)
+
+		runner.notifyChat()
 
 		lostLease := errors.Is(runErr, errLostLease) || errors.Is(context.Cause(runnerCtx), errLostLease)
 		cancelled := errors.Is(context.Cause(runnerCtx), errSubagentCancelled)

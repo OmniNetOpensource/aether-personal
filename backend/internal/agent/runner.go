@@ -142,9 +142,8 @@ const (
 
 // run 是 agent loop：在独占协程里一轮轮执行三个阶段，直到当前 Agent 没有活（Main 还会检查收尾任务提醒）。
 // 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
+// 启动与结束时的聊天通知由 Manager 调度层在租约生效后与释放后统一触发。
 func (r *Runner) run(parent context.Context) error {
-	// 运行结束刷新聊天连接的消息与三点思考气泡状态（含后台 Subagent 结束时的状态收起）。
-	defer r.notifyChat()
 	hasWork, err := r.hasWork(parent)
 	if err != nil {
 		return fmt.Errorf("check agent work: %w", err)
