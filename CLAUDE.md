@@ -53,6 +53,30 @@ sqlc generate          # 修改 db/queries 后重新生成
 go build ./... && go vet ./...
 ```
 
+## 排查生产
+
+接到线上排查任务时，从仓库根目录调用 `python3 infra/prod/inspect-prod.py`。CLI 读取 `.local/publish.json`，复用发布用的公网地址和 SSH 配置。接入方式见[生产部署](docs/wiki/09-deployment.md#一键更新现有部署)。
+
+- 用 `python3 infra/prod/inspect-prod.py health` 查公网 `/healthz` 的 HTTP 状态和正文。这个端点检查 PostgreSQL 和 Redis 的连通性。
+- 用 `python3 infra/prod/inspect-prod.py status` 查生产容器状态、健康检查结果和镜像版本。输出为 JSON Lines。
+- 用 `python3 infra/prod/inspect-prod.py logs --since 30m --tail 200` 查两个 Go API 容器的近期日志。用 `--service api-1` 或 `--service api-2` 选单个实例。按绝对时间查询时，给 `--since` 和 `--until` 传带时区的 RFC 3339 时间。
+- 用 `python3 infra/prod/inspect-prod.py sql` 查持久状态。通过 stdin 传入一条返回结果集的 SQL 查询。PostgreSQL 在只读事务中执行，`psql` 输出带表头的 CSV，时间字段按 UTC 显示。按问题选择列和时间窗口，使用 `LIMIT` 控制结果量。
+
+例如，按以下方式查最近的模型调用。
+
+```sh
+python3 infra/prod/inspect-prod.py sql <<'SQL'
+SELECT id, user_id, step_id, requested_model, outcome, http_status,
+       started_at, finished_at, duration_ms, output_tokens
+FROM model_calls
+WHERE started_at >= now() - interval '1 hour'
+ORDER BY started_at DESC, id DESC
+LIMIT 30;
+SQL
+```
+
+在[生产管理看板](https://admin-aether.forkicks.fun)按用户和时间定位调用，用 `model_calls.id` 核对调用详情，再查看请求、响应和关联工具轨迹。到容器日志里找同一次故障时，用该记录的 `user_id` 和调用时间附近的窗口匹配。
+
 ## 约定
 
 - 基础设施启动配置只来自环境变量；管理员在看板选择的模型和服务凭证持久化到数据库，服务 Key 不回退环境变量。`SERVICE_ENCRYPTION_KEY` 由部署端提供并单独备份；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。缺少服务 Key 时允许进入看板补齐，调用该服务时报未配置。
