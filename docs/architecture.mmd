@@ -1,6 +1,6 @@
 flowchart TD
     subgraph L1["第一层：TanStack Start Web 应用 · 移动端 PWA"]
-        CLIENT["Main 聊天界面：WebSocket · 历史搜索 · 离线草稿 · 账号退出"]
+        CLIENT["Main 聊天界面：WebSocket · 任务进展 · 历史搜索 · 离线草稿 · 账号退出"]
         DESKTOP_UI["只读实时桌面（noVNC / RFB）<br/>按工作区绑定显示入口"]
     end
 
@@ -8,47 +8,55 @@ flowchart TD
         API["API：聊天 WebSocket · 图片/文件上传 · 只读桌面流 · 管理接口"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送 · 页面历史搜索"]
         IMAGES["存储与缓存：私有 OSS 读写签名 · Redis 共享图片缓存"]
-        MANAGER["Manager：对等实例调度<br/>BLPOP 竞争取活 · 租约续期 · 本机字典打断思考 · 5 秒补偿"]
-        REDIS[("Redis 8（纯内存无持久化）：唤醒队列 · 用户临时租约 · 思考打断与聊天推送 Pub/Sub · oss:// 图片缓存")]
-        DB[("PostgreSQL：消息历史 · 租约栅栏代数 · 需求队列 · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
+        MANAGER["Manager：对等实例双队列调度<br/>Main 与 Subagent 独立槽位池 · 租约续期 · 思考打断与子代理取消 · 5 秒补偿"]
+        REDIS[("Redis 8（纯内存无持久化）：Main/Subagent 唤醒队列 · 临时租约 · 思考打断/取消/聊天推送 Pub/Sub · oss:// 图片缓存")]
+        DB[("PostgreSQL：消息历史 · Main/Subagent 栅栏代数 · 并行需求队列 · 后台 Subagent · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
 
-        subgraph MAINBOX["每用户固定一个 Main Agent"]
-            MAIN["Main Runtime：三阶段 Agent Loop · messageList 上下文 · 写库核对栅栏代数"]
-            TASKS["需求队列：登记输入 · 自主选择与让位<br/>每用户一项执行中"]
-            SEARCH["search_message"]
-            READ["read_message"]
-            MEMORY["memory 工具渐进加载<br/>需要时先读 memory.md 索引 · 再读相关主题"]
+        subgraph MAINBOX["每用户固定一个 Main + 按需并行后台 Subagent"]
+            MAIN["Main Runtime：三阶段 Agent Loop · 编排与电脑执行 · 把关与直通转发"]
+            SUB["Subagent Runtime：独立上下文 · 每用户最多 5 并发 / 15 分钟上限<br/>只读联网调研 · 历史检索 · 只读 memory view"]
+            TASKS["需求队列：登记输入 · 支持多项独立任务并行 in_progress"]
+            SEARCH["search_message / read_message"]
+            MEMORY["memory 工具渐进加载<br/>Main 读写 · Subagent 只读 view"]
             SCHEDULE["schedule 工具<br/>一次性 / 周期 cron 定时任务"]
 
-            MAIN <-->|"登记补充 / 切换与更新状态"| TASKS
-            MAIN <-->|"搜索 / 消息 ID"| SEARCH
-            MAIN <-->|"读取 / 完整内容"| READ
+            MAIN -->|"spawn_subagent 异步派发 / cancel_subagent 中止"| SUB
+            SUB -->|"结束时原子写入 subagent_event 唤醒"| MAIN
+            MAIN <-->|"登记补充 / 并行启动与结项"| TASKS
+            MAIN <-->|"搜索与按 ID 读取"| SEARCH
+            SUB <-->|"只读检索主对话历史"| SEARCH
             MAIN <-->|"根索引与主题按需读写"| MEMORY
+            SUB -->|"只读 view"| MEMORY
             MAIN <-->|"创建 / 列出 / 修改 / 删除安排"| SCHEDULE
-            MAIN -->|"正文或独立文件气泡回复用户"| MESSAGES
+            MAIN -->|"正文 · forward_subagent 零损耗直通 · 独立文件气泡"| MESSAGES
         end
 
-        TOOLS["Main 执行工具<br/>联网：search · search_twitter · fetch_url · read_image<br/>电脑：sandbox_* · browser_* · sandbox_import_file · sandbox_send_file"]
-        MAIN <-->|"工具调用 / 结果"| TOOLS
+        WEB_TOOLS["只读联网工具（Main 与 Subagent 共用）<br/>search · search_twitter · fetch_url · read_image"]
+        PC_TOOLS["个人电脑工具（仅 Main 单线程有序执行）<br/>sandbox_* · browser_* · sandbox_import_file · sandbox_send_file"]
+        MAIN <-->|"工具调用 / 结果"| WEB_TOOLS
+        SUB <-->|"并行调研调用 / 结果"| WEB_TOOLS
+        MAIN <-->|"有序串行调用 / 结果"| PC_TOOLS
         API <-->|"用户输入 / 历史搜索 / 对外消息与事件"| MESSAGES
         API <-->|"POST /images · POST /files"| IMAGES
         IMAGES <-->|"oss:// 键读写与容量淘汰"| REDIS
         MESSAGES <-->|"保存与读取消息"| DB
         MESSAGES <-->|"发布与订阅 chat:notify"| REDIS
         MESSAGES -->|"输入提交后唤醒"| MANAGER
-        MANAGER <-->|"唤醒队列 / 租约锁 / agent:input 打断"| REDIS
-        MANAGER -->|"抢锁后递增代数 / 周期读取 main_work"| DB
-        MANAGER -->|"按本机容量启动该用户的 Runner"| MAIN
-        MAIN <-->|"载入 messageList / 校验代数保存本轮轨迹"| DB
+        MANAGER <-->|"双唤醒队列 / 租约锁 / 打断与取消广播"| REDIS
+        MANAGER -->|"抢锁后递增代数 / 周期恢复待办"| DB
+        MANAGER -->|"按独立槽位启动 Main 或 Subagent Runner"| MAIN
+        MANAGER -->|"单用户 5 并发上限内启动"| SUB
+        MAIN <-->|"用户锁与代数校验保存轨迹"| DB
+        SUB <-->|"独立 Subagent 锁保存轨迹"| DB
         MAIN <-->|"发送前将 oss:// 解析为 base64"| IMAGES
+        SUB <-->|"发送前将 oss:// 解析为 base64"| IMAGES
 
         TASKS <-->|"任务与状态 / 回执同事务"| DB
-        SEARCH <-->|"按用户搜索历史"| DB
-        READ <-->|"按 ID 读取"| DB
+        SEARCH <-->|"按用户搜索主对话历史"| DB
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
         SCHEDULE <-->|"安排与回执同事务"| DB
 
-        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 闲置后台反思"]
+        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 无后台运行时的闲置反思"]
         SCHEDULER <-->|"行锁防重插入不可见 schedule_event / reflection"| DB
         SCHEDULER -->|"插入后经 Redis 唤醒"| MANAGER
     end
@@ -60,12 +68,13 @@ flowchart TD
         SANDBOX["阿里云 FC Sandbox + AgenticFS<br/>持久 /mnt/workspace · AIO MCP · VNC"]
     end
 
-    ADMIN["管理看板：admin/ · 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
-    ADMIN <-->|"独立密码登录 / 时间线、调用详情与配置"| API
+    ADMIN["管理看板：admin/ · Main/Subagent 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
+    ADMIN <-->|"独立密码登录 / Main 与 Subagent 轨迹、调用详情与配置"| API
     CLIENT <-->|"Caddy 轮询与健康检查 / WebSocket 登录、历史、收发与推送"| API
     DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API
     API <-->|"被动观察桌面流（不唤醒实例）"| SANDBOX
     IMAGES <-->|"流式读写与临时签名"| OSS
-    MAIN <-->|"模型推理与独立上下文压缩"| MODEL
-    TOOLS <-->|"联网搜索与网页读取"| EXTERNAL
-    TOOLS <-->|"按需导入附件 · 有序执行命令/浏览器 · 发回产物"| SANDBOX
+    MAIN <-->|"Main 推理与独立上下文压缩"| MODEL
+    SUB <-->|"Subagent 推理（默认跟随 Main，看板可独立配置）"| MODEL
+    WEB_TOOLS <-->|"联网搜索与网页读取"| EXTERNAL
+    PC_TOOLS <-->|"按需导入附件 · 有序执行命令/浏览器 · 发回产物"| SANDBOX

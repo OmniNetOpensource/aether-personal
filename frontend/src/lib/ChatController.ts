@@ -101,6 +101,8 @@ interface PendingRequest {
 export class ChatController {
   messages: ChatMessage[] = [];
   tasks: ChatTask[] = [];
+  // taskReplyDrafts 按任务 ID 暂存浮层中等待回复卡片的未发送草稿，收起浮层查看历史时不丢失输入。
+  taskReplyDrafts = new Map<string, string>();
   initializing = true;
   connected = false;
   mainThinking = false;
@@ -243,6 +245,7 @@ export class ChatController {
           this.connected = false;
           this.desktopAvailable = false;
           this.tasks = [];
+          this.taskReplyDrafts.clear();
           if (this.token) {
             this.token = null;
             clearSession();
@@ -337,6 +340,7 @@ export class ChatController {
     this.hasMoreHistory = true;
     this.messages = [];
     this.tasks = [];
+    this.taskReplyDrafts.clear();
     clearSession();
   }
 

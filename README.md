@@ -2,7 +2,7 @@
 
 以维护者自用为主的开源 personal agent 项目：首要目标是维护者自己长期使用，其他人也可以自行部署，或使用维护者向公众开放的实例。欢迎其他开发者参与。交付范围为用户提供的完整三层架构，覆盖纯 Web/PWA 客户端、Go 后端、PostgreSQL、Agent 与外部工具，以及 dev/prod 环境。
 
-当前版本包含邮箱验证码登录、Main 长期对话、页面与 Agent 历史检索、主题记忆、持久化需求队列、定时任务与闲置后台反思、联网搜索与网页/图片读取、阿里云 FC + AgenticFS 持久化个人电脑（含只读实时桌面与双向文件流转），以及 Poke 式的全屏 Web 聊天界面与独立管理看板。用户界面只显示与 Main 的消息和交付文件，工具过程留在后台。技术实现由开发者判断，产品决策先与用户确认。2026-11-02 起 Subagent 已整体删除，系统只有 Main。
+当前版本包含邮箱验证码登录、Main 长期对话、异步后台并行 Subagent（带零损耗直通转发）、页面与 Agent 历史检索、主题记忆、支持并行推进的持久化需求队列、定时任务与闲置后台反思、联网搜索与网页/图片读取、阿里云 FC + AgenticFS 持久化个人电脑（含只读实时桌面与双向文件流转），以及 Poke 式的全屏 Web 聊天界面与独立管理看板。用户界面只显示与阿芒的消息和交付文件，工具与子代理过程留在后台。技术实现由开发者判断，产品决策先与用户确认。
 
 ## 已确认方向
 
@@ -20,14 +20,14 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter、ikun Gemini 与 ikun Claude；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，压缩可单独指定模型 |
+| 模型服务 | OpenRouter、ikun Gemini 与 ikun Claude；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，后台 Subagent 与上下文压缩均可单独指定模型（留空跟随 Main） |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
 | 首次登录 | 新邮箱验证成功后自动创建用户 |
 | Main Agent | 每用户固定一个逻辑 Main，按用户串行运行，状态持久化到 PostgreSQL |
 | 调度与停机 | 对等无状态后端容器经 Redis 竞争消费与续期租约、以 `users.main_lease_epoch` 校验写库防脑裂；停机信号一到即取消本地运行、释放租约并重入队由存活容器接手，见 [对等多实例调度与停机交接](docs/wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
-| 需求队列 | `tasks` 持久化需求；补充更新原任务、新目标排队，当前任务结束后由模型读取任务列表选择下一项；前端通过输入框上方胶囊与右上角只读浮层实时展示任务进展；只管理任务要求与状态，不绑定回答或文件产物，本地开发中 |
+| 需求队列与并行 Subagent | `tasks` 持久化需求，支持多项独立的调研与分析任务同时标为 `in_progress` 并交由独立上下文的后台 Subagent 异步并行执行，跑完后经 `subagent_event` 唤醒 Main，由 `forward_subagent` 零改写损耗直发聊天并结项（个人沙箱电脑任务仍由 Main 单线程串行执行）；前端通过输入框上方胶囊与右上角浮层实时展示任务进展 |
 | 主对话上下文 | 每用户一条长期主对话，使用同一份 `messageList` |
 | 主题记忆 | 不自动注入记忆，Main 需要时通过 `memory` 先读根索引、再读相关主题；明确的长期偏好与约定默认自动维护，详细主题通过单一 `memory` 工具按需读写 |
 | Linux 沙盒工作环境 | 阿里云 FC Agent Sandbox + AgenticFS 持久 `/mnt/workspace`，支持只读实时桌面观看与 50 MB 聊天双向文件互传，见 [沙盒与文件流转](docs/wiki/07-sandbox.md) |
@@ -146,4 +146,4 @@ make db-down   # 停止本地容器
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板合并为「运行过程」与「配置」两页：可按用户、时间范围、模型与请求结果筛选查看 Main 的输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话与压缩模型、压缩阈值、闲置后台反思时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话、Subagent 与压缩模型、压缩阈值、闲置后台反思时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

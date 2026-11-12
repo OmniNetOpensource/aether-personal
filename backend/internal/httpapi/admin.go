@@ -1,4 +1,4 @@
-// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表、模型候选、Main 状态以及单次模型调用的请求与响应正文。
+// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表、模型候选、Main 与 Subagent 状态以及单次模型调用的请求与响应正文。
 
 package httpapi
 
@@ -21,6 +21,7 @@ import (
 type adminFilters struct {
 	From, To       time.Time
 	UserID         *uuid.UUID
+	SubagentID     *uuid.UUID
 	Model, Outcome *string
 }
 
@@ -38,12 +39,22 @@ type adminAgentStatus struct {
 	Status string    `json:"status"`
 }
 
+// adminSubagent 是选中用户的单个后台 Subagent 状态摘要，供看板运行过程页切换查看。
+type adminSubagent struct {
+	ID         uuid.UUID  `json:"id"`
+	Title      string     `json:"title"`
+	Status     string     `json:"status"`
+	Error      *string    `json:"error,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
 // adminMe 返回当前共享管理员会话的显示名称。
 func (s *server) adminMe(w http.ResponseWriter, r *http.Request) {
 	writeAdminJSON(w, map[string]string{"name": "管理员"})
 }
 
-// parseAdminFilters 校验看板提交的时间窗口、用户、模型与请求结果筛选参数。
+// parseAdminFilters 校验看板提交的时间窗口、用户、Subagent、模型与请求结果筛选参数。
 func parseAdminFilters(r *http.Request) (adminFilters, error) {
 	values := r.URL.Query()
 	filter := adminFilters{To: time.Now().UTC()}
@@ -71,6 +82,13 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 			return filter, fmt.Errorf("invalid user_id")
 		}
 		filter.UserID = &id
+	}
+	if value := values.Get("subagent_id"); value != "" {
+		id, err := uuid.Parse(value)
+		if err != nil {
+			return filter, fmt.Errorf("invalid subagent_id")
+		}
+		filter.SubagentID = &id
 	}
 	if value := values.Get("model"); value != "" {
 		if !utf8.ValidString(value) || strings.ContainsRune(value, 0) || utf8.RuneCountInString(value) > 160 {
@@ -109,7 +127,7 @@ func writeAdminJSON(w http.ResponseWriter, value any) {
 	json.NewEncoder(w).Encode(value)
 }
 
-// adminSnapshot 返回看板筛选栏所需的用户、模型候选，以及当前选中用户的 Main 运行状态。
+// adminSnapshot 返回看板筛选栏所需的用户、模型候选，以及当前选中用户的 Main 与近期 Subagent 状态。
 func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseAdminFilters(r)
 	if err != nil {
@@ -142,6 +160,7 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		users = append(users, adminUser{ID: row.ID, Email: row.Email, CreatedAt: row.CreatedAt})
 	}
 	agents := []adminAgentStatus{}
+	subagents := []adminSubagent{}
 	if filter.UserID != nil {
 		agent, err := queries.GetAdminAgentStatus(ctx, *filter.UserID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -150,6 +169,20 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil {
 			agents = append(agents, adminAgentStatus{UserID: agent.UserID, Email: agent.Email, Status: agent.Status})
+		}
+		subagentRows, err := queries.ListAdminSubagents(ctx, *filter.UserID)
+		if err != nil {
+			internalError(w, "read admin subagents failed", err)
+			return
+		}
+		for _, row := range subagentRows {
+			subagents = append(subagents, adminSubagent{
+				ID:         row.ID,
+				Title:      row.Title,
+				Status:     row.Status,
+				StartedAt:  row.StartedAt,
+				FinishedAt: row.FinishedAt,
+			})
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -163,6 +196,7 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot["users"] = map[string]any{"items": users}
 	snapshot["agents"] = map[string]any{"items": agents}
+	snapshot["subagents"] = map[string]any{"items": subagents}
 	writeAdminJSON(w, snapshot)
 }
 

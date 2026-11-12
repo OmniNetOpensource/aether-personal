@@ -1,4 +1,4 @@
--- 本文件提供消息写入、上下文、步骤记账、租约代数和持久待办查询；短事务用户锁保证消息顺序，执行代数防止跨实例脑裂覆盖。
+-- 本文件提供 Main 与 Subagent 的消息写入、上下文隔离读取、步骤记账、租约代数和持久待办查询。
 
 -- name: LockUserMessages :exec
 -- 事务内持有，提交时释放：同一用户的插入与代数校验排队进行，保证顺序一致且不死锁。
@@ -33,57 +33,67 @@ WHERE user_id = sqlc.arg(user_id) AND client_message_id = sqlc.arg(client_messag
     AND NOT EXISTS (SELECT 1 FROM inserted);
 
 -- name: ListMainWork :many
--- 启动与周期补查只读取业务待办，不再维护实例目录或临时执行归属。
+-- 启动与周期补查只读取 Main 的业务待办，排除 Subagent 自己的内部消息。
 SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
-    WHERE m.user_id = w.user_id AND m.role = 'user' AND NOT m.is_summary
+    WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
         AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
 FROM main_work AS w ORDER BY w.user_id;
 
 -- name: InsertAgentMessage :exec
-INSERT INTO messages (user_id, role, content, step_id, sender, visible)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, sender, visible)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: HasNewMainInput :one
--- 只比较实际投递的输入，摘要和工具回执不打断生成。
-SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id)
+-- 只比较投给 Main 的实际输入，摘要、工具回执与 Subagent 消息不打断 Main 生成。
+SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id) AND subagent_id IS NULL
     AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
     AND sequence > sqlc.arg(through)::bigint);
 
 -- name: ReserveMainReply :one
--- 回答独立保存，不关联任务；任务状态只由任务工具维护。
-INSERT INTO messages (user_id, role, content, step_id, generating)
-VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id;
+-- Main 与 Subagent 共用生成中占位（subagent_id 为空即 Main）；Subagent 最终结果永远保持 visible = false。
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, generating)
+VALUES ($1, $2, 'assistant', '{"role":"assistant"}', $3, true) RETURNING id;
 
 -- name: CompleteMainReply :exec
 UPDATE messages SET content = $2, generating = false, visible = $3
 WHERE id = $1 AND generating;
 
 -- name: DiscardGeneratingReply :exec
-DELETE FROM messages WHERE user_id = $1 AND generating;
+DELETE FROM messages
+WHERE user_id = sqlc.arg(user_id)
+    AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+    AND generating;
 
 -- name: HasMainWork :one
--- 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
+-- 判断 Main 自身是否有待处理消息。
 SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid);
 
 -- name: GetMainStatus :one
--- 失败位置覆盖最新消息时保持失败提示；新输入推进序号后自然清除，重连也能还原。
-SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid) AS thinking,
+-- 只要 Main 或任意后台 Subagent 仍在运行，聊天界面的处理中提示保持亮起；失败判断只对照 Main 自己的消息序号。
+SELECT (
+    EXISTS (SELECT 1 FROM main_work WHERE user_id = sqlc.arg(user_id)::uuid)
+    OR EXISTS (SELECT 1 FROM subagents WHERE user_id = sqlc.arg(user_id)::uuid AND status = 'running')
+)::boolean AS thinking,
     EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id)::uuid
-        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = sqlc.arg(user_id)::uuid)) AS failed;
+        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = sqlc.arg(user_id)::uuid AND subagent_id IS NULL)) AS failed;
 
 -- name: MarkMainFailed :exec
--- 记下失败时最后一条消息的序号，之后有新消息才再次运行。
-UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = sqlc.arg(user_id)::uuid)
+-- 记下 Main 失败时自身最后一条消息的序号，之后有新的 Main 输入才再次运行。
+UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = sqlc.arg(user_id)::uuid AND m.subagent_id IS NULL)
 WHERE id = sqlc.arg(user_id)::uuid;
 
 -- name: ListAgentContextRows :many
 WITH summary AS (
  SELECT id, summary_through_sequence FROM messages
- WHERE user_id = sqlc.arg(user_id) AND is_summary
+ WHERE user_id = sqlc.arg(user_id)
+   AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+   AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
-WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
+WHERE m.user_id = sqlc.arg(user_id)
+ AND m.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+ AND NOT m.generating
  -- 旧原型的自动根快照留作历史审计，不再进入普通请求或 compact；主动读取记忆产生的工具回执仍正常保留。
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
@@ -93,8 +103,8 @@ WHERE m.user_id = sqlc.arg(user_id) AND NOT m.generating
 ORDER BY m.is_summary DESC, m.sequence;
 
 -- name: StartStep :one
-INSERT INTO steps (user_id, model, started_at)
-VALUES ($1, $2, now())
+INSERT INTO steps (user_id, subagent_id, model, started_at)
+VALUES ($1, $2, $3, now())
 RETURNING id;
 
 -- name: FinishStep :exec
@@ -103,7 +113,9 @@ WHERE id = $1 AND finished_at IS NULL;
 
 -- name: FailUnfinishedSteps :exec
 UPDATE steps SET error = sqlc.arg(error), finished_at = now()
-WHERE user_id = sqlc.arg(user_id) AND finished_at IS NULL;
+WHERE user_id = sqlc.arg(user_id)
+  AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+  AND finished_at IS NULL;
 
 -- name: ListChatRowsAfter :many
 -- 连接已确认的变更序号之后，包含先占位、现在才公开的旧行。
@@ -130,15 +142,16 @@ SELECT coalesce(max(coalesce(chat_updated_sequence, sequence)), 0)::bigint FROM 
 SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2;
 
 -- name: StartCompactStep :one
-INSERT INTO steps (user_id, model, started_at, purpose)
-VALUES ($1, $2, now(), 'compact') RETURNING id;
+INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
+VALUES ($1, $2, $3, now(), 'compact') RETURNING id;
 
 -- name: InsertContextSummary :exec
-INSERT INTO messages (user_id, role, content, step_id, is_summary, summary_through_sequence)
-VALUES ($1, 'user', $2, $3, true, $4);
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)
+VALUES ($1, $2, 'user', $3, $4, true, $5);
 
 -- name: GetLastContextUsage :one
 SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM model_calls WHERE user_id = sqlc.arg(user_id)
+ AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL
 ORDER BY started_at DESC LIMIT 1;

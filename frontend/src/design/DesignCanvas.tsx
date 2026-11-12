@@ -133,8 +133,8 @@ const sceneGroups: SceneGroup[] = [
     scenes: [
       {
         id: 'overlay-tasks',
-        title: '任务进展只读浮层',
-        note: '实时展示进行中、排队中、等待回复与近期已结束任务，长说明支持按需展开。',
+        title: '任务进展浮层',
+        note: '实时展示进行中、排队中、等待回复与近期已结束任务；等待回复卡片可直接输入并附带任务上下文发送。',
       },
       {
         id: 'overlay-account',

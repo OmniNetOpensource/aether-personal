@@ -35,7 +35,7 @@ type AdminSnapshotParams struct {
 	UserID *uuid.UUID
 }
 
-// 本文件是管理看板的查询集合：提供时间线筛选所需的用户、模型候选与 Main 状态，合并消息与模型请求时间线，并读取单次调用或单条消息详情（sqlc 据此生成代码）。
+// 本文件是管理看板的查询集合：提供时间线筛选所需的用户、模型候选、Main 与 Subagent 状态，合并指定 Agent 的消息与模型请求时间线，并读取单次调用或单条消息详情（sqlc 据此生成代码）。
 // 返回时间窗口内出现过的模型候选，供时间线筛选输入框提示。
 func (q *Queries) AdminSnapshot(ctx context.Context, arg AdminSnapshotParams) ([]byte, error) {
 	row := q.db.QueryRow(ctx, adminSnapshot, arg.FromAt, arg.ToAt, arg.UserID)
@@ -47,8 +47,9 @@ func (q *Queries) AdminSnapshot(ctx context.Context, arg AdminSnapshotParams) ([
 const getAdminAgentStatus = `-- name: GetAdminAgentStatus :one
 SELECT u.id AS user_id, u.email,
  CASE
-  WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id) THEN 'processing'
-  WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id) THEN 'failed'
+  WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id)
+    OR EXISTS (SELECT 1 FROM subagents sa WHERE sa.user_id = u.id AND sa.status = 'running') THEN 'processing'
+  WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id AND m.subagent_id IS NULL) THEN 'failed'
   ELSE 'idle'
  END::text AS status
 FROM users u
@@ -61,7 +62,7 @@ type GetAdminAgentStatusRow struct {
 	Status string
 }
 
-// 每位用户只有一个 Main，选中用户时返回它当前的运行状态。
+// 返回选中用户 Main 的当前运行状态（含后台 Subagent 运行中）。
 func (q *Queries) GetAdminAgentStatus(ctx context.Context, selectedUserID uuid.UUID) (GetAdminAgentStatusRow, error) {
 	row := q.db.QueryRow(ctx, getAdminAgentStatus, selectedUserID)
 	var i GetAdminAgentStatusRow
@@ -102,12 +103,58 @@ func (q *Queries) GetAdminTimelineMessage(ctx context.Context, id uuid.UUID) (Ge
 	return i, err
 }
 
+const listAdminSubagents = `-- name: ListAdminSubagents :many
+SELECT id, title, status, started_at, finished_at
+FROM subagents
+WHERE user_id = $1::uuid
+ORDER BY id DESC
+LIMIT 100
+`
+
+type ListAdminSubagentsRow struct {
+	ID         uuid.UUID
+	Title      string
+	Status     string
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// 列出选中用户的近期 Subagent，供看板在 Main 与各 Subagent 之间切换查看独立轨迹。
+func (q *Queries) ListAdminSubagents(ctx context.Context, selectedUserID uuid.UUID) ([]ListAdminSubagentsRow, error) {
+	rows, err := q.db.Query(ctx, listAdminSubagents, selectedUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAdminSubagentsRow
+	for rows.Next() {
+		var i ListAdminSubagentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Status,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAdminTimeline = `-- name: ListAdminTimeline :many
 WITH user_messages AS MATERIALIZED (
- SELECT m.id, m.user_id, m.sequence, m.role, m.content, m.sender, m.step_id, m.is_summary, m.created_at, m.client_message_id, m.summary_through_sequence, m.search_text, m.visible, m.generating, m.chat_updated_sequence, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
- FROM messages m WHERE m.user_id = $5::uuid AND NOT m.generating
+ SELECT m.id, m.user_id, m.sequence, m.role, m.content, m.sender, m.step_id, m.is_summary, m.created_at, m.client_message_id, m.summary_through_sequence, m.search_text, m.visible, m.generating, m.chat_updated_sequence, m.subagent_id, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
+ FROM messages m
+ WHERE m.user_id = $5::uuid
+  AND m.subagent_id IS NOT DISTINCT FROM $6::uuid
+  AND NOT m.generating
 ), calls AS MATERIALIZED (
- SELECT c.id, c.step_id, c.user_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence, jsonb_build_object('id',c.id,'step_id',c.step_id,
+ SELECT c.id, c.step_id, c.user_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence, c.subagent_id, jsonb_build_object('id',c.id,'step_id',c.step_id,
   'requested_model',c.requested_model,'response_model',c.response_model,
   'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,
   'compact_reason',c.compact_reason,'context_tokens_before',c.context_tokens_before,
@@ -115,9 +162,11 @@ WITH user_messages AS MATERIALIZED (
   'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
   'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
   'tool_names',to_jsonb(c.tool_names)) AS payload
- FROM model_calls c WHERE c.user_id = $5::uuid
-  AND ($6::text IS NULL OR c.requested_model = $6::text)
-  AND ($7::text IS NULL OR c.outcome = $7::text)
+ FROM model_calls c
+ WHERE c.user_id = $5::uuid
+  AND c.subagent_id IS NOT DISTINCT FROM $6::uuid
+  AND ($7::text IS NULL OR c.requested_model = $7::text)
+  AND ($8::text IS NULL OR c.outcome = $8::text)
 ), nodes AS (
  SELECT m.id, m.sequence::bigint AS sequence, m.created_at AS at, m.order_at,
   m.role, m.content, m.sender, m.is_summary, 'message'::text AS type, c.payload AS call
@@ -125,8 +174,8 @@ WITH user_messages AS MATERIALIZED (
   SELECT mc.payload FROM calls mc WHERE (m.role = 'assistant' OR m.is_summary) AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
   ORDER BY mc.started_at DESC, mc.id DESC LIMIT 1
  ) c ON true
- WHERE m.created_at >= $8::timestamptz AND m.created_at < $9::timestamptz
-  AND ($6::text IS NULL AND $7::text IS NULL OR EXISTS (
+ WHERE m.created_at >= $9::timestamptz AND m.created_at < $10::timestamptz
+  AND ($7::text IS NULL AND $8::text IS NULL OR EXISTS (
    SELECT 1 FROM calls mc WHERE mc.step_id = m.step_id OR (
     -- 用户输入没有 step_id，关联从收到输入到下一条模型回复所经历的请求尝试。
     m.step_id IS NULL AND mc.started_at >= m.created_at
@@ -141,7 +190,7 @@ WITH user_messages AS MATERIALIZED (
  SELECT c.id, 0::bigint, c.started_at, c.started_at,
   ''::text, '{}'::jsonb, NULL::text, false, 'call'::text, c.payload
  FROM calls c WHERE c.outcome <> 'succeeded'
-  AND c.started_at >= $8::timestamptz AND c.started_at < $9::timestamptz
+  AND c.started_at >= $9::timestamptz AND c.started_at < $10::timestamptz
 )
 SELECT id, sequence, at, order_at::timestamptz AS order_at, role, content, sender, is_summary, type, call::jsonb AS call
 FROM nodes
@@ -156,6 +205,7 @@ type ListAdminTimelineParams struct {
 	CursorID       *uuid.UUID
 	PageLimit      int32
 	UserID         uuid.UUID
+	SubagentID     *uuid.UUID
 	Model          *string
 	Outcome        *string
 	FromAt         time.Time
@@ -175,7 +225,7 @@ type ListAdminTimelineRow struct {
 	Call      []byte
 }
 
-// 消息与未产出消息的请求共用游标，只有失败请求的筛选结果也能完整翻页。
+// 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息与未产出消息的请求，共用同一游标翻页。
 func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelineParams) ([]ListAdminTimelineRow, error) {
 	rows, err := q.db.Query(ctx, listAdminTimeline,
 		arg.CursorAt,
@@ -183,6 +233,7 @@ func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelinePa
 		arg.CursorID,
 		arg.PageLimit,
 		arg.UserID,
+		arg.SubagentID,
 		arg.Model,
 		arg.Outcome,
 		arg.FromAt,

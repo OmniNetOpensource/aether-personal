@@ -59,11 +59,21 @@ export interface SnapshotAgent {
   status: string;
 }
 
+export interface SnapshotSubagent {
+  id: string;
+  title: string;
+  status: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
 export interface Snapshot {
   generated_at: string;
   models: { model: string }[];
   users: { items: SnapshotUser[] };
   agents: { items: SnapshotAgent[] };
+  subagents?: { items: SnapshotSubagent[] };
 }
 
 // Call 是单次模型请求尝试的日志行，列表与时间线共用。
@@ -128,6 +138,7 @@ export interface Timeline {
   items: TimelineItem[];
   next_cursor: string | null;
   system_prompt: { text: string } | null;
+  subagent?: SnapshotSubagent;
 }
 
 export interface QuotaItem {
@@ -142,6 +153,8 @@ export interface QuotaItem {
 }
 
 export interface ModelSettings {
+  subagent_model: string;
+  subagent_context_length: number;
   compact_model: string;
   compact_context_length: number;
   compact_at_tokens: number;
@@ -187,6 +200,9 @@ export const outcomeLabels: Record<string, string> = {
   invalid_response: '响应异常',
   interrupted: '中断 · 结果未知',
   processing: '处理中',
+  running: '运行中',
+  completed: '已完成',
+  cancelled: '已取消',
   idle: '空闲',
   failed: '失败',
 };

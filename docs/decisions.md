@@ -28,11 +28,11 @@
 | 项目定位 | 2026-10-30 改为以维护者自用为主的开源 personal agent，其他人也可自行部署或使用维护者实例；不再以企业 fork 服务其终端用户为首要目标 | [01](wiki/01-overview.md#项目定位) |
 | 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
 | 用户删除 | 仅管理员可删除，用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
-| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（模型配置与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合 | [08](wiki/08-admin-observability.md) |
-| Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、失败请求和不可见指令，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
+| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（模型配置与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 配置页增加可选 Subagent 模型选择，运行过程页支持切换与一键跳转查看各 Subagent 独立轨迹 | [08](wiki/08-admin-observability.md) |
+| Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、Subagent 回报、失败请求和不可见指令，支持在 Main 与各后台 Subagent 间切换与一键跳转，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
-| 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，每用户一项执行中，当前任务结束后由模型读取 `list_tasks` 并用 `update_task(..., in_progress)` 选择下一项，后端不按 ID 或登记先后自动选取；删除冗余 `source_sequence`（`00039`）。任务记录以 `related_message_ids` 只关联提出需求和补充的用户输入；不绑定回答或文件、不提供结果追加工具，不设 `outcome`；`list_tasks` 统一返回列表，去掉 `task_id` 参数；不恢复 Subagent。同日稍后确认任务接入只靠固定指令中的任务段与三个 task tools：取消请求尾部 `task_context`、阶段工具范围与后端任务状态查询，`main_work` 由 `00042` 恢复为只看消息尾部；2026-11-07 部分恢复后端任务状态读取：模型收尾后若仍有 `in_progress` 或 `queued` 任务，Runner 以一轮不落库的 `task_reminder` 续跑，同一批任务只提醒一次，`waiting` 不触发，`main_work` 不变；2026-11-09 模型可把进行中任务用 `update_task` 改回 `queued`，再启动自己判断更该先做的排队任务，仍一次只做一项，不新增优先级字段，搁下与启动必须分两批；2026-11-12 新增前端实时只读任务进展展示：随 `ready`、`authenticated` 与 `messages` 帧同步未关闭任务及最近 30 项历史任务快照，有未完成任务时在输入框上方显示进度胶囊并在右上角任务入口显示角标，点击打开只读任务清单浮层，修改或取消仍通过聊天指令完成 | [11](wiki/11-tasks.md) |
+| 任务 | 2026-11-06 新增 `tasks` 持久化用户需求；Main 登记补充、排队独立目标，只管理任务要求与状态、不绑定回答或文件；2026-11-07 增加收尾任务提醒；2026-11-12 新增前端实时任务进展展示（输入框上方进度胶囊与右上角任务清单浮层）；同日稍后（`00055`）删除 `tasks_one_in_progress_per_user` 唯一索引，支持多项独立的调研与分析任务同时标为 `in_progress` 并交由后台 Subagent 并行推进（沙箱电脑任务仍由 Main 单线程串行执行），后台 Subagent 运行期间不提前发收尾提醒，先完成的先经 `forward_subagent` 直发并结项 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
 | 前端框架与平台 | 2026-11-02 改为 TanStack Start + React + TypeScript；使用文件路由与 SPA 模式，桌面与移动共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口；2026-11-11 修复离线冷启动：已缓存登录态离线打开时直接进入聊天页编辑草稿，恢复联网后自动连接补齐历史 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`messages`、`steps`、`login_codes`、`sessions`、`tasks`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`tasks`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
@@ -110,7 +110,7 @@
 | 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
 | 后台连接 | 2026-11-03：页面隐藏时保留 WebSocket 与自动重连，网络恢复时允许后台重连，返回前台时确保连接存在；离线或离开页面仍关闭。理由是普通页面切换不应中断消息接收或使发送中的请求失败；系统冻结或回收网页后靠重连与游标补齐恢复 | [04](wiki/04-messaging.md#websocket) |
 | 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
-| Main 思考提示 | 聊天底部三点小气泡，按真实处理状态显示，结束、失败或断线后收起；开发中 | [04](wiki/04-messaging.md#main-思考气泡-开发中) |
+| Main 思考提示 | 聊天底部三点小气泡与任务胶囊呼吸绿点，只要 Main 或任意后台 Subagent 仍在运行即保持显示，全部结束、失败或断线后收起 | [04](wiki/04-messaging.md#main-思考气泡-开发中) |
 | 空白回复与失败提示 | 2026-11-03 用户确认：未给用户正文时，无正文且无工具调用的结果最多补试一次，耗尽后聊天底部显示失败；失败状态可在重连后恢复，新输入清除。已有正文的工具流程仍可静默收尾 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 运行动态摘要 | 2026-10-30 删除。不再单独调用模型汇总行动，也不保留 recap 历史；聊天底部只按 Main 是否在处理显示思考气泡 | [05](wiki/05-main-runtime.md#行动摘要2026-10-30-已删除) |
 | 消息状态 | 2026-11-02 起只有发送成功与发送失败，消息列表不显示任何状态：发送中由输入框显示“发送中…”，成功后消息进入列表、输入框清空，失败时输入框显示错误并保留内容、再按发送即重发；去掉 `delivered` / `read` 回执与 `read_up_to`。理由是已读对用户没有可采取的行动，只有发送失败需要处理 | [04](wiki/04-messaging.md#消息状态) |
@@ -148,7 +148,7 @@
 | Gemini 工具回执与新输入 | 2026-11-05：同批工具回执合并为一条原生 user，新输入另起 user，时间跟随输入；按来源角色合并，避免新问题埋入工具结果。真实模型对照拆分后回答两题，但不保证先旧后新或两次回复 | [05](wiki/05-main-runtime.md#请求组装规则2026-11-02) |
 | 模型调用失败 | 不向用户显示，记日志与 `steps.error`；2026-10-30 模型单次请求与含上下文准备、重试和退避的一轮调用均限 10 分钟，临时错误最多重试 3 次；联网工具独立保留 120 秒 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 工具执行与恢复 | 2026-10-28 确认先保存助手消息、工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单（2026-11-09 扩展到正常停机，见「停机与开机」）；2026-10-30 改为同一步工具全部并行执行、不设并发上限，每个工具从连接池取自己的连接，锁连接由看守协程统一盯守；同日去掉联网工具原有的全局 2 秒启动间隔，调用立即发出 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| Subagent | 2026-11-02 已整体删除：工具、运行时、交付检查、模型设置、看板入口与数据库结构（`00025`）一并移除；本地库核查显示其从未被实际派发过 | [05](wiki/05-main-runtime.md#删除-subagent2026-11-02) |
+| Subagent | 2026-11-12 重新设计引入（`00055`）：面向多条独立任务高吞吐并行，采用「异步后台并发 + 运行时自动投递 `subagent_event` + Main 把关与 `forward_subagent` 原文直通转发」方案。彻底抛弃旧版 `send_message` 工具；Subagent 运行在独立上下文，共享阿芒调研与表达规范，仅开放 7 个只读调研工具（联网搜索/抓取/读图、主对话历史检索、只读 `memory view`），沙箱电脑与写操作保留给 Main 单线程执行；独立任务合格时经 `forward_subagent` 零改写直发聊天气泡，不在 Main 上下文存双份长文；支持 `cancel_subagent` 中途取消、每用户最多 5 个并发与 15 分钟上限、看板可选独立模型（留空跟随 Main）及独立运行时间线观测（取代 2026-11-02 `00025` 删除旧实现的状态） | [05](wiki/05-main-runtime.md#异步后台-subagent-与零损耗直通转发2026-11-12) |
 | 近期实现顺序 | 当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra，供 Main 使用 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | X（Twitter）搜索 | 2026-10-30 接入独立 `search_twitter(query, limit?, sort?)`，Main 使用看板 EveryInfra Key；默认 Top，不保证严格时间排序或全量结果；失败不自动重试，零结果正常返回，缺失计数不补零 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |

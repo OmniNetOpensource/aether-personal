@@ -1,7 +1,9 @@
--- 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的模型配置与闲置反思时长（sqlc 据此生成代码）。
+-- 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的 Main、Subagent 与压缩模型配置及闲置反思时长（sqlc 据此生成代码）。
 
 -- name: GetModelSettings :one
-SELECT main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
+SELECT main_model, main_model_max_tokens,
+    subagent_model, subagent_model_max_tokens, subagent_context_length,
+    compact_model, compact_model_max_tokens,
     compact_at_tokens, main_context_length, compact_context_length,
     reflection_idle_minutes, version, updated_at, updated_by
 FROM model_settings WHERE singleton = true;
@@ -10,14 +12,21 @@ FROM model_settings WHERE singleton = true;
 SELECT pg_advisory_xact_lock(hashtextextended('admin:model-settings', 0));
 
 -- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
+INSERT INTO model_settings (main_model, main_model_max_tokens,
+    subagent_model, subagent_model_max_tokens, subagent_context_length,
+    compact_model, compact_model_max_tokens,
     compact_at_tokens, main_context_length, compact_context_length,
     reflection_idle_minutes, version, updated_by)
-VALUES (sqlc.arg(main_model), sqlc.narg(main_model_max_tokens), sqlc.narg(compact_model), sqlc.narg(compact_model_max_tokens),
+VALUES (sqlc.arg(main_model), sqlc.narg(main_model_max_tokens),
+    sqlc.narg(subagent_model), sqlc.narg(subagent_model_max_tokens), sqlc.narg(subagent_context_length),
+    sqlc.narg(compact_model), sqlc.narg(compact_model_max_tokens),
     sqlc.arg(compact_at_tokens), sqlc.narg(main_context_length), sqlc.narg(compact_context_length),
     sqlc.arg(reflection_idle_minutes), 1, sqlc.arg(updated_by))
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_model_max_tokens = EXCLUDED.main_model_max_tokens,
+    subagent_model = EXCLUDED.subagent_model,
+    subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
+    subagent_context_length = EXCLUDED.subagent_context_length,
     compact_model = EXCLUDED.compact_model,
     compact_model_max_tokens = EXCLUDED.compact_model_max_tokens,
     compact_at_tokens = EXCLUDED.compact_at_tokens,

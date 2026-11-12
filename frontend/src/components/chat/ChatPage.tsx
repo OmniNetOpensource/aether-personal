@@ -149,7 +149,16 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           )}
         </div>
       </div>
-      {tasksOpen && <ChatTaskSheet controller={controller} onClose={() => setTasksOpen(false)} />}
+      {tasksOpen && (
+        <ChatTaskSheet
+          controller={controller}
+          onClose={() => setTasksOpen(false)}
+          onSent={() => {
+            setTasksOpen(false);
+            setLatestRequest((value) => value + 1);
+          }}
+        />
+      )}
       {searchOpen && (
         <ChatHistorySearch
           controller={controller}

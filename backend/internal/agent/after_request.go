@@ -1,5 +1,5 @@
-// 本文件是 agent loop 的请求后阶段：处理本轮的结局。成功就保存回复并执行其中的工具；被新输入取代或遇到临时故障就安排下一轮；
-// 其余失败（包括前两个阶段交来的错误）在这里统一收尾：补中断回执、结束步骤、记下失败位置。
+// 本文件是 agent loop 的请求后阶段：处理本轮的结局。成功就保存回复并执行其中的工具（Subagent 无工具收尾时原子完成并向 Main 投递结果）；
+// 被新输入取代或遇到临时故障就安排下一轮；其余失败在这里统一收尾。
 
 package agent
 
@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,23 +21,32 @@ import (
 // afterRequest 是请求后阶段的入口：err 是本轮在请求前或请求阶段遇到的错误，为空表示拿到了完整回复。
 // 返回值告诉循环主体下一步：本轮完成、原样重来一轮，或结束本次运行；只有失败收尾本身出错才返回错误。
 func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through int64, stepID, replyID uuid.UUID, response chatResponse, retryable bool, err error) (roundEnd, error) {
-	// 成功：回复与步骤同一事务落库，再执行回复里的工具；回执齐全后由下一轮按消息尾部继续回复。
 	if err == nil {
 		retry.reset()
+		var message assistantMessage
+		_ = json.Unmarshal(response.Choices[0].Message, &message)
+		// Subagent 在没有后续工具调用时即完成本职工作：原子保存最终正文并向 Main 投递 subagent_event。
+		if r.subagentID != nil && len(message.ToolCalls) == 0 {
+			if err := r.completeSubagentAndAnnounce(ctx, stepID, replyID, response, AssistantTextToUser(response.Choices[0].Message)); err != nil {
+				return r.failRun(ctx, through, err)
+			}
+			return roundStop, nil
+		}
 		if err := r.saveReply(ctx, stepID, replyID, response); err != nil {
 			return r.failRun(ctx, through, err)
 		}
-		var message assistantMessage
-		_ = json.Unmarshal(response.Choices[0].Message, &message)
 		if err := r.executeToolCalls(ctx, stepID, message.ToolCalls); err != nil {
 			return r.failRun(ctx, through, err)
 		}
 		return roundDone, nil
 	}
+	// Subagent 达到 15 分钟上限属于业务超时而非容器停机，需落库 failed 并通知 Main。
+	if r.subagentID != nil && errors.Is(context.Cause(ctx), errSubagentRunTimeout) {
+		return r.failRun(ctx, through, errSubagentRunTimeout)
+	}
 	if ctx.Err() != nil || errors.Is(err, errLostLease) {
 		return roundStop, nil
 	}
-	// 被更新的输入取代：撤销未发布的占位并结束这一步，清零重试后按消息尾部重来，新输入会一并带上。
 	if errors.Is(err, errNewInput) {
 		if err := r.abandonAttempt(ctx, stepID, errNewInput.Error()); err != nil {
 			return r.failRun(ctx, through, err)
@@ -49,11 +57,10 @@ func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through in
 	if retry.budget.Err() != nil {
 		err = fmt.Errorf("%w: %w", context.Cause(retry.budget), err)
 	}
-	// 网络错误、超时、429 与 5xx 等临时故障：这一步以错误收尾，退避 1、2、4 秒后原样再走一轮，最多再试 3 次，且不超出十分钟预算。
 	if !retryable || retry.retries >= 3 || retry.budget.Err() != nil {
 		return r.failRun(ctx, through, err)
 	}
-	slog.Error("model request failed", "user_id", r.userID, "attempt", retry.retries+1, "error", err)
+	slog.Error("model request failed", "user_id", r.userID, "subagent_id", r.subagentID, "attempt", retry.retries+1, "error", err)
 	if err := r.abandonAttempt(ctx, stepID, err.Error()); err != nil {
 		return r.failRun(ctx, through, err)
 	}
@@ -74,21 +81,22 @@ func (r *Runner) abandonAttempt(ctx context.Context, stepID uuid.UUID, reason st
 		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
-		if err := queries.DiscardGeneratingReply(ctx, r.userID); err != nil {
+		if err := queries.DiscardGeneratingReply(ctx, database.DiscardGeneratingReplyParams{UserID: r.userID, SubagentID: r.subagentID}); err != nil {
 			return err
 		}
 		return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, Error: &reason})
 	})
 }
 
-// saveReply 在一个校验租约的事务里完成助手记录与步骤，提交后经 Redis 推送可见回复。工具调用从此成为历史的一部分。
+// saveReply 在一个校验租约的事务里完成助手记录与步骤；仅 Main 的非空回复对用户聊天可见并触发实时推送。
 func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, response chatResponse) error {
+	visible := r.subagentID == nil && AssistantTextToUser(response.Choices[0].Message) != ""
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
-		if err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: AssistantTextToUser(response.Choices[0].Message) != ""}); err != nil {
+		if err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: visible}); err != nil {
 			return err
 		}
 		return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost})
@@ -96,18 +104,18 @@ func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, respo
 	if err != nil {
 		return err
 	}
-	r.notifyChat()
+	if r.subagentID == nil {
+		r.notifyChat()
+	}
 	return nil
 }
 
-// executeToolCalls 并行执行独立工具，电脑操作则在一个协程里按模型原始顺序执行。
-// 请求前阶段也复用它补跑缺少回执的调用；外部操作中断后可能重跑，回执保存成功后不会重复执行。
+// executeToolCalls 并行执行独立工具，Main 的电脑操作则在一个协程里按模型原始顺序执行。
 func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls []toolCall) error {
 	toolErrors := make([]error, len(calls))
-	// 每个执行单元独占自己的结果槽，数据库连接仅在短事务期间使用。
 	execute := func(index int) {
 		call := calls[index]
-		if tool, ok := tools.ByName(call.Function.Name); ok && tool.OutsideTransaction {
+		if tool, ok := r.lookupTool(call.Function.Name); ok && tool.OutsideTransaction {
 			result, err := tool.Execute(ctx, r.toolDeps, nil, r.userID, call.Function.Arguments)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -124,13 +132,12 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 	var waitGroup sync.WaitGroup
 	ordered := make([]int, 0, len(calls))
 	for index, call := range calls {
-		if tool, ok := tools.ByName(call.Function.Name); ok && tool.Ordered {
+		if tool, ok := r.lookupTool(call.Function.Name); ok && tool.Ordered {
 			ordered = append(ordered, index)
 			continue
 		}
 		waitGroup.Go(func() { execute(index) })
 	}
-	// 先保留原始下标再启动唯一电脑队列；不能用多个协程抢锁，否则执行顺序仍不确定。
 	if len(ordered) > 0 {
 		waitGroup.Go(func() {
 			for _, index := range ordered {
@@ -157,12 +164,12 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。
-// 带 ContentArray 的工具成功时保存文本与 oss:// 图片段，带 UserVisibleParts 的工具成功时附带展示用的 parts 并标为对聊天可见。
-func toolResultContent(call toolCall, result string) ([]byte, *string, bool, error) {
+// Main 的 UserVisibleParts 工具（sandbox_send_file 与 forward_subagent）成功时附带展示用的 parts 并标为对聊天可见。
+func (r *Runner) toolResultContent(call toolCall, result string) ([]byte, *string, bool, error) {
 	var content any = result
 	trimmed := strings.TrimSpace(result)
-	tool, ok := tools.ByName(call.Function.Name)
-	if ok && tool.UserVisibleParts && strings.HasPrefix(trimmed, "{") {
+	tool, ok := r.lookupTool(call.Function.Name)
+	if r.subagentID == nil && ok && tool.UserVisibleParts && strings.HasPrefix(trimmed, "{") {
 		var visible struct {
 			Content string          `json:"content"`
 			Parts   json.RawMessage `json:"parts"`
@@ -180,10 +187,9 @@ func toolResultContent(call toolCall, result string) ([]byte, *string, bool, err
 	return encoded, nil, false, err
 }
 
-// saveToolResult 在校验租约后保存单个工具的回执，让中断恢复时能按回执判断这个工具已经执行过；
-// 工具并行执行时从连接池取连接保存，同一用户的插入由 lockAndVerifyLease 在数据库内串行排队。
+// saveToolResult 在校验租约后保存单个工具的回执；Subagent 只锁自身记录，不阻塞用户的主聊天写入。
 func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call toolCall, result string) error {
-	content, sender, visible, err := toolResultContent(call, result)
+	content, sender, visible, err := r.toolResultContent(call, result)
 	if err != nil {
 		return err
 	}
@@ -192,53 +198,79 @@ func (r *Runner) saveToolResult(ctx context.Context, stepID uuid.UUID, call tool
 		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
-		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible})
+		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{
+			UserID:     r.userID,
+			SubagentID: r.subagentID,
+			Role:       "tool",
+			Content:    content,
+			StepID:     &stepID,
+			Sender:     sender,
+			Visible:    visible,
+		})
 	})
 	if err != nil {
 		return err
 	}
-	r.notifyChat()
+	if r.subagentID == nil {
+		r.notifyChat()
+	}
 	return nil
 }
 
-// executeDatabaseTool 执行与回执同一事务的工具。未登记的名字返回工具错误，让模型可以改口。
+// executeDatabaseTool 执行与回执同一事务的工具；未登记或当前角色无权使用的名字返回工具错误，让模型可以改口。
 func (r *Runner) executeDatabaseTool(ctx context.Context, queries *database.Queries, call toolCall) (string, error) {
-	tool, ok := tools.ByName(call.Function.Name)
+	tool, ok := r.lookupTool(call.Function.Name)
 	if !ok {
 		return "Error: tool not available: " + call.Function.Name, nil
 	}
 	return tool.Execute(ctx, r.toolDeps, queries, r.userID, call.Function.Arguments)
 }
 
-// executeDatabaseToolAndSaveResult 在一个校验租约的事务里执行单个数据库工具并保存它的回执：
-// 工具的写入与回执要么一起提交、要么一起回滚，所以恢复时看到有回执就代表工具已经生效，不会重复执行。
+// executeDatabaseToolAndSaveResult 在一个校验租约的事务里执行单个数据库工具并保存它的回执，提交后发出必要的 Subagent 信号与聊天通知。
 func (r *Runner) executeDatabaseToolAndSaveResult(ctx context.Context, stepID uuid.UUID, call toolCall) error {
+	var result string
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := r.lockAndVerifyLease(ctx, queries); err != nil {
 			return err
 		}
-		result, err := r.executeDatabaseTool(ctx, queries, call)
+		var err error
+		result, err = r.executeDatabaseTool(ctx, queries, call)
 		if err != nil {
 			return err
 		}
-		content, sender, visible, err := toolResultContent(call, result)
+		content, sender, visible, err := r.toolResultContent(call, result)
 		if err != nil {
 			return err
 		}
-		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{UserID: r.userID, Role: "tool", Content: content, StepID: &stepID, Sender: sender, Visible: visible})
+		return queries.InsertAgentMessage(ctx, database.InsertAgentMessageParams{
+			UserID:     r.userID,
+			SubagentID: r.subagentID,
+			Role:       "tool",
+			Content:    content,
+			StepID:     &stepID,
+			Sender:     sender,
+			Visible:    visible,
+		})
 	})
 	if err != nil {
 		return err
 	}
-	r.notifyChat()
+	if r.subagentID == nil {
+		r.onToolCommitted(call.Function.Name, result)
+		r.notifyChat()
+	}
 	return nil
 }
 
-// failRun 是失败的统一出口：进程退出或租约已被新实例接管时不写失败位置；否则在校验租约的事务里落库失败收尾，结束本次运行。
-// 收尾撤销未发布的占位，给最后一条 assistant 里还没有回执的工具调用各补一条中断回执，避免历史里留下没有回执的调用；
-// 未完成的步骤以失败结束，没有更新的输入时记下失败时最后一条消息的序号，之后有新消息才再次运行，避免同一失败反复重试。
+// failRun 是失败的统一出口：Subagent 走 failSubagentAndAnnounce 向 Main 汇报错误；Main 则在没有更新输入时记下失败边界停住重试。
 func (r *Runner) failRun(ctx context.Context, through int64, cause error) (roundEnd, error) {
+	if r.subagentID != nil {
+		if errors.Is(cause, errLostLease) || (ctx.Err() != nil && !errors.Is(context.Cause(ctx), errSubagentRunTimeout)) {
+			return roundStop, nil
+		}
+		return r.failSubagentAndAnnounce(cause)
+	}
 	if ctx.Err() != nil || errors.Is(cause, errLostLease) {
 		return roundStop, nil
 	}
@@ -249,16 +281,16 @@ func (r *Runner) failRun(ctx context.Context, through int64, cause error) (round
 		if err := r.lockAndVerifyLease(cleanup, queries); err != nil {
 			return err
 		}
-		if err := queries.DiscardGeneratingReply(cleanup, r.userID); err != nil {
+		if err := queries.DiscardGeneratingReply(cleanup, database.DiscardGeneratingReplyParams{UserID: r.userID}); err != nil {
 			return err
 		}
-		rows, err := queries.ListAgentContextRows(cleanup, r.userID)
+		rows, err := queries.ListAgentContextRows(cleanup, database.ListAgentContextRowsParams{UserID: r.userID})
 		if err != nil {
 			return err
 		}
 		calls, stepID := pendingToolCalls(rows)
 		for _, call := range calls {
-			content, _, _, err := toolResultContent(call, "Error: execution was interrupted before this tool call completed.")
+			content, _, _, err := r.toolResultContent(call, "Error: execution was interrupted before this tool call completed.")
 			if err != nil {
 				return err
 			}

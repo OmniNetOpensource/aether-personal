@@ -67,6 +67,7 @@ type Message struct {
 	Visible                bool
 	Generating             bool
 	ChatUpdatedSequence    *int64
+	SubagentID             *uuid.UUID
 }
 
 type ModelCall struct {
@@ -94,22 +95,26 @@ type ModelCall struct {
 	ContextTokensBefore    *int32
 	ContextTokensAfter     *int32
 	SummaryThroughSequence *int64
+	SubagentID             *uuid.UUID
 }
 
 type ModelSetting struct {
-	ID                    uuid.UUID
-	Singleton             bool
-	MainModel             string
-	Version               int64
-	UpdatedAt             time.Time
-	UpdatedBy             string
-	MainModelMaxTokens    *int32
-	CompactAtTokens       int32
-	MainContextLength     *int64
-	CompactModel          *string
-	CompactModelMaxTokens *int32
-	CompactContextLength  *int64
-	ReflectionIdleMinutes int32
+	ID                     uuid.UUID
+	Singleton              bool
+	MainModel              string
+	Version                int64
+	UpdatedAt              time.Time
+	UpdatedBy              string
+	MainModelMaxTokens     *int32
+	CompactAtTokens        int32
+	MainContextLength      *int64
+	CompactModel           *string
+	CompactModelMaxTokens  *int32
+	CompactContextLength   *int64
+	ReflectionIdleMinutes  int32
+	SubagentModel          *string
+	SubagentModelMaxTokens *int32
+	SubagentContextLength  *int64
 }
 
 type SandboxWorkspace struct {
@@ -164,6 +169,19 @@ type Step struct {
 	StartedAt    time.Time
 	FinishedAt   *time.Time
 	Purpose      string
+	SubagentID   *uuid.UUID
+}
+
+type Subagent struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Title      string
+	Status     string
+	LeaseEpoch int64
+	Output     *string
+	Error      *string
+	StartedAt  time.Time
+	FinishedAt *time.Time
 }
 
 type Task struct {

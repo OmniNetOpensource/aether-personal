@@ -138,7 +138,7 @@ type ListTasksRow struct {
 	Task Task
 }
 
-// 本文件维护按用户串行的需求队列，并提供模型任务列表与聊天端实时任务快照查询。
+// 本文件维护用户的持久化需求队列（支持多项独立任务并行执行），并提供模型任务列表与聊天端实时任务快照查询。
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
 	rows, err := q.db.Query(ctx, listTasks, arg.UserID, arg.IncludeClosed)
 	if err != nil {
@@ -195,10 +195,7 @@ const updateTaskStatus = `-- name: UpdateTaskStatus :execrows
 UPDATE tasks AS t SET status = $1::text, updated_at = now()
 WHERE t.user_id = $2 AND t.id = $3 AND (
     t.status = 'in_progress'
-    OR (
-        t.status = 'queued' AND $1::text = 'in_progress'
-        AND NOT EXISTS (SELECT 1 FROM tasks WHERE user_id = $2 AND status = 'in_progress')
-    )
+    OR (t.status = 'queued' AND $1::text = 'in_progress')
 )
 `
 
@@ -208,7 +205,7 @@ type UpdateTaskStatusParams struct {
 	ID     uuid.UUID
 }
 
-// 模型选择具体任务：没有当前任务时才能启动待执行项，其余状态变更只针对当前任务。
+// 排队中的任务可启动为 in_progress（支持多项并行），完成、等待或退回排队只针对正在进行中的任务。
 func (q *Queries) UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateTaskStatus, arg.Status, arg.UserID, arg.ID)
 	if err != nil {

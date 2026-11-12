@@ -12,33 +12,41 @@ import (
 
 const getModelSettings = `-- name: GetModelSettings :one
 
-SELECT main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
+SELECT main_model, main_model_max_tokens,
+    subagent_model, subagent_model_max_tokens, subagent_context_length,
+    compact_model, compact_model_max_tokens,
     compact_at_tokens, main_context_length, compact_context_length,
     reflection_idle_minutes, version, updated_at, updated_by
 FROM model_settings WHERE singleton = true
 `
 
 type GetModelSettingsRow struct {
-	MainModel             string
-	MainModelMaxTokens    *int32
-	CompactModel          *string
-	CompactModelMaxTokens *int32
-	CompactAtTokens       int32
-	MainContextLength     *int64
-	CompactContextLength  *int64
-	ReflectionIdleMinutes int32
-	Version               int64
-	UpdatedAt             time.Time
-	UpdatedBy             string
+	MainModel              string
+	MainModelMaxTokens     *int32
+	SubagentModel          *string
+	SubagentModelMaxTokens *int32
+	SubagentContextLength  *int64
+	CompactModel           *string
+	CompactModelMaxTokens  *int32
+	CompactAtTokens        int32
+	MainContextLength      *int64
+	CompactContextLength   *int64
+	ReflectionIdleMinutes  int32
+	Version                int64
+	UpdatedAt              time.Time
+	UpdatedBy              string
 }
 
-// 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的模型配置与闲置反思时长（sqlc 据此生成代码）。
+// 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的 Main、Subagent 与压缩模型配置及闲置反思时长（sqlc 据此生成代码）。
 func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, error) {
 	row := q.db.QueryRow(ctx, getModelSettings)
 	var i GetModelSettingsRow
 	err := row.Scan(
 		&i.MainModel,
 		&i.MainModelMaxTokens,
+		&i.SubagentModel,
+		&i.SubagentModelMaxTokens,
+		&i.SubagentContextLength,
 		&i.CompactModel,
 		&i.CompactModelMaxTokens,
 		&i.CompactAtTokens,
@@ -62,14 +70,21 @@ func (q *Queries) LockModelSettings(ctx context.Context) error {
 }
 
 const saveModelSettings = `-- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, main_model_max_tokens, compact_model, compact_model_max_tokens,
+INSERT INTO model_settings (main_model, main_model_max_tokens,
+    subagent_model, subagent_model_max_tokens, subagent_context_length,
+    compact_model, compact_model_max_tokens,
     compact_at_tokens, main_context_length, compact_context_length,
     reflection_idle_minutes, version, updated_by)
-VALUES ($1, $2, $3, $4,
-    $5, $6, $7,
-    $8, 1, $9)
+VALUES ($1, $2,
+    $3, $4, $5,
+    $6, $7,
+    $8, $9, $10,
+    $11, 1, $12)
 ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_model_max_tokens = EXCLUDED.main_model_max_tokens,
+    subagent_model = EXCLUDED.subagent_model,
+    subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
+    subagent_context_length = EXCLUDED.subagent_context_length,
     compact_model = EXCLUDED.compact_model,
     compact_model_max_tokens = EXCLUDED.compact_model_max_tokens,
     compact_at_tokens = EXCLUDED.compact_at_tokens,
@@ -81,21 +96,27 @@ ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
 `
 
 type SaveModelSettingsParams struct {
-	MainModel             string
-	MainModelMaxTokens    *int32
-	CompactModel          *string
-	CompactModelMaxTokens *int32
-	CompactAtTokens       int32
-	MainContextLength     *int64
-	CompactContextLength  *int64
-	ReflectionIdleMinutes int32
-	UpdatedBy             string
+	MainModel              string
+	MainModelMaxTokens     *int32
+	SubagentModel          *string
+	SubagentModelMaxTokens *int32
+	SubagentContextLength  *int64
+	CompactModel           *string
+	CompactModelMaxTokens  *int32
+	CompactAtTokens        int32
+	MainContextLength      *int64
+	CompactContextLength   *int64
+	ReflectionIdleMinutes  int32
+	UpdatedBy              string
 }
 
 func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsParams) error {
 	_, err := q.db.Exec(ctx, saveModelSettings,
 		arg.MainModel,
 		arg.MainModelMaxTokens,
+		arg.SubagentModel,
+		arg.SubagentModelMaxTokens,
+		arg.SubagentContextLength,
 		arg.CompactModel,
 		arg.CompactModelMaxTokens,
 		arg.CompactAtTokens,

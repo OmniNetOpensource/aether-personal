@@ -1,4 +1,4 @@
-// 本文件跨后端实例对等调度 Main：Redis 传递唤醒队列、用户临时租约与思考打断信号，PostgreSQL 保存全部持久状态。
+// 本文件跨后端实例对等调度 Main 与后台 Subagent：Redis 传递独立唤醒队列、临时租约与打断/取消广播，PostgreSQL 保存全部持久状态。
 
 package agent
 
@@ -37,7 +37,7 @@ const (
 	recoveryInterval   = 5 * time.Second
 )
 
-// enqueueWakeLua 在队列中尚无该用户时追加到队尾，避免高频输入或双实例补偿扫描把同一用户重复入队。
+// enqueueWakeLua 在队列中尚无该标识时追加到队尾，避免高频输入或双实例补偿扫描重复入队。
 const enqueueWakeLua = `
 if redis.call("LPOS", KEYS[1], ARGV[1]) == false then
 	return redis.call("RPUSH", KEYS[1], ARGV[1])
@@ -71,21 +71,23 @@ func leaseKey(userID uuid.UUID) string {
 	return "agent:lease:" + userID.String()
 }
 
-// Manager 在对等实例内管理本地并发槽位与活跃 Runner：跨实例排队靠 Redis 阻塞列表，本机字典仅用于即时打断思考中的模型请求。
+// Manager 在对等实例内分别管理 Main 与 Subagent 的独立并发槽位和活跃 Runner，保证后台 Subagent 不会挤占 Main 响应用户消息的容量。
 type Manager struct {
-	databasePool *pgxpool.Pool
-	redisClient  *redis.Client
-	settings     config.Config
-	modelClient  *http.Client
-	toolDeps     tools.Dependencies
-	services     *services.Store
-	slots        chan struct{}
-	mutex        sync.Mutex
-	runners      map[uuid.UUID]*Runner
-	running      sync.WaitGroup
+	databasePool  *pgxpool.Pool
+	redisClient   *redis.Client
+	settings      config.Config
+	modelClient   *http.Client
+	toolDeps      tools.Dependencies
+	services      *services.Store
+	slots         chan struct{}
+	subagentSlots chan struct{}
+	mutex         sync.Mutex
+	runners       map[uuid.UUID]*Runner
+	subagentStops map[uuid.UUID]context.CancelCauseFunc
+	running       sync.WaitGroup
 }
 
-// NewManager 创建对等实例内的调度器；容量槽位满载时暂停从 Redis 取活，将剩余用户自然留给其他空闲实例。
+// NewManager 创建对等实例内的调度器；Main 与 Subagent 各自使用独立槽位池，满载时将剩余任务自然留给其他空闲实例。
 func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.Config, serviceSettings *services.Store, imageStore *images.Store) *Manager {
 	capacity := int(settings.AgentCapacity)
 	if capacity == 0 {
@@ -104,12 +106,14 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 			HTTPClient:   &http.Client{Timeout: 120 * time.Second},
 			Sandbox:      sandbox.New(pool, serviceSettings, imageStore, settings.Sandbox),
 		},
-		slots:   make(chan struct{}, capacity),
-		runners: map[uuid.UUID]*Runner{},
+		slots:         make(chan struct{}, capacity),
+		subagentSlots: make(chan struct{}, capacity),
+		runners:       map[uuid.UUID]*Runner{},
+		subagentStops: map[uuid.UUID]context.CancelCauseFunc{},
 	}
 }
 
-// Wake 在新输入消息提交后单次往返广播聊天推送、跨实例思考打断信号与去重唤醒队列；使用独立超时避免客户端断线截断信号。
+// Wake 在新输入或 subagent_event 提交后单次往返广播聊天推送、跨实例思考打断信号与去重唤醒队列；使用独立超时避免客户端断线截断信号。
 func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
 	m.mutex.Lock()
 	runner := m.runners[userID]
@@ -130,7 +134,7 @@ func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
 	}
 }
 
-// Start 启动恢复持久待办，并并行运行思考打断监听、周期补偿与队列阻塞消费；退出时等待本地 Runner 释放租约并交接未完工作。
+// Start 启动恢复持久待办，并并行运行输入打断监听、Subagent 取消监听、周期补偿以及 Main 和 Subagent 两条队列消费；退出时等待本地协程释放租约并交接。
 func (m *Manager) Start(ctx context.Context) error {
 	if err := m.recoverPending(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -141,7 +145,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	var workers sync.WaitGroup
 	workers.Go(func() { m.listenInputSignals(ctx) })
+	workers.Go(func() { m.listenSubagentCancelSignals(ctx) })
 	workers.Go(func() { m.periodicRecovery(ctx) })
+	workers.Go(func() { m.consumeSubagentQueue(ctx) })
 
 	for {
 		select {
@@ -174,7 +180,38 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 }
 
-// listenInputSignals 订阅跨实例的新输入序号广播；若该用户的 Runner 正在本实例思考，立即按本地取消句柄重读上下文。
+// consumeSubagentQueue 用独立槽位池阻塞消费后台 Subagent 唤醒队列，避免阻塞 Main 对用户的即时回复。
+func (m *Manager) consumeSubagentQueue(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m.subagentSlots <- struct{}{}:
+		}
+
+		popped, err := m.redisClient.BLPop(ctx, 5*time.Second, subagentWakeQueueKey).Result()
+		if err != nil {
+			<-m.subagentSlots
+			if errors.Is(err, redis.Nil) || ctx.Err() != nil {
+				continue
+			}
+			slog.Error("pop subagent wake queue failed", "error", err)
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		subagentID, err := uuid.Parse(popped[1])
+		if err != nil {
+			<-m.subagentSlots
+			continue
+		}
+		m.tryStartSubagentRunner(ctx, subagentID)
+	}
+}
+
+// listenInputSignals 订阅跨实例的新输入序号广播；若该用户的 Main Runner 正在本实例思考，立即按本地取消句柄重读上下文。
 func (m *Manager) listenInputSignals(ctx context.Context) {
 	pubsub := m.redisClient.Subscribe(ctx, agentInputChannel)
 	defer pubsub.Close()
@@ -206,7 +243,48 @@ func (m *Manager) listenInputSignals(ctx context.Context) {
 	}
 }
 
-// periodicRecovery 定期扫描数据库持久待办，兜底 Redis 重启清空或瞬时网络抖动遗漏的唤醒与打断信号。
+// listenSubagentCancelSignals 订阅跨实例的 Subagent 取消广播；若目标 Subagent 正在本实例执行，立即中止其请求与工具。
+func (m *Manager) listenSubagentCancelSignals(ctx context.Context) {
+	pubsub := m.redisClient.Subscribe(ctx, subagentCancelChannel)
+	defer pubsub.Close()
+	messages := pubsub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-messages:
+			if !ok {
+				return
+			}
+			subagentID, err := uuid.Parse(message.Payload)
+			if err != nil {
+				continue
+			}
+			m.cancelLocalSubagent(subagentID)
+		}
+	}
+}
+
+// cancelLocalSubagent 触发本实例正在运行的指定 Subagent 立即退出。
+func (m *Manager) cancelLocalSubagent(subagentID uuid.UUID) {
+	m.mutex.Lock()
+	stop := m.subagentStops[subagentID]
+	m.mutex.Unlock()
+	if stop != nil {
+		stop(errSubagentCancelled)
+	}
+}
+
+// broadcastSubagentCancel 在 Main 取消某个 Subagent 后立即打断本机与远端实例上的执行，并补推该用户排队中的其他 Subagent。
+func (m *Manager) broadcastSubagentCancel(ctx context.Context, userID, subagentID uuid.UUID) {
+	m.cancelLocalSubagent(subagentID)
+	if err := m.redisClient.Publish(ctx, subagentCancelChannel, subagentID.String()).Err(); err != nil {
+		slog.Error("publish subagent cancel failed", "subagent_id", subagentID, "error", err)
+	}
+	m.enqueuePendingUserSubagents(ctx, userID)
+}
+
+// periodicRecovery 定期扫描数据库持久待办，兜底 Redis 重启清空、瞬时网络抖动或并发槽位空出后的补位调度。
 func (m *Manager) periodicRecovery(ctx context.Context) {
 	ticker := time.NewTicker(recoveryInterval)
 	defer ticker.Stop()
@@ -225,9 +303,10 @@ func (m *Manager) periodicRecovery(ctx context.Context) {
 	}
 }
 
-// recoverPending 对照数据库 main_work 补发本地打断，并将当前无活跃租约的待办用户推进 Redis 队列。
+// recoverPending 对照数据库恢复无活跃租约的 Main 与后台 Subagent（按每用户并发上限排队入队）。
 func (m *Manager) recoverPending(ctx context.Context) error {
-	users, err := database.New(m.databasePool).ListMainWork(ctx)
+	queries := database.New(m.databasePool)
+	users, err := queries.ListMainWork(ctx)
 	if err != nil {
 		return err
 	}
@@ -249,18 +328,83 @@ func (m *Manager) recoverPending(ctx context.Context) error {
 			}
 		}
 	}
+
+	subagents, err := queries.ListRunningSubagents(ctx)
+	if err != nil {
+		return err
+	}
+	byUser := map[uuid.UUID][]uuid.UUID{}
+	for _, sub := range subagents {
+		byUser[sub.UserID] = append(byUser[sub.UserID], sub.ID)
+	}
+	for _, ids := range byUser {
+		if err := m.enqueueUnleasedSubagentsUpToCap(ctx, ids); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// enqueueWake 将待处理用户去重推入 Redis 唤醒列表。
+// enqueuePendingUserSubagents 在单个用户的某个 Subagent 释放名额后，把该用户仍在等待并发名额的其余 Subagent 推入队列。
+func (m *Manager) enqueuePendingUserSubagents(ctx context.Context, userID uuid.UUID) {
+	rows, err := database.New(m.databasePool).ListUserSubagents(ctx, userID)
+	if err != nil {
+		slog.Error("list user subagents after release failed", "user_id", userID, "error", err)
+		return
+	}
+	var runningIDs []uuid.UUID
+	for _, row := range rows {
+		if row.Status == "running" {
+			runningIDs = append(runningIDs, row.ID)
+		}
+	}
+	if len(runningIDs) == 0 {
+		return
+	}
+	if err := m.enqueueUnleasedSubagentsUpToCap(ctx, runningIDs); err != nil {
+		slog.Error("enqueue pending user subagents failed", "user_id", userID, "error", err)
+	}
+}
+
+// enqueueUnleasedSubagentsUpToCap 检查一个用户全部 running Subagent 的租约占用数，仅为剩余并发名额内的无租约项补推队列。
+func (m *Manager) enqueueUnleasedSubagentsUpToCap(ctx context.Context, runningIDs []uuid.UUID) error {
+	active := 0
+	var unleased []uuid.UUID
+	for _, id := range runningIDs {
+		exists, err := m.redisClient.Exists(ctx, subagentLeaseKey(id)).Result()
+		if err != nil {
+			return err
+		}
+		if exists > 0 {
+			active++
+		} else {
+			unleased = append(unleased, id)
+		}
+	}
+	available := maxConcurrentSubagentsPerUser - active
+	for index := 0; index < len(unleased) && index < available; index++ {
+		if err := m.enqueueSubagentWake(ctx, unleased[index]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// enqueueWake 将待处理 Main 用户去重推入 Redis 唤醒列表。
 func (m *Manager) enqueueWake(ctx context.Context, userID uuid.UUID) error {
 	return m.redisClient.Eval(ctx, enqueueWakeLua, []string{agentWakeQueueKey}, userID.String()).Err()
 }
 
-// tryStartRunner 为已占用本机并发槽位的用户抢占 Redis 租约并递增数据库代数，成功后启动独占 Runner 与租约续期协程。
+// enqueueSubagentWake 将待处理 Subagent 去重推入 Redis Subagent 唤醒列表。
+func (m *Manager) enqueueSubagentWake(ctx context.Context, subagentID uuid.UUID) error {
+	return m.redisClient.Eval(ctx, enqueueWakeLua, []string{subagentWakeQueueKey}, subagentID.String()).Err()
+}
+
+// tryStartRunner 为已占用本机并发槽位的 Main 用户抢占 Redis 租约并递增数据库代数，成功后启动独占 Runner 与租约续期协程。
 func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
+	key := leaseKey(userID)
 	leaseToken := rand.Text()
-	acquired, err := m.redisClient.SetNX(ctx, leaseKey(userID), leaseToken, leaseTTL).Result()
+	acquired, err := m.redisClient.SetNX(ctx, key, leaseToken, leaseTTL).Result()
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Error("acquire agent lease failed", "user_id", userID, "error", err)
@@ -273,7 +417,6 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		return
 	}
 
-	// 在用户消息锁内确认待办并递增代数，使此前任何超时残留实例的写库事务立即失效。
 	var leaseEpoch int64
 	var hasWork bool
 	err = pgx.BeginFunc(ctx, m.databasePool, func(tx pgx.Tx) error {
@@ -293,7 +436,7 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		if err != nil && ctx.Err() == nil {
 			slog.Error("claim user lease epoch failed", "user_id", userID, "error", err)
 		}
-		m.releaseLease(userID, leaseToken)
+		m.releaseKeyLease(key, leaseToken)
 		if err == nil {
 			m.requeueIfHasWork(userID)
 		}
@@ -303,6 +446,7 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 
 	runnerCtx, cancelRunner := context.WithCancelCause(ctx)
 	runner := &Runner{
+		manager:      m,
 		databasePool: m.databasePool,
 		redisClient:  m.redisClient,
 		settings:     m.settings,
@@ -326,7 +470,7 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		renewDone := make(chan struct{})
 		go func() {
 			defer close(renewDone)
-			m.keepLeaseAlive(renewCtx, userID, leaseToken, cancelRunner)
+			m.keepKeyLeaseAlive(renewCtx, key, leaseToken, cancelRunner)
 		}()
 
 		runErr := runner.run(runnerCtx)
@@ -334,11 +478,10 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		<-renewDone
 		cancelRunner(nil)
 
-		// 先注销本机字典再释放 Redis 租约；随后复查数据库待办，覆盖退出瞬间到达的新输入与滚动停机交接。
 		m.mutex.Lock()
 		delete(m.runners, userID)
 		m.mutex.Unlock()
-		m.releaseLease(userID, leaseToken)
+		m.releaseKeyLease(key, leaseToken)
 
 		lostLease := errors.Is(runErr, errLostLease) || errors.Is(context.Cause(runnerCtx), errLostLease)
 		if !lostLease {
@@ -350,12 +493,147 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 	}()
 }
 
-// keepLeaseAlive 在 Runner 运行期间定时续期 Redis 租约；租约被取代或超期无法续上时立即中止本机执行。
-func (m *Manager) keepLeaseAlive(ctx context.Context, userID uuid.UUID, leaseToken string, cancelRunner context.CancelCauseFunc) {
+// tryStartSubagentRunner 在单用户并发上限内为 Subagent 抢占 Redis 租约并递增代数，成功后启动后台 Runner 与续期协程。
+func (m *Manager) tryStartSubagentRunner(ctx context.Context, subagentID uuid.UUID) {
+	queries := database.New(m.databasePool)
+	state, err := queries.GetSubagentLeaseState(ctx, subagentID)
+	if err != nil || state.Status != "running" {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) && ctx.Err() == nil {
+			slog.Error("read subagent state failed", "subagent_id", subagentID, "error", err)
+		}
+		<-m.subagentSlots
+		return
+	}
+
+	runningRows, err := queries.ListRunningSubagents(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("list running subagents for lease check failed", "subagent_id", subagentID, "error", err)
+		}
+		<-m.subagentSlots
+		return
+	}
+	var userID uuid.UUID
+	var siblingKeys []string
+	for _, row := range runningRows {
+		if row.ID == subagentID {
+			userID = row.UserID
+		}
+	}
+	if userID == uuid.Nil {
+		<-m.subagentSlots
+		return
+	}
+	for _, row := range runningRows {
+		if row.UserID == userID {
+			siblingKeys = append(siblingKeys, subagentLeaseKey(row.ID))
+		}
+	}
+
+	key := subagentLeaseKey(subagentID)
+	leaseToken := rand.Text()
+	status, err := m.redisClient.Eval(ctx, acquireSubagentLeaseLua, siblingKeys, key, leaseToken, leaseTTL.Milliseconds(), maxConcurrentSubagentsPerUser).Int64()
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("acquire subagent lease failed", "subagent_id", subagentID, "error", err)
+		}
+		<-m.subagentSlots
+		return
+	}
+	if status != 1 {
+		<-m.subagentSlots
+		return
+	}
+
+	var claimed database.ClaimSubagentLeaseEpochRow
+	var stillRunning bool
+	err = pgx.BeginFunc(ctx, m.databasePool, func(tx pgx.Tx) error {
+		txQueries := database.New(tx)
+		if err := txQueries.LockSubagent(ctx, subagentID); err != nil {
+			return err
+		}
+		var err error
+		claimed, err = txQueries.ClaimSubagentLeaseEpoch(ctx, subagentID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		stillRunning = true
+		return nil
+	})
+	if err != nil || !stillRunning {
+		if err != nil && ctx.Err() == nil {
+			slog.Error("claim subagent lease epoch failed", "subagent_id", subagentID, "error", err)
+		}
+		m.releaseKeyLease(key, leaseToken)
+		<-m.subagentSlots
+		return
+	}
+
+	runnerCtx, cancelRunner := context.WithCancelCause(ctx)
+	idCopy := subagentID
+	runner := &Runner{
+		manager:      m,
+		databasePool: m.databasePool,
+		redisClient:  m.redisClient,
+		settings:     m.settings,
+		modelClient:  m.modelClient,
+		toolDeps:     m.toolDeps,
+		services:     m.services,
+		userID:       claimed.UserID,
+		subagentID:   &idCopy,
+		startedAt:    claimed.StartedAt,
+		leaseEpoch:   claimed.LeaseEpoch,
+	}
+	m.mutex.Lock()
+	m.subagentStops[subagentID] = cancelRunner
+	m.mutex.Unlock()
+	m.running.Add(1)
+
+	go func() {
+		defer func() {
+			<-m.subagentSlots
+			m.running.Done()
+		}()
+		renewCtx, stopRenew := context.WithCancel(runnerCtx)
+		renewDone := make(chan struct{})
+		go func() {
+			defer close(renewDone)
+			m.keepKeyLeaseAlive(renewCtx, key, leaseToken, cancelRunner)
+		}()
+
+		runErr := runner.run(runnerCtx)
+		stopRenew()
+		<-renewDone
+		cancelRunner(nil)
+
+		m.mutex.Lock()
+		delete(m.subagentStops, subagentID)
+		m.mutex.Unlock()
+		m.releaseKeyLease(key, leaseToken)
+
+		lostLease := errors.Is(runErr, errLostLease) || errors.Is(context.Cause(runnerCtx), errLostLease)
+		cancelled := errors.Is(context.Cause(runnerCtx), errSubagentCancelled)
+		if !lostLease && !cancelled {
+			m.requeueSubagentIfRunning(claimed.UserID, subagentID)
+		} else {
+			cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
+			m.enqueuePendingUserSubagents(cleanup, claimed.UserID)
+			stop()
+		}
+		if runErr != nil && ctx.Err() == nil && !lostLease && !cancelled {
+			slog.Error("subagent run stopped", "user_id", claimed.UserID, "subagent_id", subagentID, "error", runErr)
+		}
+	}()
+}
+
+// keepKeyLeaseAlive 在 Runner 运行期间定时续期 Redis 租约；租约被取代或超期无法续上时立即中止本机执行。
+func (m *Manager) keepKeyLeaseAlive(ctx context.Context, key, leaseToken string, cancelRunner context.CancelCauseFunc) {
 	ticker := time.NewTicker(leaseRenewInterval)
 	defer ticker.Stop()
 	lastRenewed := time.Now()
-	key := leaseKey(userID)
 	for {
 		select {
 		case <-ctx.Done():
@@ -378,16 +656,16 @@ func (m *Manager) keepLeaseAlive(ctx context.Context, userID uuid.UUID, leaseTok
 	}
 }
 
-// releaseLease 使用独立短超时释放当前实例持有的 Redis 租约，保证停机信号到达后也能立刻让位给存活实例。
-func (m *Manager) releaseLease(userID uuid.UUID, leaseToken string) {
+// releaseKeyLease 使用独立短超时释放当前实例持有的 Redis 租约，保证停机信号到达后也能立刻让位给存活实例。
+func (m *Manager) releaseKeyLease(key, leaseToken string) {
 	cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := m.redisClient.Eval(cleanup, releaseLeaseLua, []string{leaseKey(userID)}, leaseToken).Err(); err != nil {
-		slog.Error("release agent lease failed", "user_id", userID, "error", err)
+	if err := m.redisClient.Eval(cleanup, releaseLeaseLua, []string{key}, leaseToken).Err(); err != nil {
+		slog.Error("release agent lease failed", "lease_key", key, "error", err)
 	}
 }
 
-// requeueIfHasWork 在释放租约后复查数据库持久待办：有未完工作（含停机中断或退出临界区到达的新输入）时立即重新入队。
+// requeueIfHasWork 在释放 Main 租约后复查数据库持久待办：有未完工作（含停机中断或退出临界区到达的新输入）时立即重新入队。
 func (m *Manager) requeueIfHasWork(userID uuid.UUID) {
 	cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -401,4 +679,22 @@ func (m *Manager) requeueIfHasWork(userID uuid.UUID) {
 			slog.Error("requeue pending user failed", "user_id", userID, "error", err)
 		}
 	}
+}
+
+// requeueSubagentIfRunning 在 Subagent 释放租约后复查其持久状态（如滚动停机中断），并顺带补推该用户排队的其余 Subagent。
+func (m *Manager) requeueSubagentIfRunning(userID, subagentID uuid.UUID) {
+	cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	stillRunning, err := database.New(m.databasePool).HasSubagentWork(cleanup, subagentID)
+	if err != nil {
+		slog.Error("recheck subagent work after release failed", "subagent_id", subagentID, "error", err)
+		return
+	}
+	if stillRunning {
+		if err := m.enqueueSubagentWake(cleanup, subagentID); err != nil {
+			slog.Error("requeue interrupted subagent failed", "subagent_id", subagentID, "error", err)
+		}
+		return
+	}
+	m.enqueuePendingUserSubagents(cleanup, userID)
 }

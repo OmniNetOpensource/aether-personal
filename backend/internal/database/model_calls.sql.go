@@ -71,11 +71,17 @@ func (q *Queries) FinishModelCall(ctx context.Context, arg FinishModelCallParams
 const interruptModelCalls = `-- name: InterruptModelCalls :exec
 UPDATE model_calls SET outcome = 'interrupted', finished_at = now(), failure_kind = 'interrupted'
 WHERE user_id = $1
+    AND subagent_id IS NOT DISTINCT FROM $2::uuid
     AND outcome = 'in_flight'
 `
 
-func (q *Queries) InterruptModelCalls(ctx context.Context, userID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, interruptModelCalls, userID)
+type InterruptModelCallsParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+func (q *Queries) InterruptModelCalls(ctx context.Context, arg InterruptModelCallsParams) error {
+	_, err := q.db.Exec(ctx, interruptModelCalls, arg.UserID, arg.SubagentID)
 	return err
 }
 
@@ -83,10 +89,10 @@ const startModelCall = `-- name: StartModelCall :one
 
 WITH step AS (
  UPDATE steps AS source SET model = $1 WHERE source.id = $7
- RETURNING source.id, source.user_id
+ RETURNING source.id, source.user_id, source.subagent_id
 )
-INSERT INTO model_calls (step_id, user_id, requested_model, request_body, purpose, compact_reason, context_tokens_before, summary_through_sequence)
-SELECT step.id, step.user_id, $1, $2::jsonb, $3, $4, $5, $6 FROM step
+INSERT INTO model_calls (step_id, user_id, subagent_id, requested_model, request_body, purpose, compact_reason, context_tokens_before, summary_through_sequence)
+SELECT step.id, step.user_id, step.subagent_id, $1, $2::jsonb, $3, $4, $5, $6 FROM step
 RETURNING id
 `
 
@@ -100,7 +106,7 @@ type StartModelCallParams struct {
 	StepID                 uuid.UUID
 }
 
-// 本文件是模型调用记录的查询集合：登记每次调用的开始、结束与中断（sqlc 据此生成代码）。
+// 本文件是模型调用记录的查询集合：登记每次调用的开始（自动继承关联 step 的 subagent_id）、结束与按 Agent 隔离的中断恢复。
 func (q *Queries) StartModelCall(ctx context.Context, arg StartModelCallParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, startModelCall,
 		arg.RequestedModel,

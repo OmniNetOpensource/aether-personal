@@ -1,6 +1,6 @@
 # 05 Main 运行时
 
-每个用户只有一个 Main（2026-11-02 起系统只有 Main，没有 Subagent），与用户之间是一条永不重置的长期对话，使用同一份 `messageList`。Main 是逻辑概念：平时不占任何进程，消息需要它处理时，任意空闲的对等后端容器通过 Redis 抢占该用户的执行租约并启动一个 Runner 运行它，处理完即释放（对等多实例调度，见「对等多实例调度与停机交接」）。代码在 `backend/internal/agent/`。2026-11-06 新增持久化需求队列，同一时间只处理一项任务，详见 [11 需求队列](11-tasks.md)。
+每个用户拥有一个长期主对话 Main，并可按需并发派生多个独立上下文的异步后台 Subagent（2026-11-12 重新设计引入，见下文「异步后台 Subagent 与零损耗直通转发（2026-11-12）」）。Main 与用户之间是一条永不重置的长期对话，使用同一份 `messageList`。Main 与 Subagent 均为逻辑概念：平时不占任何进程，有活时由任意空闲的对等后端容器通过 Redis 抢占对应执行租约并启动 Runner 协程运行，处理完即释放。代码在 `backend/internal/agent/`。持久化需求队列支持多项独立任务并行处于 `in_progress`，详见 [11 需求队列](11-tasks.md)。
 
 ## 实现顺序
 
@@ -199,17 +199,21 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 | 工具 | 作用 | 状态 |
 | --- | --- | --- |
 | `list_tasks` | 读取当前用户的任务列表，可选择包含已完成与已取消的任务 | `开发中` |
-| `record_task_input` | 原子登记一条用户消息的全部新目标与补充，推进登记位置 | `开发中` |
-| `update_task` | 空闲时启动模型选择的一项待办，或完成、暂停当前任务；不能抢占执行中的任务 | `开发中` |
-| `read_message` | 按 ID 读取完整消息，受用户权限与消息归属限制 | `已实现` |
-| `search_message` | 在完整历史中按关键词搜索，参数含 `keyword` 与 `who`，搜当前用户的全部记录，见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
-| `memory` | Anthropic 风格的 `view/create/str_replace/insert/delete/rename`；读取与编辑 `/memories/memory.md` 和详细主题，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
-| `schedule` | 创建、列出、修改、删除一次性或周期定时任务；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
-| `search`、`fetch_url` | Main 的搜索和网页读取工具 | `已实现` |
-| `read_image` | 读取一张 JPEG、PNG、GIF 或 WebP 的直接地址；字节写入该用户的 OSS，回执只留 `oss://`，发送前再转 base64 | `已实现` |
-| `sandbox_*` / `browser_*` | 阿里云 FC + AgenticFS 个人 Linux 电脑的命令、代码、文件与 GUI 浏览器工具，同一轮内按顺序串行执行，见 [07](07-sandbox.md) | `已实现` |
-| `sandbox_import_file` | 按需将当前用户的聊天附件（`oss://` 图片或文件）流式写入 `/mnt/workspace` 指定路径，与电脑工具同队列保序执行，见 [07](07-sandbox.md) | `已实现` |
-| `sandbox_send_file` | 将 `/mnt/workspace` 中的最终产物（`<= 50 MiB`）存入私有 OSS 并以独立气泡发给用户，见 [07](07-sandbox.md) | `已实现` |
+| `record_task_input` | 原子登记一条用户消息的全部新目标与补充 | `开发中` |
+| `update_task` | 启动一项或多项排队任务为 `in_progress`，或将进行中任务标为完成、等待或退回排队 | `开发中` |
+| `spawn_subagent` | 在独立干净上下文中异步启动后台只读调研/分析 Subagent，同轮可并发启动多个；跑完后由运行时自动向 Main 投递 `subagent_event` | `开发中` |
+| `forward_subagent` | 将已完成独立任务 Subagent 的完整原文零改写直通推送为聊天助手气泡，不经 Main 重新流式生成，也不在 Main 上下文重复存储 | `开发中` |
+| `cancel_subagent` | 用户取消或更改方向时立即中止仍在后台运行的 Subagent | `开发中` |
+| `list_subagents` | 查看当前用户近期的后台 Subagent 状态摘要 | `开发中` |
+| `read_message` | 按 ID 读取主对话完整消息，受用户权限与消息归属限制（Main 与 Subagent 共用） | `已实现` |
+| `search_message` | 在主对话完整历史中按关键词搜索，参数含 `keyword` 与 `who`（Main 与 Subagent 共用），见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
+| `memory` | Main 具备 `view/create/str_replace/insert/delete/rename` 完整能力；Subagent 仅开放只读 `view` 命令，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
+| `schedule` | 创建、列出、修改、删除一次性或周期定时任务（仅 Main）；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
+| `search`、`fetch_url`、`search_twitter` | 联网搜索与网页读取工具（Main 与 Subagent 共用） | `已实现` |
+| `read_image` | 读取一张 JPEG、PNG、GIF 或 WebP 的直接地址；字节写入该用户的 OSS，回执只留 `oss://`，发送前再转 base64（Main 与 Subagent 共用） | `已实现` |
+| `sandbox_*` / `browser_*` | 阿里云 FC + AgenticFS 个人 Linux 电脑的命令、代码、文件与 GUI 浏览器工具（仅 Main 单线程串行执行），见 [07](07-sandbox.md) | `已实现` |
+| `sandbox_import_file` | 按需将当前用户的聊天附件（`oss://` 图片或文件）流式写入 `/mnt/workspace` 指定路径（仅 Main），见 [07](07-sandbox.md) | `已实现` |
+| `sandbox_send_file` | 将 `/mnt/workspace` 中的最终产物（`<= 50 MiB`）存入私有 OSS 并以独立气泡发给用户（仅 Main），见 [07](07-sandbox.md) | `已实现` |
 
 工具参数写在工具描述中。每次请求注入的不可见指令明确 Main 的正文就是给用户的消息、且与工具同批的正文也会展示，要求正文只写用户该读的内容、不暴露内部推理与编排。参数无效时返回工具错误，模型可修正。
 
@@ -269,7 +273,23 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 - 临时性错误（网络错误、超时、限流 429、服务端 5xx）最多重试 3 次，间隔为 1、2、4 秒。每轮模型调用从上下文准备开始计时，包含可能触发的压缩、全部尝试和退避，共用 10 分钟总预算；重试不重置截止时间。预算耗尽即取消请求并结束本轮，数据库收尾使用独立于该预算的上下文；模型请求日志保留实际耗时并记为传输失败。若进程退出先发生，仍按外部中断处理。独立发起的压缩请求同样使用模型客户端的 10 分钟单次上限。
 - 失败收尾时若已有请求未覆盖的新输入，则继续调度；否则记下当时的最大序号，Main 停住不再重试；失败前的消息留在上下文中，用户下次发消息时，Main 会一并看到之前未回复的消息。
 
-## 删除 Subagent（2026-11-02）
+## 异步后台 Subagent 与零损耗直通转发（2026-11-12）
+
+2026-11-12，用户要求在一次性收到多条可并行任务时让阿芒具备并行处理能力以提高吞吐量，并在审阅工业界实践（Anthropic Research、Claude Code、OpenAI Agents SDK、Cognition「并行贡献智力、单线程执行写入」、OpenClaw 异步完成投递与 LangChain `forward_message` 防转述损耗实验）后逐项确认以下设计，取代 2026-11-02 删除 Subagent 的状态（迁移 `00055_add_subagents`）：
+
+1. **异步后台并发与自动完成投递（抛弃旧版 `send_message` 工具）**
+   - Main 通过数据库工具 `spawn_subagent(title, prompt)` 在用户消息事务内原子创建 `subagents` 记录与首条指派消息，提交后推入独立的 Redis 队列 `agent:subagent_wake_queue`；Main 可以在同一轮并发启动多个 Subagent 后立即结束本轮，运行期间用户随时发来新消息 Main 均能秒级接手继续并行，无队头阻塞。
+   - Subagent 不配备任何跨代理发消息工具：它在干净上下文窗口内使用并行工具完成调研，写出无工具调用的最终回复即代表完成（若返回空白最终回复按无效响应最多重试 3 次）。请求后阶段在单一 PostgreSQL 事务内按固定锁序（先 `LockUserMessages`、后 `LockSubagent`）保存最终回复、将 `subagents` 标为 `completed` 并保存 `output`，同时向 Main 的 `messages` 插入不可见的 `name = "subagent_event"` 触发消息并唤醒 Main；耗尽重试或达到 15 分钟上限时同样标为 `failed` 并投递失败原因，绝不静默丢单。
+2. **Main 把关 + `forward_subagent` 零损耗直通转发**
+   - 为消除主代理二次改写长文带来的「传话筒效应」（信息损耗与双倍流式生成延迟），`SubagentInstructions` 共享阿芒全套调研严谨性与平实中文表达规范，要求直接产出面向用户的完整终稿。
+   - `subagent_event` 到达 Main 后：若属于独立任务且结果合格，Main 调用 `forward_subagent(subagent_id)`（启用 `UserVisibleParts`）并将对应 `task` 标为 `completed`——后端直接将 `subagents.output` 封装进工具回执的 `parts` 作为可见聊天气泡推送前端，模型侧请求组装自动剥离 `parts`，使该篇长文在 Main 上下文中仅保留 `subagent_event` 这一份拷贝（后续追问不断片，且不翻倍占用压缩额度）；若属于同一复杂任务拆出的多路调研，则由 Main 等齐各路 `subagent_event` 后综合回复。
+3. **只读工具隔离、独立锁与多实例配额保护**
+   - **单线程写入边界**：每位用户只有一台共享桌面与 `/mnt/workspace` 的沙箱电脑，因此 Subagent 仅开放 7 个只读工具（`search`、`search_twitter`、`fetch_url`、`read_image`、`search_message`、`read_message` 与仅限 `view` 命令的 `memory`）；沙箱电脑、写记忆、任务队列和定时安排保留给 Main 单线程执行，物理杜绝并发写冲突与无限递归派生。
+   - **细粒度锁与配额**：Subagent 常规步骤与工具回执使用独立的 `LockSubagent` 与 `subagents.lease_epoch`，不阻塞主聊天写入；`Manager` 使用独立的 `subagentSlots` 槽位池，并通过 Redis Lua 原子限制**单用户最多同时运行 5 个 Subagent、单个最长 15 分钟**，超出部分留在库中待前序结束后自动补位；用户中途取消任务时，Main 调用 `cancel_subagent` 递增代数并经 `agent:subagent_cancel` 广播立即中止远端执行。
+4. **模型配置、聊天指示与看板观测**
+   - 管理看板「配置」页新增可选的 Subagent 模型（`model_settings.subagent_model`，留空默认跟随 Main）；「运行过程」页支持在 Main 与各 Subagent 的独立时间线间切换或一键跳转；只要 Main 或任意后台 Subagent 仍在运行，聊天底部三点思考气泡与任务栏绿点保持显示，且期间不触发闲置后台反思。
+
+## 删除 Subagent（2026-11-02，历史记录）
 
 2026-11-02，用户决定先把 Subagent 整体删除：系统只剩每位用户一个 Main，Main 直接用工具完成全部工作。理由是先核查了本地数据库的实际使用情况——116 次模型调用中，`assign_subagents` 被提供给模型 111 次但从未被选中，`subagents` 表始终为 0 条，Main 一直直接执行；保留整套派发、独立上下文、并发限流与交付检查的成本没有对应的实际收益。
 

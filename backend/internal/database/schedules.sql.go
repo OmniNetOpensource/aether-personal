@@ -140,13 +140,14 @@ WHERE ($1::uuid IS NULL OR u.id = $1::uuid)
         WHERE m.user_id = u.id AND m.sender = 'user' AND m.role = 'user' AND NOT m.is_summary
     )
     AND NOT EXISTS (SELECT 1 FROM main_work AS w WHERE w.user_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM subagents AS sa WHERE sa.user_id = u.id AND sa.status = 'running')
     AND NOT EXISTS (SELECT 1 FROM model_calls AS mc WHERE mc.user_id = u.id AND mc.outcome = 'in_flight')
     AND GREATEST(
         (SELECT mc.finished_at FROM model_calls AS mc
          WHERE mc.user_id = u.id AND mc.finished_at IS NOT NULL
          ORDER BY mc.started_at DESC LIMIT 1),
         (SELECT m.created_at FROM messages AS m
-         WHERE m.user_id = u.id
+         WHERE m.user_id = u.id AND m.subagent_id IS NULL
          ORDER BY m.sequence DESC LIMIT 1)
     ) <= now() - make_interval(mins => $2::int)
 `

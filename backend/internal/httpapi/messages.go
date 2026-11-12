@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
@@ -69,10 +70,17 @@ func chatMessagesFromRow(row database.ListChatRowsAfterRow) []chatMessage {
 		if len(content.Parts) == 0 {
 			return nil
 		}
+		var textBuilder strings.Builder
+		for _, part := range content.Parts {
+			if part.Type == "text" {
+				textBuilder.WriteString(part.Text)
+			}
+		}
 		return []chatMessage{{
 			ID:        row.ID.String(),
 			Position:  row.ID,
 			Sender:    "main",
+			Text:      strings.TrimSpace(textBuilder.String()),
 			Parts:     content.Parts,
 			CreatedAt: row.CreatedAt,
 		}}

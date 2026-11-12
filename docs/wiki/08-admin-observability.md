@@ -89,9 +89,9 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 | `POST /admin/login` | 校验 `{password}` 并返回管理令牌 |
 | `POST /admin/logout` | 撤销当前管理会话 |
 | `GET /admin/me` | 当前共享管理员名称 |
-| `GET /admin/snapshot` | 时间窗口内出现过的模型候选、用户下拉列表及当前选中用户的 Main 状态（2026-11-11 删除页面合并后不再读取的趋势/工具/旧步骤聚合） |
+| `GET /admin/snapshot` | 时间窗口内出现过的模型候选、用户下拉列表，以及当前选中用户的 Main 状态与近期后台 Subagent 列表（2026-11-11 删除页面合并后不再读取的趋势/工具/旧步骤聚合；2026-11-12 增加 `subagents`） |
 | `GET /admin/calls/{id}` | 按调用 ID 读取请求、响应 JSON，独立管理会话鉴权（原未使用的列表接口 `GET /admin/calls` 已于 2026-11-11 移除） |
-| `GET /admin/timeline` | `user_id` 的一页运行时间线（关联助手回复与压缩摘要的成功请求及失败请求）；`before` 游标翻到更早，首页附带不可见指令 |
+| `GET /admin/timeline` | `user_id`（及可选 `subagent_id`）的一页运行时间线（关联助手回复与压缩摘要的成功请求及失败请求）；`before` 游标翻到更早，首页附带对应角色的不可见指令（Main 或 Subagent），Main 时间线上的 `spawn_subagent`、`forward_subagent`、`cancel_subagent` 与 `subagent_event` 节点支持一键跳转查看该 Subagent 轨迹 |
 | `GET /admin/timeline/messages/{id}` | 单条消息的全文与私有 OSS 签名截图，供时间线展开截断内容（`admin/server.mjs` CSP `img-src` 放行 `https://*.aliyuncs.com`） |
 | `GET /admin/quotas` | 各服务的剩余额度，后端用已保存的 Key 并行向供应商实时查询，见下文额度面板 |
 
@@ -123,7 +123,7 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 | --- | --- |
 | `GET /admin/model-settings` | 当前选择、版本、来源和最后修改者 |
 | `GET /admin/models` | 已配置渠道的模型候选目录，以及渠道未配置或目录请求失败的提示 |
-| `PUT /admin/model-settings` | 原子保存 `main_model`、`compact_at_tokens` 与预期 `version`；冲突返回 409 |
+| `PUT /admin/model-settings` | 原子保存 `main_model`、可选 `subagent_model` 与 `compact_model`、`compact_at_tokens`、`reflection_idle_minutes` 及预期 `version`；冲突返回 409 |
 
 三个接口均使用独立管理会话与 no-store。管理端同源代理只允许上述固定路径和方法，模型服务密钥始终只在 Go 后端。页面不会自动刷新覆盖尚未保存的选择。
 

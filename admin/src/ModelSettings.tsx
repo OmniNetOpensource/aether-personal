@@ -1,4 +1,4 @@
-// 本文件是管理看板配置页的模型部分：分别选择 Main 与压缩模型，填写压缩阈值与闲置后台反思时长，保存后从下一次请求或扫描生效。
+// 本文件是管理看板配置页的模型部分：分别选择 Main、后台 Subagent 与压缩模型，填写压缩阈值与闲置后台反思时长，保存后从下一次请求或扫描生效。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,7 +27,12 @@ export function ModelSettingsPage({
 }) {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [draft, setDraft] = useState<Pick<ModelSettings, 'main_model' | 'compact_model' | 'compact_at_tokens' | 'reflection_idle_minutes'> | null>(null);
+  const [draft, setDraft] = useState<
+    Pick<
+      ModelSettings,
+      'main_model' | 'subagent_model' | 'compact_model' | 'compact_at_tokens' | 'reflection_idle_minutes'
+    > | null
+  >(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loadError, setLoadError] = useState(false);
@@ -47,6 +52,7 @@ export function ModelSettingsPage({
       setCatalog(loadedCatalog);
       setDraft({
         main_model: loadedSettings.main_model,
+        subagent_model: loadedSettings.subagent_model ?? '',
         compact_model: loadedSettings.compact_model,
         compact_at_tokens: loadedSettings.compact_at_tokens,
         reflection_idle_minutes: loadedSettings.reflection_idle_minutes,
@@ -75,9 +81,11 @@ export function ModelSettingsPage({
     return <div className="loading-card">正在读取当前配置与可用模型…</div>;
 
   const selected = catalog.items.find((model) => model.id === draft.main_model);
+  const selectedSubagent = catalog.items.find((model) => model.id === draft.subagent_model);
   const selectedCompact = catalog.items.find((model) => model.id === draft.compact_model);
   const changed =
     draft.main_model !== settings.main_model ||
+    draft.subagent_model !== (settings.subagent_model ?? '') ||
     draft.compact_model !== settings.compact_model ||
     draft.compact_at_tokens !== settings.compact_at_tokens ||
     draft.reflection_idle_minutes !== settings.reflection_idle_minutes;
@@ -89,8 +97,11 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (saving || !settings || !catalog || !draft) return;
     setSaveError('');
-    if (!catalog.items.some((model) => model.id === draft.main_model) ||
-        (draft.compact_model !== '' && !catalog.items.some((model) => model.id === draft.compact_model))) {
+    if (
+      !catalog.items.some((model) => model.id === draft.main_model) ||
+      (draft.subagent_model !== '' && !catalog.items.some((model) => model.id === draft.subagent_model)) ||
+      (draft.compact_model !== '' && !catalog.items.some((model) => model.id === draft.compact_model))
+    ) {
       setSaveError('请选择目录中的完整模型 ID，或刷新目录后重试。');
       return;
     }
@@ -113,6 +124,7 @@ export function ModelSettingsPage({
       setSettings(saved);
       setDraft({
         main_model: saved.main_model,
+        subagent_model: saved.subagent_model ?? '',
         compact_model: saved.compact_model,
         compact_at_tokens: saved.compact_at_tokens,
         reflection_idle_minutes: saved.reflection_idle_minutes,
@@ -145,7 +157,7 @@ export function ModelSettingsPage({
       ) : null}
       <section className="model-intro">
         <div className="eyebrow teal">MODEL ROUTING</div>
-        <h2>选择对话与压缩模型</h2>
+        <h2>选择对话、Subagent 与压缩模型</h2>
         <p>应用于所有用户。配置保存后立即生效，服务重启后继续保留；正在执行的请求会正常完成。</p>
         <p>输出额度由供应商决定，应用不发送输出限制参数。</p>
         <div className="model-config-meta">
@@ -169,7 +181,7 @@ export function ModelSettingsPage({
               <span className="model-role-icon">◈</span>
               <h3>Main Agent</h3>
             </div>
-            <p className="muted">负责每位用户的主对话与执行。</p>
+            <p className="muted">负责每位用户的主对话、任务编排、电脑执行与结果把关。</p>
             <div className="model-active">
               <span>当前生效</span>
               <strong>{settings.main_model}</strong>
@@ -208,6 +220,52 @@ export function ModelSettingsPage({
               )}
             </div>
           </section>
+          <section className="panel model-role-card">
+            <div className="model-role-heading">
+              <span className="model-role-icon">◇</span>
+              <h3>Subagent</h3>
+            </div>
+            <p className="muted">负责并行后台只读调研与独立子任务成稿，留空时自动跟随 Main。</p>
+            <div className="model-active">
+              <span>当前生效</span>
+              <strong>{settings.subagent_model || `跟随 Main · ${settings.main_model}`}</strong>
+            </div>
+            <label className="model-picker">
+              选择 Subagent 模型
+              <input
+                list="subagent-model-list"
+                autoComplete="off"
+                placeholder="留空跟随 Main；也可独立选择模型"
+                aria-label="选择 Subagent 模型"
+                value={draft.subagent_model}
+                disabled={saving}
+                onChange={(event) => setDraft({ ...draft, subagent_model: event.target.value.trim() })}
+              />
+              <datalist id="subagent-model-list">
+                {catalog.items.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name}
+                  </option>
+                ))}
+              </datalist>
+            </label>
+            <div className="model-price">
+              {selectedSubagent ? (
+                <>
+                  <span>
+                    {`${selectedSubagent.provider} · ${selectedSubagent.context_length > 0 ? `${formatNumber(selectedSubagent.context_length)} ${selectedSubagent.provider === 'ikun Gemini' ? '输入上限' : '上下文'} Token` : '模型容量未知'}`}
+                  </span>
+                  <span>
+                    {`输入 ${perMillion(selectedSubagent.pricing.prompt)} / 输出 ${perMillion(selectedSubagent.pricing.completion)} · USD / 百万 Token`}
+                  </span>
+                </>
+              ) : draft.subagent_model === '' ? (
+                <span>未单独选择时，后台 Subagent 默认跟随 Main 模型。</span>
+              ) : (
+                <span>请从可用模型目录中选择一个完整模型 ID，或清空以跟随 Main。</span>
+              )}
+            </div>
+          </section>
         </div>
         <section className="panel model-role-card compact-settings">
           <h3>自动压缩上下文</h3>
@@ -237,10 +295,10 @@ export function ModelSettingsPage({
           </label>
           <p className="muted">
             {selectedCompact
-              ? `${selectedCompact.provider} · ${selectedCompact.context_length > 0 ? `${formatNumber(selectedCompact.context_length)} Token 容量` : '模型容量未知'}。仅生成摘要，后续回复继续由 Main 完成。`
-              : draft.compact_model === '' ? '未单独选择时，压缩跟随 Main 模型。' : '请从目录中选择完整的压缩模型 ID。'}
+              ? `${selectedCompact.provider} · ${selectedCompact.context_length > 0 ? `${formatNumber(selectedCompact.context_length)} Token 容量` : '模型容量未知'}。仅生成摘要，后续回复继续由当前 Agent 完成。`
+              : draft.compact_model === '' ? '未单独选择时，压缩跟随当前 Agent 模型。' : '请从目录中选择完整的压缩模型 ID。'}
           </p>
-          <p className="muted">摘要使用模型自身的输出额度；Claude 使用其最大输出能力。跨模型压缩不保证复用 Main 的缓存。</p>
+          <p className="muted">摘要使用模型自身的输出额度；Claude 使用其最大输出能力。跨模型压缩不保证复用原缓存。</p>
           <div className="model-role-grid">
             <label className="model-picker">
               上下文阈值（Token）
@@ -257,7 +315,7 @@ export function ModelSettingsPage({
             </label>
           </div>
           <p className="muted">
-            触发依据 Main 上一次成功请求的官方输入用量，并受 Main 已知容量上限约束；请选择能容纳待压缩历史的压缩模型。
+            触发依据该 Agent 上一次同模型成功请求的官方输入用量，并受已知容量上限约束；请选择能容纳待压缩历史的压缩模型。
           </p>
         </section>
         <section className="panel model-role-card compact-settings">
@@ -295,7 +353,7 @@ export function ModelSettingsPage({
         </div>
       </form>
       <p className="model-catalog-note">
-        {`来自已配置的 OpenRouter、ikun Gemini 与 ikun Claude 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。ikun Claude 可用于 Main 与压缩。目录不保证即时可用性，渠道未返回的费用显示未知。`}
+        {`来自已配置的 OpenRouter、ikun Gemini 与 ikun Claude 实时目录，共 ${formatNumber(catalog.items.length)} 个模型候选。ikun Claude 可用于 Main、Subagent 与压缩。目录不保证即时可用性，渠道未返回的费用显示未知。`}
       </p>
     </>
   );

@@ -32,6 +32,25 @@ var memoryTool = Tool{
 	Execute:    executeMemory,
 }
 
+// subagentMemoryTool 向 Subagent 仅暴露只读 view 命令，避免多个并行 Subagent 同时改写同一记忆文件造成覆盖冲突。
+var subagentMemoryTool = Tool{
+	Name:               "memory",
+	Definition:         json.RawMessage(`{"type":"function","function":{"name":"memory","description":"Read persistent text files in this user's private /memories namespace (read-only view access for subagents). /memories/memory.md is the root containing core agreements and topic links; view it first only when user preferences or prior context would help your assigned task, then view only relevant linked topics.","parameters":{"type":"object","additionalProperties":false,"properties":{"command":{"type":"string","enum":["view"]},"path":{"type":"string"},"view_range":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2}},"required":["command","path"]}}}`),
+	OutsideTransaction: true,
+	Execute: func(ctx context.Context, deps Dependencies, _ *database.Queries, userID uuid.UUID, arguments string) (string, error) {
+		var check struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &check); err != nil {
+			return "Error: memory arguments must be valid JSON", nil
+		}
+		if check.Command != "view" {
+			return "Error: subagents only have read-only view access to memory", nil
+		}
+		return executeMemory(ctx, deps, database.New(deps.DatabasePool), userID, arguments)
+	},
+}
+
 // memoryInput 只表达文件操作；指针区分必填字符串缺失与允许的空文件或空插入。
 type memoryInput struct {
 	Command    string  `json:"command"`

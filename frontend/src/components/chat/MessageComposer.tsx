@@ -137,9 +137,12 @@ export function MessageComposer({
   let queueSummary = '';
   if (leadTask) {
     if (leadTask.status === 'in_progress') {
+      const otherInProgressCount =
+        openTasks.filter((task) => task.status === 'in_progress').length - 1;
       const queuedCount = openTasks.filter((task) => task.status === 'queued').length;
       const waitingCount = openTasks.filter((task) => task.status === 'waiting').length;
       const restParts: string[] = [];
+      if (otherInProgressCount > 0) restParts.push(`其余 ${otherInProgressCount} 项并行中`);
       if (queuedCount > 0) restParts.push(`${queuedCount} 项排队`);
       if (waitingCount > 0) restParts.push(`${waitingCount} 项等待`);
       queueSummary = restParts.length > 0 ? restParts.join(' · ') : '查看详情';

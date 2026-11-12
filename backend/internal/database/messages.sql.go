@@ -42,26 +42,37 @@ func (q *Queries) CompleteMainReply(ctx context.Context, arg CompleteMainReplyPa
 }
 
 const discardGeneratingReply = `-- name: DiscardGeneratingReply :exec
-DELETE FROM messages WHERE user_id = $1 AND generating
+DELETE FROM messages
+WHERE user_id = $1
+    AND subagent_id IS NOT DISTINCT FROM $2::uuid
+    AND generating
 `
 
-func (q *Queries) DiscardGeneratingReply(ctx context.Context, userID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, discardGeneratingReply, userID)
+type DiscardGeneratingReplyParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+func (q *Queries) DiscardGeneratingReply(ctx context.Context, arg DiscardGeneratingReplyParams) error {
+	_, err := q.db.Exec(ctx, discardGeneratingReply, arg.UserID, arg.SubagentID)
 	return err
 }
 
 const failUnfinishedSteps = `-- name: FailUnfinishedSteps :exec
 UPDATE steps SET error = $1, finished_at = now()
-WHERE user_id = $2 AND finished_at IS NULL
+WHERE user_id = $2
+  AND subagent_id IS NOT DISTINCT FROM $3::uuid
+  AND finished_at IS NULL
 `
 
 type FailUnfinishedStepsParams struct {
-	Error  *string
-	UserID uuid.UUID
+	Error      *string
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
 }
 
 func (q *Queries) FailUnfinishedSteps(ctx context.Context, arg FailUnfinishedStepsParams) error {
-	_, err := q.db.Exec(ctx, failUnfinishedSteps, arg.Error, arg.UserID)
+	_, err := q.db.Exec(ctx, failUnfinishedSteps, arg.Error, arg.UserID, arg.SubagentID)
 	return err
 }
 
@@ -92,17 +103,23 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 const getLastContextUsage = `-- name: GetLastContextUsage :one
 SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM model_calls WHERE user_id = $1
+ AND subagent_id IS NOT DISTINCT FROM $2::uuid
  AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL
 ORDER BY started_at DESC LIMIT 1
 `
+
+type GetLastContextUsageParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
 
 type GetLastContextUsageRow struct {
 	RequestedModel string
 	InputTokens    int32
 }
 
-func (q *Queries) GetLastContextUsage(ctx context.Context, userID uuid.UUID) (GetLastContextUsageRow, error) {
-	row := q.db.QueryRow(ctx, getLastContextUsage, userID)
+func (q *Queries) GetLastContextUsage(ctx context.Context, arg GetLastContextUsageParams) (GetLastContextUsageRow, error) {
+	row := q.db.QueryRow(ctx, getLastContextUsage, arg.UserID, arg.SubagentID)
 	var i GetLastContextUsageRow
 	err := row.Scan(&i.RequestedModel, &i.InputTokens)
 	return i, err
@@ -137,9 +154,12 @@ func (q *Queries) GetLegacyChatCursor(ctx context.Context, arg GetLegacyChatCurs
 }
 
 const getMainStatus = `-- name: GetMainStatus :one
-SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid) AS thinking,
+SELECT (
+    EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
+    OR EXISTS (SELECT 1 FROM subagents WHERE user_id = $1::uuid AND status = 'running')
+)::boolean AS thinking,
     EXISTS (SELECT 1 FROM users WHERE id = $1::uuid
-        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = $1::uuid)) AS failed
+        AND main_failed_through_sequence >= (SELECT max(sequence) FROM messages WHERE user_id = $1::uuid AND subagent_id IS NULL)) AS failed
 `
 
 type GetMainStatusRow struct {
@@ -147,7 +167,7 @@ type GetMainStatusRow struct {
 	Failed   bool
 }
 
-// 失败位置覆盖最新消息时保持失败提示；新输入推进序号后自然清除，重连也能还原。
+// 只要 Main 或任意后台 Subagent 仍在运行，聊天界面的处理中提示保持亮起；失败判断只对照 Main 自己的消息序号。
 func (q *Queries) GetMainStatus(ctx context.Context, userID uuid.UUID) (GetMainStatusRow, error) {
 	row := q.db.QueryRow(ctx, getMainStatus, userID)
 	var i GetMainStatusRow
@@ -170,7 +190,7 @@ const hasMainWork = `-- name: HasMainWork :one
 SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
 `
 
-// 与调度共用 main_work 的定义：聊天的思考状态、运行前的检查都看它。
+// 判断 Main 自身是否有待处理消息。
 func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, hasMainWork, userID)
 	var exists bool
@@ -179,7 +199,7 @@ func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, erro
 }
 
 const hasNewMainInput = `-- name: HasNewMainInput :one
-SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = $1
+SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = $1 AND subagent_id IS NULL
     AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
     AND sequence > $2::bigint)
 `
@@ -189,7 +209,7 @@ type HasNewMainInputParams struct {
 	Through int64
 }
 
-// 只比较实际投递的输入，摘要和工具回执不打断生成。
+// 只比较投给 Main 的实际输入，摘要、工具回执与 Subagent 消息不打断 Main 生成。
 func (q *Queries) HasNewMainInput(ctx context.Context, arg HasNewMainInputParams) (bool, error) {
 	row := q.db.QueryRow(ctx, hasNewMainInput, arg.UserID, arg.Through)
 	var exists bool
@@ -198,22 +218,24 @@ func (q *Queries) HasNewMainInput(ctx context.Context, arg HasNewMainInputParams
 }
 
 const insertAgentMessage = `-- name: InsertAgentMessage :exec
-INSERT INTO messages (user_id, role, content, step_id, sender, visible)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, sender, visible)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type InsertAgentMessageParams struct {
-	UserID  uuid.UUID
-	Role    string
-	Content []byte
-	StepID  *uuid.UUID
-	Sender  *string
-	Visible bool
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	Role       string
+	Content    []byte
+	StepID     *uuid.UUID
+	Sender     *string
+	Visible    bool
 }
 
 func (q *Queries) InsertAgentMessage(ctx context.Context, arg InsertAgentMessageParams) error {
 	_, err := q.db.Exec(ctx, insertAgentMessage,
 		arg.UserID,
+		arg.SubagentID,
 		arg.Role,
 		arg.Content,
 		arg.StepID,
@@ -224,12 +246,13 @@ func (q *Queries) InsertAgentMessage(ctx context.Context, arg InsertAgentMessage
 }
 
 const insertContextSummary = `-- name: InsertContextSummary :exec
-INSERT INTO messages (user_id, role, content, step_id, is_summary, summary_through_sequence)
-VALUES ($1, 'user', $2, $3, true, $4)
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)
+VALUES ($1, $2, 'user', $3, $4, true, $5)
 `
 
 type InsertContextSummaryParams struct {
 	UserID                 uuid.UUID
+	SubagentID             *uuid.UUID
 	Content                []byte
 	StepID                 *uuid.UUID
 	SummaryThroughSequence *int64
@@ -238,6 +261,7 @@ type InsertContextSummaryParams struct {
 func (q *Queries) InsertContextSummary(ctx context.Context, arg InsertContextSummaryParams) error {
 	_, err := q.db.Exec(ctx, insertContextSummary,
 		arg.UserID,
+		arg.SubagentID,
 		arg.Content,
 		arg.StepID,
 		arg.SummaryThroughSequence,
@@ -283,11 +307,15 @@ func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessagePa
 const listAgentContextRows = `-- name: ListAgentContextRows :many
 WITH summary AS (
  SELECT id, summary_through_sequence FROM messages
- WHERE user_id = $1 AND is_summary
+ WHERE user_id = $1
+   AND subagent_id IS NOT DISTINCT FROM $2::uuid
+   AND is_summary
  ORDER BY sequence DESC LIMIT 1
 )
 SELECT m.id, m.sequence, m.content, m.is_summary, m.sender, m.step_id, m.created_at FROM messages AS m
-WHERE m.user_id = $1 AND NOT m.generating
+WHERE m.user_id = $1
+ AND m.subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND NOT m.generating
  -- 旧原型的自动根快照留作历史审计，不再进入普通请求或 compact；主动读取记忆产生的工具回执仍正常保留。
  AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
  AND (
@@ -296,6 +324,11 @@ WHERE m.user_id = $1 AND NOT m.generating
  )
 ORDER BY m.is_summary DESC, m.sequence
 `
+
+type ListAgentContextRowsParams struct {
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+}
 
 type ListAgentContextRowsRow struct {
 	ID        uuid.UUID
@@ -307,8 +340,8 @@ type ListAgentContextRowsRow struct {
 	CreatedAt time.Time
 }
 
-func (q *Queries) ListAgentContextRows(ctx context.Context, userID uuid.UUID) ([]ListAgentContextRowsRow, error) {
-	rows, err := q.db.Query(ctx, listAgentContextRows, userID)
+func (q *Queries) ListAgentContextRows(ctx context.Context, arg ListAgentContextRowsParams) ([]ListAgentContextRowsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentContextRows, arg.UserID, arg.SubagentID)
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +475,7 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 
 const listMainWork = `-- name: ListMainWork :many
 SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
-    WHERE m.user_id = w.user_id AND m.role = 'user' AND NOT m.is_summary
+    WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
         AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
 FROM main_work AS w ORDER BY w.user_id
 `
@@ -452,7 +485,7 @@ type ListMainWorkRow struct {
 	InputSequence int64
 }
 
-// 启动与周期补查只读取业务待办，不再维护实例目录或临时执行归属。
+// 启动与周期补查只读取 Main 的业务待办，排除 Subagent 自己的内部消息。
 func (q *Queries) ListMainWork(ctx context.Context) ([]ListMainWorkRow, error) {
 	rows, err := q.db.Query(ctx, listMainWork)
 	if err != nil {
@@ -478,7 +511,7 @@ const lockUserMessages = `-- name: LockUserMessages :exec
 SELECT pg_advisory_xact_lock(hashtextextended('messages:' || $1::uuid::text, 0))
 `
 
-// 本文件提供消息写入、上下文、步骤记账、租约代数和持久待办查询；短事务用户锁保证消息顺序，执行代数防止跨实例脑裂覆盖。
+// 本文件提供 Main 与 Subagent 的消息写入、上下文隔离读取、步骤记账、租约代数和持久待办查询。
 // 事务内持有，提交时释放：同一用户的插入与代数校验排队进行，保证顺序一致且不死锁。
 func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockUserMessages, userID)
@@ -486,64 +519,67 @@ func (q *Queries) LockUserMessages(ctx context.Context, userID uuid.UUID) error 
 }
 
 const markMainFailed = `-- name: MarkMainFailed :exec
-UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = $1::uuid)
+UPDATE users SET main_failed_through_sequence = (SELECT max(m.sequence) FROM messages AS m WHERE m.user_id = $1::uuid AND m.subagent_id IS NULL)
 WHERE id = $1::uuid
 `
 
-// 记下失败时最后一条消息的序号，之后有新消息才再次运行。
+// 记下 Main 失败时自身最后一条消息的序号，之后有新的 Main 输入才再次运行。
 func (q *Queries) MarkMainFailed(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markMainFailed, userID)
 	return err
 }
 
 const reserveMainReply = `-- name: ReserveMainReply :one
-INSERT INTO messages (user_id, role, content, step_id, generating)
-VALUES ($1, 'assistant', '{"role":"assistant"}', $2, true) RETURNING id
+INSERT INTO messages (user_id, subagent_id, role, content, step_id, generating)
+VALUES ($1, $2, 'assistant', '{"role":"assistant"}', $3, true) RETURNING id
 `
 
 type ReserveMainReplyParams struct {
-	UserID uuid.UUID
-	StepID *uuid.UUID
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	StepID     *uuid.UUID
 }
 
-// 回答独立保存，不关联任务；任务状态只由任务工具维护。
+// Main 与 Subagent 共用生成中占位（subagent_id 为空即 Main）；Subagent 最终结果永远保持 visible = false。
 func (q *Queries) ReserveMainReply(ctx context.Context, arg ReserveMainReplyParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.StepID)
+	row := q.db.QueryRow(ctx, reserveMainReply, arg.UserID, arg.SubagentID, arg.StepID)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
 
 const startCompactStep = `-- name: StartCompactStep :one
-INSERT INTO steps (user_id, model, started_at, purpose)
-VALUES ($1, $2, now(), 'compact') RETURNING id
+INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
+VALUES ($1, $2, $3, now(), 'compact') RETURNING id
 `
 
 type StartCompactStepParams struct {
-	UserID uuid.UUID
-	Model  string
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	Model      string
 }
 
 func (q *Queries) StartCompactStep(ctx context.Context, arg StartCompactStepParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, startCompactStep, arg.UserID, arg.Model)
+	row := q.db.QueryRow(ctx, startCompactStep, arg.UserID, arg.SubagentID, arg.Model)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
 
 const startStep = `-- name: StartStep :one
-INSERT INTO steps (user_id, model, started_at)
-VALUES ($1, $2, now())
+INSERT INTO steps (user_id, subagent_id, model, started_at)
+VALUES ($1, $2, $3, now())
 RETURNING id
 `
 
 type StartStepParams struct {
-	UserID uuid.UUID
-	Model  string
+	UserID     uuid.UUID
+	SubagentID *uuid.UUID
+	Model      string
 }
 
 func (q *Queries) StartStep(ctx context.Context, arg StartStepParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, startStep, arg.UserID, arg.Model)
+	row := q.db.QueryRow(ctx, startStep, arg.UserID, arg.SubagentID, arg.Model)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err

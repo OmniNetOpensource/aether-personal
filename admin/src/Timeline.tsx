@@ -1,4 +1,4 @@
-// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 的输入、模型回复、工具调用与失败请求，长内容折叠，图片按需加载展示。
+// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 或指定后台 Subagent 的输入、推理、工具调用与失败请求，并支持在两者间一键跳转。
 
 import type { ReactNode } from 'react';
 import {
@@ -13,46 +13,81 @@ import {
 } from './api.js';
 import { CopyChip, Empty, Foldable, Panel, Pill, RequestIds } from './ui.js';
 
-// TimelinePage 需要的外部状态与操作都由上层持有，自动刷新重绘后展开与全文不丢失。
+// TimelineViewProps 承载时间线渲染所需的外部状态与跳转回调，自动刷新重绘后展开与全文不丢失。
 export interface TimelineViewProps {
   user: string;
+  subagent: string;
   snapshot: Snapshot;
   timeline: (Timeline & { key: string }) | null;
   openState: Map<string, boolean>;
   fullItems: Map<string, TimelineItem>;
+  onSelectSubagent: (subagentID: string) => void;
   onLoadFull: (id: string, button: HTMLButtonElement) => void;
   onLoadEarlier: (button: HTMLButtonElement) => void;
   onOpenCall: (call: Call) => void;
   notify: (message: string) => void;
 }
 
-// TimelinePage 按时间降序渲染 Main 的时间线：最新在上，工具结果并入对应的工具调用卡片，未产出消息的请求单独显示。
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// extractSubagentID 从派发回执、转发/取消参数或 subagent_event 文本中提取关联的 Subagent UUID，供一键跳转查看内部轨迹。
+function extractSubagentID(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const match = /"subagent_id"\s*:\s*"([0-9a-f-]{36})"/i.exec(raw);
+  const candidate = match?.[1] ?? '';
+  return uuidPattern.test(candidate) ? candidate : null;
+}
+
+// TimelinePage 按时间降序渲染 Main 或指定 Subagent 的时间线：最新在上，工具结果并入对应的工具调用卡片，未产出消息的请求单独显示。
 export function TimelinePage(props: TimelineViewProps) {
-  const { user, snapshot, timeline } = props;
+  const { user, subagent, snapshot, timeline } = props;
   if (!user)
-    return <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 的运行过程。" />;
-  if (!timeline || timeline.key !== user)
+    return <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 与后台 Subagent 的运行过程。" />;
+  const expectedKey = `${user}:${subagent}`;
+  if (!timeline || timeline.key !== expectedKey)
     return <div className="loading-card">正在读取运行过程…</div>;
+
   const summary = snapshot.agents.items[0];
   const email = snapshot.users.items.find((item) => item.id === user)?.email ?? user;
+  const activeSubagent =
+    timeline.subagent ?? snapshot.subagents?.items.find((item) => item.id === subagent);
   const results = new Map(
     timeline.items.filter((item) => item.role === 'tool').map((item) => [item.tool_call_id, item]),
   );
   const paired = new Set(
     timeline.items.flatMap((item) => (item.tool_calls ?? []).map((call) => call.id)).filter((id) => results.has(id)),
   );
+
+  const panelTitle = subagent
+    ? `Subagent · ${activeSubagent?.title || subagent.slice(0, 8)} (${email})`
+    : `Main · ${email}`;
+  const panelDescription = subagent
+    ? `独立后台轨迹（ID: ${subagent}）；最新在上，完成后向 Main 投递 subagent_event。`
+    : '最新在上；按查询条件显示消息与请求，点击 Subagent 相关卡片可深入查看子代理轨迹。';
+
   return (
     <Panel
-      title={`Main · ${email}`}
-      description="最新在上；按查询条件显示消息与请求，工具结果并入对应调用。"
-      right={summary ? <Pill status={summary.status} /> : null}
+      title={panelTitle}
+      description={panelDescription}
+      right={
+        subagent ? (
+          <div className="refresh-group">
+            {activeSubagent ? <Pill status={activeSubagent.status} /> : null}
+            <button type="button" className="button" onClick={() => props.onSelectSubagent('')}>
+              ← 返回 Main
+            </button>
+          </div>
+        ) : summary ? (
+          <Pill status={summary.status} />
+        ) : null
+      }
     >
       <ol className="timeline">
         {timeline.system_prompt ? (
-          <TimelineNode kind="runtime" title="不可见指令" at={null}>
+          <TimelineNode kind="runtime" title={subagent ? 'Subagent 不可见指令' : '不可见指令'} at={null}>
             <span className="timeline-meta">每次请求的第一条 user 消息，不落库，随部署生效</span>
             <Foldable
-              storageKey="instructions"
+              storageKey={`${subagent || 'main'}:instructions`}
               label="展开查看"
               text={timeline.system_prompt.text}
               openState={props.openState}
@@ -141,8 +176,9 @@ function TimelineImages({ item }: { item: TimelineItem }) {
   ) : null;
 }
 
-// triggerTitles 区分落库的定时触发与闲置后台反思消息（含合并前的三种历史名称），避免时间线里统称系统通知。
+// triggerTitles 区分落库的定时触发、Subagent 完成回报与闲置后台反思消息。
 const triggerTitles: Record<string, string> = {
+  subagent_event: 'Subagent 回报',
   schedule_event: '定时任务触发',
   reflection: '闲置后台反思',
   memory_update: '闲置记忆整理',
@@ -150,7 +186,7 @@ const triggerTitles: Record<string, string> = {
   unknown_unknowns: '闲置未知探索',
 };
 
-// InputNode 是用户输入、定时触发、闲置后台工作与压缩摘要节点的渲染。
+// InputNode 是用户输入、Subagent 指派/回报、定时触发、闲置后台工作与压缩摘要节点的渲染。
 function InputNode({
   item,
   email,
@@ -161,7 +197,7 @@ function InputNode({
   const withEmail = call ? { ...call, email } : null;
   const senders: Record<string, [string, string]> = {
     user: ['input', '用户输入'],
-    main: ['input', '来自 Main'],
+    main: ['input', props.subagent ? '来自 Main 的指派任务' : '来自 Main'],
     system: ['runtime', '系统通知'],
   };
   const triggerTitle = item.name ? triggerTitles[item.name] : undefined;
@@ -170,18 +206,30 @@ function InputNode({
     : triggerTitle
       ? ['runtime', triggerTitle]
       : (senders[item.sender ?? ''] ?? ['runtime', '运行时提示']);
+  const linkedSubagentID =
+    !props.subagent && item.name === 'subagent_event' ? extractSubagentID(view.text) : null;
+
   return (
     <TimelineNode
       kind={kind}
       title={title}
       at={item.at}
       extras={
-        call ? (
+        call || linkedSubagentID ? (
           <>
-            <span className="timeline-meta">{callMeta(call)}</span>
+            {call ? <span className="timeline-meta">{callMeta(call)}</span> : null}
             {withEmail ? (
               <button type="button" className="text-button" onClick={() => props.onOpenCall(withEmail)}>
                 请求详情 →
+              </button>
+            ) : null}
+            {linkedSubagentID ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => props.onSelectSubagent(linkedSubagentID)}
+              >
+                查看 Subagent 轨迹 →
               </button>
             ) : null}
           </>
@@ -189,8 +237,13 @@ function InputNode({
       }
     >
       {call ? <RequestIds id={call.id} notify={props.notify} /> : null}
-      {item.is_summary ? (
-        <Foldable storageKey={`${item.id}:text`} label="摘要内容" text={view.text ?? ''} openState={props.openState} />
+      {item.is_summary || item.name === 'subagent_event' ? (
+        <Foldable
+          storageKey={`${item.id}:text`}
+          label={item.is_summary ? '摘要内容' : '回报详情'}
+          text={view.text ?? ''}
+          openState={props.openState}
+        />
       ) : view.text ? (
         <div className="timeline-bubble">{view.text}</div>
       ) : null}
@@ -200,7 +253,7 @@ function InputNode({
   );
 }
 
-// AssistantNode 是一次模型回复：推理、正文（直接发给用户）与它提出的工具调用卡片。
+// AssistantNode 是一次模型回复：推理、正文与它提出的工具调用卡片。
 function AssistantNode({
   item,
   results,
@@ -210,6 +263,7 @@ function AssistantNode({
   const view = fullView(item, props.fullItems);
   const call = item.call;
   const withEmail = call ? { ...call, email } : null;
+  const textLabel = props.subagent ? '正文（最终产出交回 Main）' : '正文（直接发给用户）';
   return (
     <TimelineNode
       kind="assistant"
@@ -243,7 +297,7 @@ function AssistantNode({
       {view.text ? (
         <Foldable
           storageKey={`${item.id}:text`}
-          label="正文（直接发给用户）"
+          label={textLabel}
           text={view.text}
           openState={props.openState}
         />
@@ -265,7 +319,7 @@ function prettyArguments(text: string): string {
   }
 }
 
-// ToolCard 把一次工具调用与它的结果放在一起，并展示可复制的工具调用 ID。
+// ToolCard 把一次工具调用与它的结果放在一起，并在 Subagent 相关工具上提供一键查看轨迹入口。
 function ToolCard({
   toolCallId,
   name,
@@ -279,15 +333,31 @@ function ToolCard({
   result?: TimelineItem;
 } & TimelineViewProps) {
   const view = result ? fullView(result, props.fullItems) : null;
+  const linkedSubagentID =
+    !props.subagent && (name === 'spawn_subagent' || name === 'forward_subagent' || name === 'cancel_subagent')
+      ? extractSubagentID(view?.text) ?? extractSubagentID(args)
+      : null;
+
   return (
     <div className="tool-card">
       <div className="tool-card-head">
         <strong>{name}</strong>
-        {result ? (
-          <span className="timeline-meta">{formatTime(result.at)}</span>
-        ) : (
-          <span className="timeline-meta pending">尚未返回结果</span>
-        )}
+        <div className="refresh-group">
+          {linkedSubagentID ? (
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => props.onSelectSubagent(linkedSubagentID)}
+            >
+              查看 Subagent 轨迹 →
+            </button>
+          ) : null}
+          {result ? (
+            <span className="timeline-meta">{formatTime(result.at)}</span>
+          ) : (
+            <span className="timeline-meta pending">尚未返回结果</span>
+          )}
+        </div>
       </div>
       {toolCallId ? <CopyChip label="工具调用 ID" value={toolCallId} notify={props.notify} /> : null}
       <Foldable storageKey={`${toolCallId}:args`} label="参数" text={prettyArguments(args)} openState={props.openState} />

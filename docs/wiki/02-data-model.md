@@ -34,9 +34,10 @@ erDiagram
 
 | 表 | 用途 | 状态 |
 | --- | --- | --- |
-| `users` | 用户；每个用户即一个 Main | `已实现` |
-| `messages` | Main 的上下文列表，即 `messageList` | `已实现` |
-| `tasks` | 持久化需求、补充后的完整要求与执行状态；每用户最多一项执行中 | `开发中` |
+| `users` | 用户；每个用户即一个长期 Main | `已实现` |
+| `subagents` | 异步后台只读调研与独立任务 Subagent：标题、状态、栅栏代数、最终输出或错误、起止时间（`00055`） | `已实现` |
+| `messages` | Main 与各 Subagent 的上下文列表（`subagent_id` 为空即 Main，非空受约束必为 `visible = false`） | `已实现` |
+| `tasks` | 持久化需求、补充后的完整要求与执行状态；支持多项独立任务并行 `in_progress`（`00055`） | `开发中` |
 | `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `memory_files` | 用户私有 `/memories` 文本文件，包含 `memory.md` 根和详细主题 | `开发中` |
 | `schedules` | 定时任务：标题、到点交给 Main 的上下文、可空的 `cron` 与 `timezone`（同时为空即一次性）和下次触发时间，见 [10](10-schedules.md) | `开发中` |
@@ -45,7 +46,7 @@ erDiagram
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `model_calls` | 每次模型 HTTP 请求尝试、结果与可空用量 | `开发中` |
-| `model_settings` | 全局 Main 与压缩运行时模型选择、闲置后台反思时长、版本与最后修改者快照 | `开发中` |
+| `model_settings` | 全局 Main、可选 Subagent 与压缩运行时模型选择、闲置后台反思时长、版本与最后修改者快照 | `开发中` |
 | `service_settings` | 九组服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -67,9 +68,22 @@ erDiagram
 | `task_input_through_sequence` | bigint | 已登记需求的用户输入位置；只标记分类完成，与任务完成、聊天已读无关（`00034`） |
 | `created_at` | timestamptz | 注册时间 |
 
-### `subagents`（已删除）
+### `subagents`
 
-2026-11-02 随 Subagent 整体删除：迁移 `00025` 删除 `subagents` 表，以及 `messages` / `steps` / `model_calls` 的 `subagent_id` 与 `messages.sender_subagent_id` 列，并先清掉 Subagent 上下文的历史行。原表结构见迁移 `00001` / `00004` 与 [05 删除 Subagent](05-main-runtime.md#删除-subagent2026-11-02)。
+2026-11-02 曾由 `00025` 删除早期原型；2026-11-12 由 `00055_add_subagents` 重新设计引入，用于支撑多任务异步后台并行与 `forward_subagent` 零损耗直通转发（见 [05](05-main-runtime.md#异步后台-subagent-与零损耗直通转发2026-11-12)）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 主键，默认 `uuidv7()` |
+| `user_id` | uuid | 所属用户，级联删除 |
+| `title` | text | 子任务简短标题（1–200 字符） |
+| `status` | text | `running`、`completed`、`failed`、`cancelled`；与 `finished_at IS NULL` 一致 |
+| `lease_epoch` | bigint | 单调递增的 Subagent 执行代数，防止跨实例超时或取消后旧实例覆盖状态 |
+| `output` | text | 正常完成时保存的最终完整正文，供 `forward_subagent` 原样直发 |
+| `error` | text | 失败或 15 分钟超时原因 |
+| `started_at`、`finished_at` | timestamptz | 创建启动时间与结束时间 |
+
+`messages`、`steps` 与 `model_calls` 均包含可空外键 `subagent_id`（为空归属 Main，非空归属对应 Subagent）；`messages` 带 `CHECK (subagent_id IS NULL OR NOT visible)` 约束确保子代理内部消息不进入聊天流。
 
 ### `messages`
 
@@ -294,6 +308,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00052_add_user_lease_epoch.sql` | `users.main_lease_epoch` 单调递增执行代数，防止多实例租约超时或 Redis 重启后旧实例覆盖新实例的数据 | `已实现` |
 | `00053_merge_idle_work_minutes.sql` | 将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），配合持续按最近一次请求触发 | `已实现` |
 | `00054_drop_workspace_sync_cursor.sql` | 删除 `sandbox_workspaces.synced_through_sequence`，聊天附件改为由 `sandbox_import_file` 按需导入工作区 | `已实现` |
+| `00055_add_subagents.sql` | 放开 `tasks` 单进行中唯一索引；新建 `subagents` 表与栅栏代数；为 `messages`、`steps`、`model_calls` 增加 `subagent_id` 隔离列与索引；为 `model_settings` 增加可选 `subagent_model` | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

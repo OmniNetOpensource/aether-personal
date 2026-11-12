@@ -1,4 +1,4 @@
--- 本文件是管理看板的查询集合：提供时间线筛选所需的用户、模型候选与 Main 状态，合并消息与模型请求时间线，并读取单次调用或单条消息详情（sqlc 据此生成代码）。
+-- 本文件是管理看板的查询集合：提供时间线筛选所需的用户、模型候选、Main 与 Subagent 状态，合并指定 Agent 的消息与模型请求时间线，并读取单次调用或单条消息详情（sqlc 据此生成代码）。
 
 -- name: AdminSnapshot :one
 -- 返回时间窗口内出现过的模型候选，供时间线筛选输入框提示。
@@ -25,24 +25,36 @@ ORDER BY u.created_at DESC, u.id DESC
 LIMIT 200;
 
 -- name: GetAdminAgentStatus :one
--- 每位用户只有一个 Main，选中用户时返回它当前的运行状态。
+-- 返回选中用户 Main 的当前运行状态（含后台 Subagent 运行中）。
 SELECT u.id AS user_id, u.email,
  CASE
-  WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id) THEN 'processing'
-  WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id) THEN 'failed'
+  WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id)
+    OR EXISTS (SELECT 1 FROM subagents sa WHERE sa.user_id = u.id AND sa.status = 'running') THEN 'processing'
+  WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id AND m.subagent_id IS NULL) THEN 'failed'
   ELSE 'idle'
  END::text AS status
 FROM users u
 WHERE u.id = sqlc.arg(selected_user_id)::uuid;
 
+-- name: ListAdminSubagents :many
+-- 列出选中用户的近期 Subagent，供看板在 Main 与各 Subagent 之间切换查看独立轨迹。
+SELECT id, title, status, started_at, finished_at
+FROM subagents
+WHERE user_id = sqlc.arg(selected_user_id)::uuid
+ORDER BY id DESC
+LIMIT 100;
+
 -- name: GetAdminCallDetail :one
 SELECT request_body, response_body, response_truncated FROM model_calls WHERE id = $1;
 
 -- name: ListAdminTimeline :many
--- 消息与未产出消息的请求共用游标，只有失败请求的筛选结果也能完整翻页。
+-- 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息与未产出消息的请求，共用同一游标翻页。
 WITH user_messages AS MATERIALIZED (
  SELECT m.*, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
- FROM messages m WHERE m.user_id = sqlc.arg(user_id)::uuid AND NOT m.generating
+ FROM messages m
+ WHERE m.user_id = sqlc.arg(user_id)::uuid
+  AND m.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+  AND NOT m.generating
 ), calls AS MATERIALIZED (
  SELECT c.*, jsonb_build_object('id',c.id,'step_id',c.step_id,
   'requested_model',c.requested_model,'response_model',c.response_model,
@@ -52,7 +64,9 @@ WITH user_messages AS MATERIALIZED (
   'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
   'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
   'tool_names',to_jsonb(c.tool_names)) AS payload
- FROM model_calls c WHERE c.user_id = sqlc.arg(user_id)::uuid
+ FROM model_calls c
+ WHERE c.user_id = sqlc.arg(user_id)::uuid
+  AND c.subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
   AND (sqlc.narg(model)::text IS NULL OR c.requested_model = sqlc.narg(model)::text)
   AND (sqlc.narg(outcome)::text IS NULL OR c.outcome = sqlc.narg(outcome)::text)
 ), nodes AS (

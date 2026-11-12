@@ -1,4 +1,4 @@
-// 本文件实现管理看板的模型配置接口：拉取可用模型目录，分别保存 Main 与上下文压缩的运行时模型设置，以及闲置反思时长。
+// 本文件实现管理看板的模型配置接口：拉取可用模型目录，分别保存 Main、Subagent 与上下文压缩的运行时模型设置，以及闲置反思时长。
 
 package httpapi
 
@@ -174,12 +174,13 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		CompactAtTokens       int32  `json:"compact_at_tokens"`
 		ReflectionIdleMinutes int32  `json:"reflection_idle_minutes"`
 		MainModel             string `json:"main_model"`
+		SubagentModel         string `json:"subagent_model"`
 		CompactModel          string `json:"compact_model"`
 		Version               int64  `json:"version"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || len(request.CompactModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 || request.ReflectionIdleMinutes < 10 || request.ReflectionIdleMinutes > 10080 {
+	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || request.MainModel == "" || len(request.MainModel) > 160 || len(request.SubagentModel) > 160 || len(request.CompactModel) > 160 || request.Version < 0 || request.CompactAtTokens < 1000 || request.CompactAtTokens > 2000000 || request.ReflectionIdleMinutes < 10 || request.ReflectionIdleMinutes > 10080 {
 		http.Error(w, "invalid model settings", http.StatusBadRequest)
 		return
 	}
@@ -187,12 +188,12 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	catalog := s.availableModels(ctx)
 	models := catalog.Items
-	// 两种用途均从实时目录选择；空压缩模型明确表示跟随 Main。
+	// 三种用途均从实时目录选择；空 Subagent 模型与空压缩模型明确表示跟随 Main。
 	for _, selected := range []struct {
-		id      string
-		compact bool
-	}{{request.MainModel, false}, {request.CompactModel, true}} {
-		if selected.compact && selected.id == "" {
+		id       string
+		optional bool
+	}{{request.MainModel, false}, {request.SubagentModel, true}, {request.CompactModel, true}} {
+		if selected.optional && selected.id == "" {
 			continue
 		}
 		if slices.ContainsFunc(models, func(model adminModel) bool {
@@ -216,6 +217,9 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 	}
 	var mainCap *int32
 	var mainContext *int64
+	var subagentModel *string
+	var subagentCap *int32
+	var subagentContext *int64
 	var compactModel *string
 	var compactCap *int32
 	var compactContext *int64
@@ -224,6 +228,12 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 			mainCap = model.MaxCompletionTokens
 			if model.ContextLength > 0 {
 				mainContext = &model.ContextLength
+			}
+		}
+		if model.ID == request.SubagentModel {
+			subagentModel, subagentCap = &request.SubagentModel, model.MaxCompletionTokens
+			if model.ContextLength > 0 {
+				subagentContext = &model.ContextLength
 			}
 		}
 		if model.ID == request.CompactModel {
@@ -247,7 +257,20 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		if current.Version != request.Version {
 			return conflict
 		}
-		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{MainModel: request.MainModel, MainModelMaxTokens: mainCap, CompactModel: compactModel, CompactModelMaxTokens: compactCap, CompactContextLength: compactContext, CompactAtTokens: request.CompactAtTokens, MainContextLength: mainContext, ReflectionIdleMinutes: request.ReflectionIdleMinutes, UpdatedBy: "管理员"}); err != nil {
+		if err := queries.SaveModelSettings(ctx, database.SaveModelSettingsParams{
+			MainModel:              request.MainModel,
+			MainModelMaxTokens:     mainCap,
+			SubagentModel:          subagentModel,
+			SubagentModelMaxTokens: subagentCap,
+			SubagentContextLength:  subagentContext,
+			CompactModel:           compactModel,
+			CompactModelMaxTokens:  compactCap,
+			CompactContextLength:   compactContext,
+			CompactAtTokens:        request.CompactAtTokens,
+			MainContextLength:      mainContext,
+			ReflectionIdleMinutes:  request.ReflectionIdleMinutes,
+			UpdatedBy:              "管理员",
+		}); err != nil {
 			return err
 		}
 		saved, err = modelsettings.Load(ctx, queries, s.appConfig)
@@ -261,6 +284,6 @@ func (s *server) updateAdminModelSettings(w http.ResponseWriter, r *http.Request
 		internalError(w, "save model settings failed", err)
 		return
 	}
-	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel, "compact_model", saved.CompactModel)
+	slog.Info("admin changed model settings", "admin_session_id", r.Context().Value(adminSessionContextKey{}), "version", saved.Version, "main_model", saved.MainModel, "subagent_model", saved.SubagentModel, "compact_model", saved.CompactModel)
 	writeAdminJSON(w, saved)
 }

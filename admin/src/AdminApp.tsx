@@ -1,10 +1,11 @@
-// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据，编排自动刷新，并切换运行过程、配置页面与调用详情弹窗。
+// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据（支持切换查看 Main 与后台 Subagent 轨迹），编排自动刷新，并切换运行过程、配置页面与调用详情弹窗。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   ApiError,
   formatTime,
+  outcomeLabels,
   setAdminToken,
   type Call,
   type Snapshot,
@@ -23,14 +24,15 @@ type Tab = 'timeline' | 'settings';
 interface TimelineFilters {
   hours: number;
   user: string;
+  subagent: string;
   model: string;
   outcome: string;
 }
-const defaultFilters: TimelineFilters = { hours: 24, user: '', model: '', outcome: '' };
+const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '', model: '', outcome: '' };
 
 const tabs: Record<Tab, [string, string]> = {
-  timeline: ['运行过程', '按时间查看 Main 收到的输入、推理与工具调用。'],
-  settings: ['配置', '选择对话与压缩模型，并管理模型、邮件与联网服务的凭证。'],
+  timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
+  settings: ['配置', '选择对话、Subagent 与压缩模型，并管理模型、邮件与联网服务的凭证。'],
 };
 const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
 
@@ -117,10 +119,17 @@ export function AdminApp() {
     const current = filtersRef.current;
     const params = new URLSearchParams(windowRef.current ?? {});
     if (current.user) params.set('user_id', current.user);
+    if (current.subagent) params.set('subagent_id', current.subagent);
     if (current.model) params.set('model', current.model);
     if (current.outcome) params.set('outcome', current.outcome);
     for (const [key, value] of Object.entries(extra)) if (value != null) params.set(key, value);
     return params.toString();
+  }, []);
+
+  // selectSubagent 在当前选中用户下立即切换到指定 Subagent（空字符串回到 Main）。
+  const selectSubagent = useCallback((subagentID: string) => {
+    setFilters((previous) => ({ ...previous, subagent: subagentID }));
+    setQuery((previous) => ({ ...previous, subagent: subagentID }));
   }, []);
 
   // refresh 重新读取当前页数据，并按已提交的小时数重算时间窗口。
@@ -142,8 +151,8 @@ export function AdminApp() {
     setRefreshing(true);
     try {
       const user = filtersRef.current.user;
+      const subagent = filtersRef.current.subagent;
       const timelineQuery = buildQuery();
-      // 选择器取未按模型或结果收窄的候选项，切换用户后仍保留已发现的用户。
       const snapshotQuery = new URLSearchParams(windowRef.current ?? {});
       if (user) snapshotQuery.set('user_id', user);
       const [loadedSnapshot, list] = await Promise.all([
@@ -157,7 +166,7 @@ export function AdminApp() {
         for (const item of loadedSnapshot.users.items) users.set(item.id, item.email);
         return users;
       });
-      setTimeline(list ? { ...list, key: user } : null);
+      setTimeline(list ? { ...list, key: `${user}:${subagent}` } : null);
       setUpdatedText(`${formatTime(loadedSnapshot.generated_at)} 已更新`);
       setLoadError('');
     } catch (error) {
@@ -329,6 +338,7 @@ export function AdminApp() {
 
   const settingsPage = tab === 'settings';
   const pageBusy = settingsPage ? modelLoading || serviceLoading : refreshing;
+  const subagentOptions = filters.user === query.user ? (snapshot?.subagents?.items ?? []) : [];
 
   return (
     <div className="layout">
@@ -405,12 +415,29 @@ export function AdminApp() {
                 <select
                   id="user-filter"
                   value={filters.user}
-                  onChange={(event) => setFilters({ ...filters, user: event.target.value })}
+                  onChange={(event) =>
+                    setFilters({ ...filters, user: event.target.value, subagent: '' })
+                  }
                 >
                   <option value="">请选择用户</option>
                   {[...knownUsers].map(([id, email]) => (
                     <option key={id} value={id}>
                       {email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Agent
+                <select
+                  value={filters.subagent}
+                  disabled={!filters.user}
+                  onChange={(event) => setFilters({ ...filters, subagent: event.target.value })}
+                >
+                  <option value="">Main（主对话）</option>
+                  {subagentOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {`[${outcomeLabels[item.status] || item.status}] ${item.title} (${item.id.slice(0, 8)})`}
                     </option>
                   ))}
                 </select>
@@ -505,10 +532,12 @@ export function AdminApp() {
             ) : (
               <TimelinePage
                 user={query.user}
+                subagent={query.subagent}
                 snapshot={snapshot}
                 timeline={timeline}
                 openState={timelineOpen.current}
                 fullItems={timelineFull.current}
+                onSelectSubagent={selectSubagent}
                 onLoadFull={(id, button) => void loadTimelineMessage(id, button)}
                 onLoadEarlier={(button) => void loadEarlierTimeline(button)}
                 onOpenCall={setSelectedCall}

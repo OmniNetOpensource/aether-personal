@@ -163,7 +163,7 @@
   }
 }
 
-/* 任务进展只读浮层：桌面停靠右上角，手机全屏展开，与历史搜索浮层保持一致的几何与层级。 */
+/* 任务进展浮层：桌面停靠右上角，手机全屏展开，与历史搜索浮层保持一致的几何与层级。 */
 .task-sheet-dialog {
   position: fixed;
   inset: calc(var(--app-top, 0px) + 18px) 22px auto auto;
@@ -288,6 +288,9 @@
   border-color: var(--forest-border);
   box-shadow: 0 2px 10px var(--shadow);
 }
+.task-card.is-waiting {
+  border-color: var(--line-strong);
+}
 .task-card.is-completed,
 .task-card.is-cancelled {
   background: var(--quote-surface);
@@ -344,6 +347,88 @@
 .task-card-toggle:hover {
   text-decoration: underline;
 }
+
+/* 等待回复卡片内的内联补充表单：附带上下文作为普通用户消息发出。 */
+.task-reply-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-reply-input {
+  width: 100%;
+  min-height: 64px;
+  max-height: 180px;
+  resize: vertical;
+  padding: 8px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+}
+.task-reply-input::placeholder {
+  color: var(--text-muted);
+}
+.task-reply-input:focus-visible {
+  outline: none;
+  border-color: var(--forest-border);
+  box-shadow: 0 0 0 3px var(--shadow);
+}
+.task-reply-input:disabled {
+  opacity: 0.55;
+}
+.task-reply-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+.task-reply-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.task-reply-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.task-reply-hint kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+.task-reply-send {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--gold);
+  color: var(--on-gold);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.task-reply-send:disabled {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.task-reply-send.is-sending:disabled {
+  background: var(--gold);
+  color: var(--on-gold);
+  opacity: 0.8;
+  cursor: progress;
+}
 .task-sheet-footer {
   display: flex;
   justify-content: space-between;
@@ -381,7 +466,8 @@
     font-size: 15px;
   }
   .task-sheet-desktop-close,
-  .task-sheet-escape {
+  .task-sheet-escape,
+  .task-reply-hint {
     display: none;
   }
   .task-sheet-mobile-close {

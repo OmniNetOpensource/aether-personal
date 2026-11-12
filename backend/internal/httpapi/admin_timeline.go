@@ -1,4 +1,4 @@
-// 本文件实现管理看板的 Main 运行时间线：把某个用户的消息与未产出消息的模型请求合成按时间排列的节点，并按需读取单条消息全文。
+// 本文件实现管理看板的运行时间线：支持按 Main 或指定后台 Subagent 把消息与未产出消息的模型请求合成按时间排列的节点，并按需读取单条消息全文。
 
 package httpapi
 
@@ -175,7 +175,7 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 	return item
 }
 
-// adminTimeline 按用户、时间、模型与结果查询运行过程，消息和失败请求使用同一游标分页。
+// adminTimeline 按用户、可选 Subagent、时间、模型与结果查询运行过程，消息和失败请求使用同一游标分页。
 func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseAdminFilters(r)
 	if err != nil {
@@ -187,7 +187,7 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := database.ListAdminTimelineParams{
-		UserID: *filter.UserID, FromAt: filter.From, ToAt: filter.To,
+		UserID: *filter.UserID, SubagentID: filter.SubagentID, FromAt: filter.From, ToAt: filter.To,
 		Model: filter.Model, Outcome: filter.Outcome, PageLimit: timelinePageSize + 1,
 	}
 	// 游标只携带排序位置；时间窗口与筛选值由客户端在每一页原样传回。
@@ -202,6 +202,26 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	var subagentSummary *adminSubagent
+	if filter.SubagentID != nil {
+		subagent, err := s.queries.GetSubagentForUser(ctx, database.GetSubagentForUserParams{UserID: *filter.UserID, ID: *filter.SubagentID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "subagent not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			internalError(w, "read admin subagent failed", err)
+			return
+		}
+		subagentSummary = &adminSubagent{
+			ID:         subagent.ID,
+			Title:      subagent.Title,
+			Status:     subagent.Status,
+			Error:      subagent.Error,
+			StartedAt:  subagent.StartedAt,
+			FinishedAt: subagent.FinishedAt,
+		}
+	}
 	rows, err := s.queries.ListAdminTimeline(ctx, params)
 	if err != nil {
 		internalError(w, "read admin timeline failed", err)
@@ -228,12 +248,20 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 		item.Sender, item.IsSummary, item.Call = row.Sender, row.IsSummary, row.Call
 		items = append(items, item)
 	}
-	// 固定指令由代码注入，首页展示当前部署的原文，不作为筛选后的历史消息。
+	// 固定指令由代码注入，首页展示对应角色的当前部署原文。
 	var systemPrompt any
 	if r.URL.Query().Get("before") == "" {
-		systemPrompt = map[string]any{"text": agent.MainInstructions}
+		instructions := agent.MainInstructions
+		if filter.SubagentID != nil {
+			instructions = agent.SubagentInstructions
+		}
+		systemPrompt = map[string]any{"text": instructions}
 	}
-	writeAdminJSON(w, map[string]any{"items": items, "next_cursor": nextCursor, "system_prompt": systemPrompt})
+	response := map[string]any{"items": items, "next_cursor": nextCursor, "system_prompt": systemPrompt}
+	if subagentSummary != nil {
+		response["subagent"] = subagentSummary
+	}
+	writeAdminJSON(w, response)
 }
 
 // adminTimelineMessage 返回单条消息的全文与图片，供时间线展开被截断的节点。

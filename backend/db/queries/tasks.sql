@@ -1,4 +1,4 @@
--- 本文件维护按用户串行的需求队列，并提供模型任务列表与聊天端实时任务快照查询。
+-- 本文件维护用户的持久化需求队列（支持多项独立任务并行执行），并提供模型任务列表与聊天端实时任务快照查询。
 
 -- name: ListTasks :many
 SELECT sqlc.embed(t)
@@ -44,12 +44,9 @@ UPDATE tasks SET title = $3, description = $4, status = $5, updated_at = now()
 WHERE user_id = $1 AND id = $2;
 
 -- name: UpdateTaskStatus :execrows
--- 模型选择具体任务：没有当前任务时才能启动待执行项，其余状态变更只针对当前任务。
+-- 排队中的任务可启动为 in_progress（支持多项并行），完成、等待或退回排队只针对正在进行中的任务。
 UPDATE tasks AS t SET status = sqlc.arg(status)::text, updated_at = now()
 WHERE t.user_id = sqlc.arg(user_id) AND t.id = sqlc.arg(id) AND (
     t.status = 'in_progress'
-    OR (
-        t.status = 'queued' AND sqlc.arg(status)::text = 'in_progress'
-        AND NOT EXISTS (SELECT 1 FROM tasks WHERE user_id = sqlc.arg(user_id) AND status = 'in_progress')
-    )
+    OR (t.status = 'queued' AND sqlc.arg(status)::text = 'in_progress')
 );

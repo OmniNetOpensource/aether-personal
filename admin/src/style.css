@@ -614,11 +614,11 @@ tbody tr:hover {
   border-radius:50%;
   opacity:.65;
 }
-.pill.succeeded,.pill.idle {
+.pill.succeeded,.pill.completed,.pill.idle {
   color:var(--accent-text);
   background:var(--gold-soft);
 }
-.pill.in_flight,.pill.processing {
+.pill.in_flight,.pill.processing,.pill.running {
   color:var(--accent-text);
   background:var(--gold-soft);
 }
@@ -626,7 +626,7 @@ tbody tr:hover {
   color:var(--error);
   background:var(--error-soft);
 }
-.pill.interrupted {
+.pill.interrupted,.pill.cancelled {
   color:var(--warning);
   background:var(--gold-soft);
 }
