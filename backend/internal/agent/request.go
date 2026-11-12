@@ -1,5 +1,5 @@
 // 本文件是 agent loop 的请求阶段：发出请求前阶段组装好的请求，收回完整回复并写下这次调用的日志；
-// 首段输出到达时插入占位定下回复的位置，回复本身由请求后阶段保存。压缩请求也经 sendModelRequest 发送。
+// 首段输出到达或思考满可取消窗口时插入占位定下回复的位置，回复本身由请求后阶段保存。压缩请求也经 sendModelRequest 发送。
 
 package agent
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -26,8 +27,11 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-// sendRequest 是请求阶段的入口：模型还没有产出正文或工具时，新输入可以取消这次请求；首段输出到达时插入占位，
-// 占位与用户输入插入用同一把事务锁确定先后，较晚完成的回复因此不会排到它没读过的消息后面。返回占位 ID 与完整回复。
+// thinkingCancelWindow 是请求发出后允许被新输入打断重来的最长时间；满这个时间仍在思考时就提前占位，避免丢掉已经投入的深度推理。
+const thinkingCancelWindow = 15 * time.Second
+
+// sendRequest 是请求阶段的入口：请求发出后在可取消窗口内且尚未产出正文或工具时，新输入可以取消这次请求；
+// 首段输出到达或窗口到期时插入占位，占位与用户输入插入用同一把事务锁确定先后，较晚完成的回复因此不会排到它没读过的消息后面。返回占位 ID 与完整回复。
 func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, request modelRequest) (uuid.UUID, chatResponse, bool, error) {
 	modelCtx, cancel := context.WithCancelCause(budget)
 	defer cancel(nil)
@@ -41,53 +45,76 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 	}
 	defer stopListening()
 
-	// 组装之后、登记之前到达的输入不会触发取消，由占位事务里的这次检查兜住，只是放弃得晚一些。
+	// 组装之后、登记之前到达的输入不会触发取消，由占位事务里的这次检查兜住；
+	// 首段输出到达、满 15 秒仍在思考或沉默回复结束时共用同一次占位，谁先触发就由谁定下回复位置。
 	input := database.HasNewMainInputParams{UserID: r.userID, Through: request.InputSequence}
 	var replyID uuid.UUID
+	var reserveErr, abortErr error
+	var reserveOnce sync.Once
 	reserve := func() error {
-		stopListening()
-		return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
-			q := database.New(tx)
-			if err := r.lockAndVerifyLease(ctx, q); err != nil {
-				if errors.Is(err, errLostLease) {
-					cancel(errLostLease)
+		reserveOnce.Do(func() {
+			stopListening()
+			if modelCtx.Err() != nil {
+				abortErr = modelCtx.Err()
+				return
+			}
+			reserveErr = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+				q := database.New(tx)
+				if err := r.lockAndVerifyLease(ctx, q); err != nil {
+					return err
 				}
+				newer, err := q.HasNewMainInput(ctx, input)
+				if err != nil {
+					return err
+				}
+				if newer {
+					return errNewInput
+				}
+				replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID})
 				return err
+			})
+			if reserveErr != nil {
+				cancel(reserveErr)
 			}
-			newer, err := q.HasNewMainInput(ctx, input)
-			if err != nil {
-				return err
-			}
-			if newer {
-				cancel(errNewInput)
-				return errNewInput
-			}
-			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{UserID: r.userID, StepID: &stepID})
-			return err
 		})
+		if reserveErr != nil {
+			return reserveErr
+		}
+		return abortErr
 	}
+
+	// 满 15 秒仍在纯思考时主动锁定占位，保住已进行的推理；此后到达的新输入排在本次回复之后留给下一轮。
+	timerCtx, stopTimer := context.WithCancel(modelCtx)
+	var timerGroup sync.WaitGroup
+	timerGroup.Go(func() {
+		timer := time.NewTimer(thinkingCancelWindow)
+		defer timer.Stop()
+		select {
+		case <-timerCtx.Done():
+		case <-timer.C:
+			_ = reserve()
+		}
+	})
 	response, retryable, err := r.sendModelRequest(modelCtx, request,
 		database.StartModelCallParams{StepID: stepID, Purpose: "agent"}, reserve)
+	stopTimer()
+	timerGroup.Wait()
+
+	if err == nil && replyID == uuid.Nil {
+		// 15 秒内结束的合法沉默回复也在同一写入锁与租约校验下与新输入交接。
+		err = reserve()
+	}
 	if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
 		return uuid.Nil, response, false, errLostLease
 	}
 	if errors.Is(context.Cause(modelCtx), errNewInput) {
 		return uuid.Nil, response, false, errNewInput
 	}
+	if reserveErr != nil {
+		return uuid.Nil, response, false, reserveErr
+	}
 	if err != nil {
 		return uuid.Nil, response, retryable, err
-	}
-	// 合法的沉默回复也在同一写入锁与租约校验下与新输入交接。
-	if replyID == uuid.Nil {
-		if err := reserve(); err != nil {
-			if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
-				return uuid.Nil, response, false, errLostLease
-			}
-			if errors.Is(context.Cause(modelCtx), errNewInput) {
-				return uuid.Nil, response, false, errNewInput
-			}
-			return uuid.Nil, response, false, err
-		}
 	}
 	return replyID, response, false, nil
 }
