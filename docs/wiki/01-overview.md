@@ -203,7 +203,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 ## 配置
 
-基础设施启动配置来自环境变量，dev 使用未提交的 `.env`。运行时模型选择和六组服务配置由管理员在看板保存到数据库，见 [08](08-admin-observability.md)。`APP_ENV` 必填且只允许 `dev` / `prod`。`SERVICE_ENCRYPTION_KEY` 必填；缺少供应商 Key 不阻止启动，管理员可先登录看板补齐，调用未配置的服务时报错。服务凭证不回退环境变量，旧值仅由显式导入命令迁移一次。
+基础设施启动配置来自环境变量，dev 使用未提交的 `.env`。后端从 `OPENROUTER_API_KEY` 读取各账号共用的 OpenRouter 凭证。用户在 App 保存个人模型选择。管理员在看板保存全局运行参数和其他服务凭证。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
 
 | 环境变量 | 说明 |
 | --- | --- |
@@ -212,7 +212,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `REDIS_URL` | 服务进程必填，Redis 连接串（本地示例 `redis://localhost:6379/0`，生产 Compose 自动注入 `redis://redis:6379/0`） |
 | `PORT` | 可选，默认 `8080` |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节主密钥；凭证密文保存在数据库，主密钥由部署端单独保存和备份 |
-| `MAIN_MODEL` | 可选，默认 `deepseek/deepseek-v4.1-flash-1017` |
+| `OPENROUTER_API_KEY` | 模型请求、模型目录与额度查询使用的 OpenRouter Key。缺少 Key 时后端仍可启动 |
 | `DATABASE_MAX_CONNS` | 单容器默认 20，最小 5；聊天推送已改走 Redis Pub/Sub，不再占用池外 PostgreSQL 长连接 |
 | `AGENT_CAPACITY` | 单容器默认 `DATABASE_MAX_CONNS - 4`，可调小，最小 1；满载时暂停从 Redis 队列取活，新待办自动流向空闲容器 |
 | `IMAGE_CACHE_MAX_BYTES`、`IMAGE_CACHE_TTL` | 可选，Redis 共享图片缓存总字节上限（默认 `134217728` 即 128 MiB，至少 4 MiB）与绝对有效期（默认 `24h`，最小 `1s`） |

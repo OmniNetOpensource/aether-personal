@@ -42,7 +42,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
-	store, err := services.New(pool, settings.ServiceEncryptionKey, settings.AppEnv)
+	store, err := services.New(pool, settings.ServiceEncryptionKey, settings.AppEnv, settings.OpenRouterAPIKey)
 	if err != nil {
 		slog.Error("initialize service encryption failed")
 		os.Exit(1)
@@ -100,6 +100,9 @@ func main() {
 	}
 	failed := false
 	for _, definition := range services.Definitions {
+		if definition.LegacyKey == "" {
+			continue
+		}
 		value := services.Settings{APIKey: os.Getenv(definition.LegacyKey)}
 		if definition.ID == services.IkunGemini {
 			value.BaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("GEMINI_BASE_URL_IKUNCODE")), "/")

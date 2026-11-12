@@ -7,123 +7,120 @@ package database
 
 import (
 	"context"
-	"time"
+
+	"github.com/google/uuid"
 )
 
-const getModelSettings = `-- name: GetModelSettings :one
-
-SELECT main_model, main_model_max_tokens,
-    subagent_model, subagent_model_max_tokens, subagent_context_length,
-    compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length,
-    reflection_idle_minutes, version, updated_at, updated_by
+const getRuntimeSettings = `-- name: GetRuntimeSettings :one
+SELECT compact_at_tokens, reflection_idle_minutes, version
 FROM model_settings WHERE singleton = true
 `
 
-type GetModelSettingsRow struct {
-	MainModel              string
-	MainModelMaxTokens     *int32
-	SubagentModel          *string
-	SubagentModelMaxTokens *int32
-	SubagentContextLength  *int64
-	CompactModel           *string
-	CompactModelMaxTokens  *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	CompactContextLength   *int64
-	ReflectionIdleMinutes  int32
-	Version                int64
-	UpdatedAt              time.Time
-	UpdatedBy              string
+type GetRuntimeSettingsRow struct {
+	CompactAtTokens       int32
+	ReflectionIdleMinutes int32
+	Version               int64
 }
 
-// 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的 Main、Subagent 与压缩模型配置及闲置反思时长（sqlc 据此生成代码）。
-func (q *Queries) GetModelSettings(ctx context.Context) (GetModelSettingsRow, error) {
-	row := q.db.QueryRow(ctx, getModelSettings)
-	var i GetModelSettingsRow
+func (q *Queries) GetRuntimeSettings(ctx context.Context) (GetRuntimeSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getRuntimeSettings)
+	var i GetRuntimeSettingsRow
+	err := row.Scan(&i.CompactAtTokens, &i.ReflectionIdleMinutes, &i.Version)
+	return i, err
+}
+
+const getUserModelSettings = `-- name: GetUserModelSettings :one
+
+SELECT main_model, main_context_length, subagent_model, subagent_context_length, compact_model, version
+FROM user_model_settings WHERE user_id = $1
+`
+
+type GetUserModelSettingsRow struct {
+	MainModel             string
+	MainContextLength     *int64
+	SubagentModel         *string
+	SubagentContextLength *int64
+	CompactModel          *string
+	Version               int64
+}
+
+// 本文件读取和保存账号模型选择及全局运行参数；版本校验在写入语句内完成，避免覆盖其他设备的保存。
+func (q *Queries) GetUserModelSettings(ctx context.Context, userID uuid.UUID) (GetUserModelSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getUserModelSettings, userID)
+	var i GetUserModelSettingsRow
 	err := row.Scan(
 		&i.MainModel,
-		&i.MainModelMaxTokens,
+		&i.MainContextLength,
 		&i.SubagentModel,
-		&i.SubagentModelMaxTokens,
 		&i.SubagentContextLength,
 		&i.CompactModel,
-		&i.CompactModelMaxTokens,
-		&i.CompactAtTokens,
-		&i.MainContextLength,
-		&i.CompactContextLength,
-		&i.ReflectionIdleMinutes,
 		&i.Version,
-		&i.UpdatedAt,
-		&i.UpdatedBy,
 	)
 	return i, err
 }
 
-const lockModelSettings = `-- name: LockModelSettings :exec
-SELECT pg_advisory_xact_lock(hashtextextended('admin:model-settings', 0))
-`
-
-func (q *Queries) LockModelSettings(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, lockModelSettings)
-	return err
-}
-
-const saveModelSettings = `-- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, main_model_max_tokens,
-    subagent_model, subagent_model_max_tokens, subagent_context_length,
-    compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length,
-    reflection_idle_minutes, version, updated_by)
-VALUES ($1, $2,
-    $3, $4, $5,
-    $6, $7,
-    $8, $9, $10,
-    $11, 1, $12)
-ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
-    main_model_max_tokens = EXCLUDED.main_model_max_tokens,
-    subagent_model = EXCLUDED.subagent_model,
-    subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
-    subagent_context_length = EXCLUDED.subagent_context_length,
-    compact_model = EXCLUDED.compact_model,
-    compact_model_max_tokens = EXCLUDED.compact_model_max_tokens,
-    compact_at_tokens = EXCLUDED.compact_at_tokens,
-    main_context_length = EXCLUDED.main_context_length,
-    compact_context_length = EXCLUDED.compact_context_length,
+const saveRuntimeSettings = `-- name: SaveRuntimeSettings :one
+INSERT INTO model_settings (main_model, compact_at_tokens, reflection_idle_minutes, version, updated_by)
+SELECT 'openrouter/free', $1, $2, 1, '管理员'
+WHERE $3::bigint = 0
+   OR EXISTS (SELECT 1 FROM model_settings WHERE singleton = true)
+ON CONFLICT (singleton) DO UPDATE SET compact_at_tokens = EXCLUDED.compact_at_tokens,
     reflection_idle_minutes = EXCLUDED.reflection_idle_minutes,
-    version = model_settings.version + 1,
-    updated_at = now(), updated_by = EXCLUDED.updated_by
+    version = model_settings.version + 1, updated_at = now(), updated_by = EXCLUDED.updated_by
+WHERE model_settings.version = $3
+RETURNING version
 `
 
-type SaveModelSettingsParams struct {
-	MainModel              string
-	MainModelMaxTokens     *int32
-	SubagentModel          *string
-	SubagentModelMaxTokens *int32
-	SubagentContextLength  *int64
-	CompactModel           *string
-	CompactModelMaxTokens  *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	CompactContextLength   *int64
-	ReflectionIdleMinutes  int32
-	UpdatedBy              string
+type SaveRuntimeSettingsParams struct {
+	CompactAtTokens       int32
+	ReflectionIdleMinutes int32
+	ExpectedVersion       int64
 }
 
-func (q *Queries) SaveModelSettings(ctx context.Context, arg SaveModelSettingsParams) error {
-	_, err := q.db.Exec(ctx, saveModelSettings,
+// 保留旧的全局模型列供旧版回滚，当前运行时只读取阈值和反思时长。
+func (q *Queries) SaveRuntimeSettings(ctx context.Context, arg SaveRuntimeSettingsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, saveRuntimeSettings, arg.CompactAtTokens, arg.ReflectionIdleMinutes, arg.ExpectedVersion)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
+const saveUserModelSettings = `-- name: SaveUserModelSettings :one
+INSERT INTO user_model_settings (user_id, main_model, main_context_length,
+    subagent_model, subagent_context_length, compact_model, version)
+SELECT $1, $2, $3,
+    NULLIF($4::text, ''), $5, NULLIF($6::text, ''), 1
+WHERE $7::bigint = 0
+   OR EXISTS (SELECT 1 FROM user_model_settings WHERE user_id = $1)
+ON CONFLICT (user_id) DO UPDATE SET main_model = EXCLUDED.main_model,
+    main_context_length = EXCLUDED.main_context_length, subagent_model = EXCLUDED.subagent_model,
+    subagent_context_length = EXCLUDED.subagent_context_length, compact_model = EXCLUDED.compact_model,
+    version = user_model_settings.version + 1
+WHERE user_model_settings.version = $7
+RETURNING version
+`
+
+type SaveUserModelSettingsParams struct {
+	UserID                uuid.UUID
+	MainModel             string
+	MainContextLength     *int64
+	SubagentModel         string
+	SubagentContextLength *int64
+	CompactModel          string
+	ExpectedVersion       int64
+}
+
+func (q *Queries) SaveUserModelSettings(ctx context.Context, arg SaveUserModelSettingsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, saveUserModelSettings,
+		arg.UserID,
 		arg.MainModel,
-		arg.MainModelMaxTokens,
+		arg.MainContextLength,
 		arg.SubagentModel,
-		arg.SubagentModelMaxTokens,
 		arg.SubagentContextLength,
 		arg.CompactModel,
-		arg.CompactModelMaxTokens,
-		arg.CompactAtTokens,
-		arg.MainContextLength,
-		arg.CompactContextLength,
-		arg.ReflectionIdleMinutes,
-		arg.UpdatedBy,
+		arg.ExpectedVersion,
 	)
-	return err
+	var version int64
+	err := row.Scan(&version)
+	return version, err
 }

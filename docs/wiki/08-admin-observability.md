@@ -1,6 +1,6 @@
 # 08 管理看板与调用观测（开发中）
 
-用户要求：“帮我建立一个后台管理看板”“观察每个用户、agent的调用情况”。管理端代码位于本仓库 `admin/`，作为独立 Node 服务运行与部署，Go 后端提供观测 API 和模型配置接口。尚未提交或推送。
+用户要求：“帮我建立一个后台管理看板”“观察每个用户、agent的调用情况”。管理端代码位于本仓库 `admin/`，作为独立 Node 服务运行与部署，Go 后端提供观测 API 和全局运行参数接口。
 
 ## 仓库归属（2026-10-26）
 
@@ -80,7 +80,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 
 `python3 scripts/set-admin-password.py --generate` 可生成本地初始密码。明文只保存到被 Git 忽略的 `backend/bin/admin-password.txt`，文件权限为 600，不打印到服务日志。手动设置新密码时移除该初始密码文件。修改后重启后端，旧看板会话立即失效。
 
-密码正确后签发 32 字节随机令牌，固定 12 小时到期。`admin_sessions` 只保存令牌哈希和凭证版本摘要，每次管理请求都检查有效期与当前凭证版本。退出只撤销当前管理会话。聊天令牌不能访问管理接口，管理令牌也不能访问聊天接口。模型配置变更记录为共享“管理员”，日志保留管理会话 ID，不再声称能识别具体个人。
+密码正确后签发 32 字节随机令牌，固定 12 小时到期。`admin_sessions` 只保存令牌哈希和凭证版本摘要，每次管理请求都检查有效期与当前凭证版本。退出只撤销当前管理会话。聊天令牌不能访问管理接口，管理令牌也不能访问聊天接口。全局运行参数变更记录为共享“管理员”，日志保留管理会话 ID，不再声称能识别具体个人。
 
 所有实例通过数据库共享登录限流，全局每分钟最多 10 次登录尝试，含成功与格式错误的请求。超过返回 429 和 `Retry-After: 60`。该共享密码入口不提供个人身份审计或多角色权限。
 
@@ -93,7 +93,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 | `GET /admin/calls/{id}` | 按调用 ID 读取请求、响应 JSON，独立管理会话鉴权（原未使用的列表接口 `GET /admin/calls` 已于 2026-11-11 移除） |
 | `GET /admin/timeline` | `user_id`（及可选 `subagent_id`）的一页运行时间线（关联助手回复与压缩摘要的成功请求及失败请求）；`before` 游标翻到更早，首页附带对应角色的不可见指令（Main 或 Subagent），Main 时间线上的 `spawn_subagent`、`forward_subagent`、`cancel_subagent` 与 `subagent_event` 节点支持一键跳转查看该 Subagent 轨迹 |
 | `GET /admin/timeline/messages/{id}` | 单条消息的全文与私有 OSS 签名截图，供时间线展开截断内容（`admin/server.mjs` CSP `img-src` 放行 `https://*.aliyuncs.com`） |
-| `GET /admin/quotas` | 各服务的剩余额度，后端用已保存的 Key 并行向供应商实时查询，见下文额度面板 |
+| `GET /admin/quotas` | 各服务的剩余额度，后端用部署配置的 Key 并行向供应商查询，见下文额度面板 |
 
 时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
 
@@ -109,7 +109,15 @@ In-App Browser 已验证密码错误提示、正确密码进入概览、退出�
 
 `00006` 已在独立验收数据库执行 Up / Down / Up，本地开发库已升级。Go build、vet、现有 Agent PostgreSQL 集成用例的 race 检查和管理端语法检查通过，未新增测试文件。管理接口验证了匿名 401、普通用户 403、管理员 200、非法筛选 400 和游标分页；隔离数据库的真实 DeepSeek 请求已验证逐次日志、用量、费用、耗时与步骤关联。另用完成步骤遗留的请求日志验证自动中断恢复，以及失败 Subagent 在清理日志后保留失败状态。浏览器已验收管理员登录、用户到 Agent 下钻、历史列表和步骤详情。部署生产仍需各部署者配置数据库、管理员密码哈希、HTTPS 与独立管理端服务。
 
+## 全局运行参数
+
+「配置」页的「全局运行参数」可修改上下文压缩阈值和闲置反思时长。后端通过 `GET /admin/runtime-settings` 读取这两项设置，通过 `PUT /admin/runtime-settings` 保存。版本冲突返回 409，刷新后可看到当前值。压缩阈值从下一次准备模型请求时生效，反思时长从调度器下一次扫描时生效。
+
+2026-11-12，模型选择移到 App，用户按账号保存选择。看板的 OpenRouter 卡片显示环境变量配置状态和额度，模型目录、模型调用和额度查询均读取 `OPENROUTER_API_KEY`。见 [App 模型设置](05-main-runtime.md#app-模型设置)。
+
 ## 一键切换模型（2026-10-23，开发中）
+
+本节记录旧版全局模型设置。现行行为见[全局运行参数](#全局运行参数)。
 
 用户要求：“我希望这里能添加一键切换模型的能力”。管理端增加“模型配置”页：为 Main 选择模型，点击“应用模型配置”保存。选择作用于所有用户，从下一次请求读取配置时生效；已经发出的请求与已缓存回复继续完成。
 
@@ -182,7 +190,7 @@ make migrate
 make import-services
 ```
 
-导入识别 `OPENROUTER_API_KEY`、`GEMINI_API_KEY_IKUNCODE`、`GEMINI_BASE_URL_IKUNCODE`、`RESEND_API_KEY`、`EMAIL_FROM`、`SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY`。仅填入不存在的服务记录，重复执行不覆盖已有或已清除的配置，不输出 Key。完成后删除旧环境变量，正常启动不再读取它们。生产镜像包含 `/usr/local/bin/import-services`，升级旧部署时使用 `make prod-import-services`；新部署直接从看板填写。
+导入识别 `GEMINI_API_KEY_IKUNCODE`、`GEMINI_BASE_URL_IKUNCODE`、`RESEND_API_KEY`、`EMAIL_FROM`、`SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY`。仅填入不存在的服务记录，重复执行不覆盖已有或已清除的配置，不输出 Key。完成后可删除已导入的环境变量。保留 `OPENROUTER_API_KEY`，后端启动时读取它。生产镜像包含 `/usr/local/bin/import-services`，升级旧部署时使用 `make prod-import-services`；新部署直接从看板填写。
 
 独立数据库已验证 `00015` 的 Up、Down、Up，密文落库与脱敏返回、导入幂等、清除不恢复、非法输入不改原值、运行中替换 Key、六家服务的实际请求读取新值、跨服务密文与错误主密钥拒绝解密、恢复原主密钥、数据库故障和缺少主密钥。真实后端通过受控 HTTP/TLS 接口验证请求，Resend 验证未向外发送邮件。In-App Browser 完成服务页与保存新 Key 后仅回显末尾四位的验收。未新增测试文件。
 

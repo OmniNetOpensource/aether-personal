@@ -20,7 +20,7 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
-| 模型服务 | OpenRouter、ikun Gemini 与 ikun Claude；Main 默认 `deepseek/deepseek-v4.1-flash-1017`，后台 Subagent 与上下文压缩均可单独指定模型（留空跟随 Main） |
+| 模型服务 | 用户在 App 选择 OpenRouter 免费模型。Main 默认 `openrouter/free`。Subagent 默认跟随 Main，压缩默认跟随当前 Agent |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
@@ -93,7 +93,7 @@ make dev
 
 打开 [本地聊天](http://127.0.0.1:8080)。`make dev` 构建 Web/PWA、启动数据库、执行迁移并运行 Go；Go 根据 `FRONTEND_DIR` 同源提供页面与 WebSocket。页面打开后先显示 loading，WebSocket 就绪后本地 dev 自动进入固定 mock 用户 `dev@example.com`，无需点击登录、输入邮箱或验证码。
 
-另一个终端执行 `make admin`，进入 [管理看板](http://127.0.0.1:5174) 的“配置”页填写 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS 和阿里云 FC 凭证。修改从下一次请求生效，无需重启。服务未配置时允许进入看板，使用该服务时报未配置。已有 `.env` 的升级方式见 [服务凭证管理](docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。
+在 `backend/.env` 设置 `OPENROUTER_API_KEY`，启动或重启后端后即可使用 App 的模型设置。其他服务凭证在 [管理看板](http://127.0.0.1:5174) 的「配置」页填写。另开终端运行 `make admin` 启动看板。看板保存的凭证从下一次请求生效。已有 `.env` 的升级方式见 [服务凭证管理](docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。
 
 运行编译与静态类型检查（仓库不保留或运行任何本地测试类脚本）：
 
@@ -121,7 +121,7 @@ make db-down   # 停止本地容器
 | `REDIS_URL` | 服务进程必填，Redis 连接串（本地示例 `redis://localhost:6379/0`，生产 Compose 自动注入） |
 | `DATABASE_MAX_CONNS` | 单容器默认 `20`，最小 `5`；同时运行 Main 的用户数默认不超过该值减 4（可用 `AGENT_CAPACITY` 调小） |
 | `SERVICE_ENCRYPTION_KEY` | 必填，Base64 编码的 32 字节加密主密钥，用 `openssl rand -base64 32` 生成；与数据库分开保存并备份，不能随意重新生成 |
-| `MAIN_MODEL` | 可选，Main 的初始默认模型；管理看板保存后使用数据库选择，默认 `deepseek/deepseek-v4.1-flash-1017`；ikun Gemini 使用 `ikun:gemini-...` ID |
+| `OPENROUTER_API_KEY` | 各账号的 OpenRouter 模型请求和目录共用的 Key |
 | `FRONTEND_DIR` | Web/PWA 构建目录；本地示例为 `../frontend/build/web`，相对后端进程工作目录 |
 | `PORT` | 可选，HTTP 监听端口，默认 `8080` |
 | `POSTGRES_PORT`、`REDIS_PORT` | 可选，本地开发容器映射到本机的端口，默认 `5432` 与 `6379` |
@@ -129,6 +129,8 @@ make db-down   # 停止本地容器
 本地 dev 打开聊天页面即自动使用 `dev@example.com` 登录，自动登录失败时可点击「开发测试登录」重试；prod 不开放此入口。只模拟用户身份，模型和工具仍真实运行。
 
 登录、历史与收发都走主页建立的聊天 WebSocket，没有对应的 HTTP 接口：页面在收到后端 `ready` 事件前显示 loading，dev 随即在同一连接上自动完成开发登录，prod 在同一连接上发送邮箱与验证码命令（dev 不发邮件，验证码打印在后端日志的 `login code` 一行）。协议见 [消息与实时通信](docs/wiki/04-messaging.md#websocket)。
+
+在 App 右上角打开「账号 → 模型设置」，为当前账号选择模型。默认使用 OpenRouter 免费路由。见 [App 模型设置](docs/wiki/05-main-runtime.md#app-模型设置)。
 
 ## 项目资料
 
@@ -146,4 +148,4 @@ make db-down   # 停止本地容器
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；在「配置」页统一管理对话、Subagent 与压缩模型、压缩阈值、闲置后台反思时长及全部第三方服务凭证与剩余额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；「配置」页管理全局压缩阈值、闲置反思时长、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

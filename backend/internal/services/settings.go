@@ -1,4 +1,4 @@
-// 本文件保存部署共用的服务凭证：数据库只存 AES-GCM 密文，调用前读取当前值，管理接口只取得脱敏状态。
+// 本文件管理部署共用的服务凭证：OpenRouter 由部署环境提供，其余凭证保存在数据库的 AES-GCM 密文中。
 
 package services
 
@@ -42,7 +42,7 @@ type Definition struct {
 }
 
 var Definitions = []Definition{
-	{OpenRouter, "OpenRouter", "OPENROUTER_API_KEY"},
+	{OpenRouter, "OpenRouter", ""},
 	{IkunGemini, "ikun Gemini", "GEMINI_API_KEY_IKUNCODE"},
 	{IkunClaude, "ikun Claude", ""},
 	{Resend, "Resend", "RESEND_API_KEY"},
@@ -79,15 +79,16 @@ type Info struct {
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 
-// Store 无凭证缓存，每个外部请求读取一份当前值，已经发出的请求不受后续替换影响。
+// Store 保存部署注入的 OpenRouter Key，并为每次调用读取其他服务的数据库凭证。
 type Store struct {
-	queries *database.Queries
-	cipher  cipher.AEAD
-	appEnv  string
+	openRouterAPIKey string
+	queries          *database.Queries
+	cipher           cipher.AEAD
+	appEnv           string
 }
 
 // New 只组装本地密码算法，不依赖启动时数据库已就绪。
-func New(pool *pgxpool.Pool, key []byte, appEnv string) (*Store, error) {
+func New(pool *pgxpool.Pool, key []byte, appEnv, openRouterAPIKey string) (*Store, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -96,11 +97,17 @@ func New(pool *pgxpool.Pool, key []byte, appEnv string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{queries: database.New(pool), cipher: aead, appEnv: appEnv}, nil
+	return &Store{queries: database.New(pool), cipher: aead, appEnv: appEnv, openRouterAPIKey: openRouterAPIKey}, nil
 }
 
-// Load 为实际请求解密一条服务配置；缺失或损坏时失败，不回退到旧环境变量。
+// Load 取出请求使用的凭证。OpenRouter 固定使用启动时读取的环境变量，其他服务按需从数据库解密。
 func (s *Store) Load(ctx context.Context, service string) (Settings, error) {
+	if service == OpenRouter {
+		if s.openRouterAPIKey == "" {
+			return Settings{}, fmt.Errorf("%s: %w", service, ErrNotConfigured)
+		}
+		return Settings{APIKey: s.openRouterAPIKey}, nil
+	}
 	row, err := s.queries.GetServiceSettings(ctx, service)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Settings{}, fmt.Errorf("%s: %w", service, ErrNotConfigured)
@@ -131,6 +138,13 @@ func (s *Store) List(ctx context.Context) ([]Info, error) {
 	items := make([]Info, 0, len(Definitions))
 	for _, definition := range Definitions {
 		info := Info{ID: definition.ID, Name: definition.Name, Status: "not_configured", BaseURL: serviceBaseURL(definition.ID, "")}
+		if definition.ID == OpenRouter {
+			if s.openRouterAPIKey != "" {
+				info.Status = "configured"
+			}
+			items = append(items, info)
+			continue
+		}
 		if row, exists := byService[definition.ID]; exists {
 			info.BaseURL, info.EmailFrom, info.UpdatedAt = serviceBaseURL(definition.ID, row.BaseUrl), row.EmailFrom, &row.UpdatedAt
 			if row.ApiKeyCiphertext != nil {
@@ -252,7 +266,7 @@ func validate(service string, configured bool, baseURL, emailFrom, appEnv string
 				return fmt.Errorf("%w: invalid sender address", ErrInvalid)
 			}
 		}
-	case OpenRouter, Serper, Parallel, EveryInfra, AliyunOSS, AliyunFC:
+	case Serper, Parallel, EveryInfra, AliyunOSS, AliyunFC:
 		if baseURL != "" || emailFrom != "" {
 			return fmt.Errorf("%w: unsupported service fields", ErrInvalid)
 		}

@@ -1,4 +1,4 @@
-// 本文件是 Cloudflare Worker 入口：把聊天、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
+// 本文件是 Cloudflare Worker 入口：把聊天、模型设置、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
 
 const apiMethods = new Map([
   // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
@@ -7,6 +7,7 @@ const apiMethods = new Map([
   ['/images', 'POST'],
   ['/files', 'POST'],
   ['/healthz', 'GET'],
+  ['/model-settings', 'GET, PUT'],
 ]);
 
 // resolveApiMethod 识别固定 API 路径与动态公开分享读取路径对应的允许 HTTP 方法。
@@ -31,7 +32,7 @@ export default {
       }
       return env.ASSETS.fetch(request);
     }
-    if (request.method !== method) {
+    if (!method.split(', ').includes(request.method)) {
       return new Response('Method not allowed', {
         status: 405,
         headers: { Allow: method, 'Cache-Control': 'no-store' },

@@ -213,3 +213,13 @@ type User struct {
 	MainFailedThroughSequence *int64
 	MainLeaseEpoch            int64
 }
+
+type UserModelSetting struct {
+	UserID                uuid.UUID
+	MainModel             string
+	MainContextLength     *int64
+	SubagentModel         *string
+	SubagentContextLength *int64
+	CompactModel          *string
+	Version               int64
+}

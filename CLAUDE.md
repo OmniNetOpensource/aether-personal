@@ -79,7 +79,7 @@ SQL
 
 ## 约定
 
-- 基础设施启动配置只来自环境变量；管理员在看板选择的模型和服务凭证持久化到数据库，服务 Key 不回退环境变量。`SERVICE_ENCRYPTION_KEY` 由部署端提供并单独备份；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。缺少服务 Key 时允许进入看板补齐，调用该服务时报未配置。
+- 基础设施启动配置与 `OPENROUTER_API_KEY` 来自环境变量。用户在 App 保存个人模型选择，管理员在看板保存全局运行参数和其他服务凭证。`SERVICE_ENCRYPTION_KEY` 由部署端提供并单独备份；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。缺少服务 Key 时允许进入看板补齐，调用该服务时报未配置。
 - 迁移文件按 `00001_...sql` 顺序编号，包含 Up 与 Down；新增迁移后不在本地执行、回滚或再执行来验证。
 - 表结构：固定取值的字段用 `text` + `CHECK`，不用 enum；外键一律 `ON DELETE CASCADE`。
 - sqlc 生成类型：不能为空的列用普通类型，能为空的列加 `*`（`nil` 表示空）；UUID 用 `google/uuid`，时间用 `time.Time`，`numeric` 用 `shopspring/decimal`。

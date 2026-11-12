@@ -1,7 +1,9 @@
-// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送与上传，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
+// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送、上传与个人模型设置，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
+import { modelSelectionSchema, modelSettingsSchema } from './modelSettings.js';
+import type { ModelSelection } from './modelSettings.js';
 import type { ClientCommand } from './ServerEventRelay.js';
 import type {
   ChatPage,
@@ -102,7 +104,7 @@ interface PendingRequest {
 }
 
 // ChatController 只维护界面状态：它订阅 ServerEventRelay 中转的服务器事件，
-// 并通过中转发送聊天命令；图片字节单独通过 HTTP 上传，不直接接触原始 WebSocket 帧。
+// 并通过中转发送聊天命令；上传与模型设置使用同源 HTTP。
 export class ChatController {
   messages: ChatMessage[] = [];
   tasks: ChatTask[] = [];
@@ -530,6 +532,42 @@ export class ChatController {
       else this.messages[index] = message;
     }
     this.messages.sort((a, b) => a.position.localeCompare(b.position));
+  }
+
+  // getModelSettings 读取当前账号的选择和免费目录，关闭浮层时可取消读取。
+  async getModelSettings(signal: AbortSignal) {
+    const response = await this.requestModelSettings({ signal });
+    return modelSettingsSchema.parse(await response.json());
+  }
+
+  // saveModelSettings 提交三种模型及已读取的版本，服务器用聊天会话定位账号。
+  async saveModelSettings(selection: ModelSelection) {
+    const response = await this.requestModelSettings({
+      method: 'PUT',
+      body: JSON.stringify(selection),
+    });
+    return modelSelectionSchema.parse(await response.json());
+  }
+
+  // requestModelSettings 统一为模型设置的同源接口提供登录令牌和请求时限。
+  private async requestModelSettings(options: RequestInit) {
+    if (!this.token) throw new Error('请先登录');
+    const timeout = AbortSignal.timeout(15000);
+    const response = await fetch(this.baseURL + '/model-settings', {
+      ...options,
+      headers: {
+        Authorization: 'Bearer ' + this.token,
+        'Content-Type': 'application/json',
+      },
+      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+    });
+    if (!response.ok) {
+      const message = response.headers.get('content-type')?.startsWith('text/plain')
+        ? (await response.text()).trim()
+        : '';
+      throw new Error(message || '模型设置暂时不可用，请稍后重试');
+    }
+    return response;
   }
 
   // uploadImage 以原始字节上传图片；聊天消息只携带服务端生成的 OSS 引用。

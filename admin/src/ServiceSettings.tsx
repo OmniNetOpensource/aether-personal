@@ -1,4 +1,4 @@
-// 本文件是管理看板配置页的服务凭证部分：各渠道与工具服务独立保存凭证，完整 Key 只用于当次提交、不回显。
+// 本文件是管理看板配置页的服务凭证部分：OpenRouter 只显示环境变量配置状态，其余服务凭证可独立保存。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -12,7 +12,6 @@ import {
 import { Empty } from './ui.js';
 
 const descriptions: Record<string, string> = {
-  openrouter: '模型目录与 OpenRouter 模型请求。',
   ikun_gemini: '通过 ikun 使用 Gemini 原生模型接口。',
   ikun_claude: '通过 ikun 使用 Claude 处理 Main 对话与上下文压缩，需要 Claude 专用 Key。',
   resend: '发送正式环境的登录验证码邮件。',
@@ -137,6 +136,25 @@ function ServiceCard({
     not_configured: '未配置',
     unreadable: '无法解密',
   };
+
+  // OpenRouter 的 Key 随后端启动加载，看板只展示配置状态及额度。
+  if (service.id === 'openrouter') {
+    const configured = service.status === 'configured';
+    return (
+      <section className="panel model-role-card service-card">
+        <div className="service-heading">
+          <h3>{service.name}</h3>
+          <span className={`service-status ${configured ? 'saved' : 'not_configured'}`}>
+            {configured ? '已配置' : '未配置'}
+          </span>
+        </div>
+        <p className="muted">模型目录和请求共用部署环境的 OPENROUTER_API_KEY。</p>
+        <p className="service-quota">
+          {quota ? `剩余额度：${quotaHeadline(quota)} · ${quota.detail}` : '剩余额度：暂时无法读取'}
+        </p>
+      </section>
+    );
+  }
 
   // 保存或清除单个服务；成功后重新读取脱敏状态回显，失败时只在本卡片提示。
   async function submit(clearKey: boolean) {

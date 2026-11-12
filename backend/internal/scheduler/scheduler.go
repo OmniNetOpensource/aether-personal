@@ -12,7 +12,6 @@ import (
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/google/uuid"
@@ -25,7 +24,7 @@ const scanInterval = 5 * time.Second
 
 // Run 每隔 scanInterval 扫一次到期安排和到期的闲置后台反思并逐条投递，直到进程退出。它是调度器的最外层：
 // 失败在这里记录，没投递成功的安排或后台反思仍然到期，下一次扫描会再试。
-func Run(ctx context.Context, pool *pgxpool.Pool, appConfig config.Config, manager *agent.Manager) {
+func Run(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager) {
 	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
 	for {
@@ -40,7 +39,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, appConfig config.Config, manag
 			}
 		}
 		// 闲置时长每次扫描现读看板设置，管理员修改后下一次扫描就生效。
-		settings, err := modelsettings.Load(ctx, queries, appConfig)
+		settings, err := modelsettings.LoadRuntime(ctx, queries)
 		if err != nil && ctx.Err() == nil {
 			slog.Error("load reflection settings failed", "error", err)
 		}

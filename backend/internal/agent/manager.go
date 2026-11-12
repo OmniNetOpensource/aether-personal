@@ -84,7 +84,6 @@ func (m *Manager) HasActiveLease(ctx context.Context, userID uuid.UUID) bool {
 type Manager struct {
 	databasePool  *pgxpool.Pool
 	redisClient   *redis.Client
-	settings      config.Config
 	modelClient   *http.Client
 	toolDeps      tools.Dependencies
 	services      *services.Store
@@ -105,7 +104,6 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 	return &Manager{
 		databasePool: pool,
 		redisClient:  redisClient,
-		settings:     settings,
 		services:     serviceSettings,
 		modelClient:  &http.Client{Timeout: modelRequestTimeout},
 		toolDeps: tools.Dependencies{
@@ -457,7 +455,6 @@ func (m *Manager) tryStartRunner(ctx context.Context, userID uuid.UUID) {
 		manager:      m,
 		databasePool: m.databasePool,
 		redisClient:  m.redisClient,
-		settings:     m.settings,
 		modelClient:  m.modelClient,
 		toolDeps:     m.toolDeps,
 		services:     m.services,
@@ -590,7 +587,6 @@ func (m *Manager) tryStartSubagentRunner(ctx context.Context, subagentID uuid.UU
 		manager:      m,
 		databasePool: m.databasePool,
 		redisClient:  m.redisClient,
-		settings:     m.settings,
 		modelClient:  m.modelClient,
 		toolDeps:     m.toolDeps,
 		services:     m.services,

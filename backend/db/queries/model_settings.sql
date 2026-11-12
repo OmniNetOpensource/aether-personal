@@ -1,37 +1,35 @@
--- 本文件是运行时模型设置的查询集合：读取、锁定并保存管理员在看板选择的 Main、Subagent 与压缩模型配置及闲置反思时长（sqlc 据此生成代码）。
+-- 本文件读取和保存账号模型选择及全局运行参数；版本校验在写入语句内完成，避免覆盖其他设备的保存。
 
--- name: GetModelSettings :one
-SELECT main_model, main_model_max_tokens,
-    subagent_model, subagent_model_max_tokens, subagent_context_length,
-    compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length,
-    reflection_idle_minutes, version, updated_at, updated_by
+-- name: GetUserModelSettings :one
+SELECT main_model, main_context_length, subagent_model, subagent_context_length, compact_model, version
+FROM user_model_settings WHERE user_id = $1;
+
+-- name: SaveUserModelSettings :one
+INSERT INTO user_model_settings (user_id, main_model, main_context_length,
+    subagent_model, subagent_context_length, compact_model, version)
+SELECT sqlc.arg(user_id), sqlc.arg(main_model), sqlc.narg(main_context_length),
+    NULLIF(sqlc.arg(subagent_model)::text, ''), sqlc.narg(subagent_context_length), NULLIF(sqlc.arg(compact_model)::text, ''), 1
+WHERE sqlc.arg(expected_version)::bigint = 0
+   OR EXISTS (SELECT 1 FROM user_model_settings WHERE user_id = sqlc.arg(user_id))
+ON CONFLICT (user_id) DO UPDATE SET main_model = EXCLUDED.main_model,
+    main_context_length = EXCLUDED.main_context_length, subagent_model = EXCLUDED.subagent_model,
+    subagent_context_length = EXCLUDED.subagent_context_length, compact_model = EXCLUDED.compact_model,
+    version = user_model_settings.version + 1
+WHERE user_model_settings.version = sqlc.arg(expected_version)
+RETURNING version;
+
+-- name: GetRuntimeSettings :one
+SELECT compact_at_tokens, reflection_idle_minutes, version
 FROM model_settings WHERE singleton = true;
 
--- name: LockModelSettings :exec
-SELECT pg_advisory_xact_lock(hashtextextended('admin:model-settings', 0));
-
--- name: SaveModelSettings :exec
-INSERT INTO model_settings (main_model, main_model_max_tokens,
-    subagent_model, subagent_model_max_tokens, subagent_context_length,
-    compact_model, compact_model_max_tokens,
-    compact_at_tokens, main_context_length, compact_context_length,
-    reflection_idle_minutes, version, updated_by)
-VALUES (sqlc.arg(main_model), sqlc.narg(main_model_max_tokens),
-    sqlc.narg(subagent_model), sqlc.narg(subagent_model_max_tokens), sqlc.narg(subagent_context_length),
-    sqlc.narg(compact_model), sqlc.narg(compact_model_max_tokens),
-    sqlc.arg(compact_at_tokens), sqlc.narg(main_context_length), sqlc.narg(compact_context_length),
-    sqlc.arg(reflection_idle_minutes), 1, sqlc.arg(updated_by))
-ON CONFLICT (singleton) DO UPDATE SET main_model = EXCLUDED.main_model,
-    main_model_max_tokens = EXCLUDED.main_model_max_tokens,
-    subagent_model = EXCLUDED.subagent_model,
-    subagent_model_max_tokens = EXCLUDED.subagent_model_max_tokens,
-    subagent_context_length = EXCLUDED.subagent_context_length,
-    compact_model = EXCLUDED.compact_model,
-    compact_model_max_tokens = EXCLUDED.compact_model_max_tokens,
-    compact_at_tokens = EXCLUDED.compact_at_tokens,
-    main_context_length = EXCLUDED.main_context_length,
-    compact_context_length = EXCLUDED.compact_context_length,
+-- name: SaveRuntimeSettings :one
+-- 保留旧的全局模型列供旧版回滚，当前运行时只读取阈值和反思时长。
+INSERT INTO model_settings (main_model, compact_at_tokens, reflection_idle_minutes, version, updated_by)
+SELECT 'openrouter/free', sqlc.arg(compact_at_tokens), sqlc.arg(reflection_idle_minutes), 1, '管理员'
+WHERE sqlc.arg(expected_version)::bigint = 0
+   OR EXISTS (SELECT 1 FROM model_settings WHERE singleton = true)
+ON CONFLICT (singleton) DO UPDATE SET compact_at_tokens = EXCLUDED.compact_at_tokens,
     reflection_idle_minutes = EXCLUDED.reflection_idle_minutes,
-    version = model_settings.version + 1,
-    updated_at = now(), updated_by = EXCLUDED.updated_by;
+    version = model_settings.version + 1, updated_at = now(), updated_by = EXCLUDED.updated_by
+WHERE model_settings.version = sqlc.arg(expected_version)
+RETURNING version;

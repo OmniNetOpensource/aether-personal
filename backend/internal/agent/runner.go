@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
@@ -37,7 +36,6 @@ type Runner struct {
 	manager      *Manager
 	databasePool *pgxpool.Pool
 	redisClient  *redis.Client
-	settings     config.Config
 	modelClient  *http.Client
 	toolDeps     tools.Dependencies
 	services     *services.Store

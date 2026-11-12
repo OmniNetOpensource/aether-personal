@@ -13,7 +13,7 @@ import {
   type TimelineItem,
 } from './api.js';
 import { CallDetailDialog } from './CallDetail.js';
-import { ModelSettingsPage } from './ModelSettings.js';
+import { RuntimeSettingsPage } from './RuntimeSettings.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
 import { TimelinePage } from './Timeline.js';
 import { Empty } from './ui.js';
@@ -32,7 +32,7 @@ const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '', mod
 
 const tabs: Record<Tab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
-  settings: ['配置', '选择对话、Subagent 与压缩模型，并管理模型、邮件与联网服务的凭证。'],
+  settings: ['配置', '管理全局压缩阈值、闲置反思时长和服务凭证。'],
 };
 const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
 
@@ -54,7 +54,7 @@ export function AdminApp() {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [toast, setToast] = useState('');
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
-  const [modelLoading, setModelLoading] = useState(false);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [serviceLoading, setServiceLoading] = useState(false);
 
   const controller = useRef<AbortController | null>(null);
@@ -305,9 +305,9 @@ export function AdminApp() {
   }
 
   const onSettingsUpdated = useCallback((text: string) => setUpdatedText(text), []);
-  // 模型与凭证各自报告加载；刷新按钮等到两段都结束，避免先完成的一段把状态清掉。
-  const onModelLoading = useCallback((loading: boolean) => {
-    setModelLoading(loading);
+  // 运行参数与凭证各自报告加载；刷新按钮等到两段都结束，避免先完成的一段把状态清掉。
+  const onRuntimeLoading = useCallback((loading: boolean) => {
+    setRuntimeLoading(loading);
     if (!loading) setLoadError('');
   }, []);
   const onServiceLoading = useCallback((loading: boolean) => {
@@ -337,7 +337,7 @@ export function AdminApp() {
     );
 
   const settingsPage = tab === 'settings';
-  const pageBusy = settingsPage ? modelLoading || serviceLoading : refreshing;
+  const pageBusy = settingsPage ? runtimeLoading || serviceLoading : refreshing;
   const subagentOptions = filters.user === query.user ? (snapshot?.subagents?.items ?? []) : [];
 
   return (
@@ -506,11 +506,11 @@ export function AdminApp() {
           <div aria-live="polite">
             {tab === 'settings' ? (
               <>
-                <ModelSettingsPage
+                <RuntimeSettingsPage
                   refreshKey={settingsRefreshKey}
                   onUpdated={onSettingsUpdated}
                   onAccessLost={accessLost}
-                  onLoadingChange={onModelLoading}
+                  onLoadingChange={onRuntimeLoading}
                   notify={notify}
                 />
                 <div className="settings-services">

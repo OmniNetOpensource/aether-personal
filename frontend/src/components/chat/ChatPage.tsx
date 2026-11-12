@@ -1,4 +1,4 @@
-// 本文件组合聊天列表、输入框、实时任务进展浮层、历史搜索、只读桌面与账号退出入口；浮层保留聊天草稿和阅读位置。
+// 本文件组合聊天列表、输入框、实时任务进展浮层、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
 
 import { useEffect, useRef, useState } from 'react';
 import { isOpenTask } from '../../lib/ChatController.js';
@@ -9,6 +9,7 @@ import { MessageComposer } from './MessageComposer.js';
 import { ChatHistorySearch } from './ChatHistorySearch.js';
 import { ChatTaskSheet } from './ChatTaskSheet.js';
 import { DesktopViewer } from './DesktopViewer.js';
+import { ChatModelSettings } from './ChatModelSettings.js';
 
 // ChatPage 承载登录后的全屏对话界面与右上角悬浮操作入口。
 export function ChatPage({ controller }: { controller: ChatController }) {
@@ -18,6 +19,8 @@ export function ChatPage({ controller }: { controller: ChatController }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const accountButton = useRef<HTMLButtonElement>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [latestRequest, setLatestRequest] = useState(0);
   const openTaskCount = controller.tasks.filter(isOpenTask).length;
@@ -119,7 +122,8 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           <button
             type="button"
             className="chat-account-launch"
-            aria-label="账号与退出"
+            ref={accountButton}
+            aria-label="账号"
             aria-expanded={accountOpen}
             title="账号"
             onClick={() => setAccountOpen((open) => !open)}
@@ -136,6 +140,16 @@ export function ChatPage({ controller }: { controller: ChatController }) {
               </p>
               <button
                 type="button"
+                className="chat-account-models"
+                onClick={() => {
+                  setAccountOpen(false);
+                  setModelsOpen(true);
+                }}
+              >
+                模型设置
+              </button>
+              <button
+                type="button"
                 className="chat-account-logout"
                 disabled={signingOut}
                 onClick={async () => {
@@ -149,6 +163,15 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           )}
         </div>
       </div>
+      {modelsOpen && (
+        <ChatModelSettings
+          controller={controller}
+          onClose={() => {
+            setModelsOpen(false);
+            accountButton.current?.focus({ preventScroll: true });
+          }}
+        />
+      )}
       {tasksOpen && (
         <ChatTaskSheet
           controller={controller}

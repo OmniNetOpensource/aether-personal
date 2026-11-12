@@ -63,7 +63,7 @@ func main() {
 	defer redisClient.Close()
 
 	// HTTP 与 Agent 共用无缓存的服务配置入口，数据库保留凭证的唯一运行时副本。
-	serviceSettings, err := services.New(databasePool, appConfig.ServiceEncryptionKey, appConfig.AppEnv)
+	serviceSettings, err := services.New(databasePool, appConfig.ServiceEncryptionKey, appConfig.AppEnv, appConfig.OpenRouterAPIKey)
 	if err != nil {
 		slog.Error("initialize service encryption failed")
 		os.Exit(1)
@@ -79,7 +79,7 @@ func main() {
 		}
 		managerDone <- err
 	}()
-	go scheduler.Run(ctx, databasePool, appConfig, manager)
+	go scheduler.Run(ctx, databasePool, manager)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

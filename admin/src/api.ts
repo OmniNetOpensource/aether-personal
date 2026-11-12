@@ -152,32 +152,11 @@ export interface QuotaItem {
   detail: string;
 }
 
-export interface ModelSettings {
-  subagent_model: string;
-  subagent_context_length: number;
-  compact_model: string;
-  compact_context_length: number;
+// RuntimeSettings 是管理看板编辑的全局阈值；版本用于发现其他页面的保存。
+export interface RuntimeSettings {
   compact_at_tokens: number;
   reflection_idle_minutes: number;
-  main_model: string;
   version: number;
-  updated_at: string | null;
-  updated_by: string | null;
-  source: string;
-}
-
-export interface CatalogModel {
-  id: string;
-  name: string;
-  provider: string;
-  context_length: number;
-  pricing: { prompt: string; completion: string };
-}
-
-export interface ModelCatalog {
-  items: CatalogModel[];
-  warnings: string[];
-  fetched_at: string;
 }
 
 export interface ServiceItem {

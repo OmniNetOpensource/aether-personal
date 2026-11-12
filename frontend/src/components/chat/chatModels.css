@@ -1,0 +1,117 @@
+/* 本文件为聊天账号菜单的模型入口和个人模型设置浮层提供响应式样式。 */
+
+/* 账号菜单内的普通操作与退出按钮使用相同触控尺寸。 */
+.chat-account-models {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+/* 原生模态窗口在桌面居中，窄屏可滚动，适配亮暗主题。 */
+.chat-model-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(680px, calc(var(--app-height, 100dvh) - 32px));
+  margin: auto;
+  padding: 20px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 18px 56px var(--shadow);
+}
+
+.chat-model-dialog::backdrop {
+  background: rgb(0 0 0 / 36%);
+}
+
+/* 标题、关闭按钮和保存操作沿用聊天界面的圆角及语义色。 */
+.chat-model-header,
+.chat-model-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-model-header {
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.chat-model-header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.chat-model-actions {
+  justify-content: flex-end;
+}
+
+.chat-model-dialog button {
+  min-height: 42px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.chat-model-dialog button[type='submit'] {
+  background: var(--forest);
+  color: var(--on-forest);
+}
+
+.chat-model-dialog button:disabled {
+  opacity: 0.55;
+}
+
+/* 选择器用原生表单控件，支持键盘操作和移动端系统选单。 */
+.chat-model-form,
+.chat-model-form label {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-model-form label {
+  gap: 5px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chat-model-form :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.chat-model-dialog :is(button, input, select):focus-visible,
+.chat-account-models:focus-visible {
+  outline: 2px solid var(--forest-border);
+  outline-offset: 2px;
+}
+
+/* 目录状态与提交错误紧邻表单，便于找到重载入口。 */
+.chat-model-notice,
+.chat-model-error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.chat-model-error {
+  margin-top: 10px;
+  color: var(--error);
+}

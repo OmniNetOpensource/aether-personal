@@ -28,7 +28,7 @@
 | 项目定位 | 2026-10-30 改为以维护者自用为主的开源 personal agent，其他人也可自行部署或使用维护者实例；不再以企业 fork 服务其终端用户为首要目标 | [01](wiki/01-overview.md#项目定位) |
 | 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
 | 用户删除 | 仅管理员可删除，用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
-| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（模型配置与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 配置页增加可选 Subagent 模型选择，运行过程页支持切换与一键跳转查看各 Subagent 独立轨迹 | [08](wiki/08-admin-observability.md) |
+| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（全局运行参数与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 运行过程页支持查看各 Subagent 独立轨迹，模型选择移至 App | [08](wiki/08-admin-observability.md) |
 | Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、Subagent 回报、失败请求和不可见指令，支持在 Main 与各后台 Subagent 间切换与一键跳转，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
@@ -51,7 +51,7 @@
 | 后端 | Go `1.27.2`，标准库 `net/http`，`log/slog` | [01](wiki/01-overview.md#技术栈) |
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
-| 配置来源 | 基础设施与模型默认值读取环境变量；运行时模型选择与服务凭证保存在数据库。主加密密钥由部署端提供；缺少业务 Key 允许先进入看板配置 | [01](wiki/01-overview.md#配置) |
+| 配置来源 | 基础设施、加密主密钥与 `OPENROUTER_API_KEY` 由部署端提供。个人模型选择、全局运行参数及其他服务凭证保存在数据库 | [01](wiki/01-overview.md#配置) |
 | 服务凭证 | 2026-10-30 起在看板统一管理服务凭证（现含 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS、阿里云 FC 共九组），AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
 | 健康检查 | `GET /healthz`，同时探测 PostgreSQL 与 Redis 连通性，供 Caddy 主动健康检查在单容器重启或异常时自动切流 | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
@@ -73,11 +73,11 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`tasks`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`tasks`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
-| 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息；开启新上下文世代，固定指令、待压历史与当前工具定义保留前缀复用条件并禁用工具调用；支持在看板为压缩单独指定模型（如 ikun Claude，`00044`），留空则跟随 Main | [02](wiki/02-data-model.md#压缩与上下文检索) |
+| 压缩 | 摘要作为 `is_summary` 消息追加，不删旧消息；开启新上下文世代，固定指令、待压历史与当前工具定义保留前缀复用条件并禁用工具调用；用户在 App 可为压缩单独指定模型，留空跟随当前 Agent | [02](wiki/02-data-model.md#压缩与上下文检索) |
 | 自动压缩触发 | 上下文达到 200,000 tokens（看板可改）时，下一次调用模型前检查并压缩；2026-11-03 取消 ikun Gemini 固定 400,000 的例外，所有模型共用看板阈值（仍受已知输入容量封顶）；开发中，本地已验证并启用。2026-10-30 取消闲置 6 小时触发（看板小时设置一并删除）；达到阈值且恰好是 Main 的用户新消息触发时只压其之前的历史、保留这条消息原文 | [02](wiki/02-data-model.md#自动压缩触发2026-10-26开发中) |
 | 请求输出上限 | 2026-11-03 取消手动输出额度：删除看板输入框、`MAX_OUTPUT_TOKENS` 与持久化字段（`00031`）；普通回复与压缩使用目录已知的模型最大输出，未知时省略参数、由供应商决定，不设置应用默认数字 | [08](wiki/08-admin-observability.md#一键切换模型2026-10-23开发中) |
 | 历史检索 | Agent 侧 `search_message` / `read_message` 搜当前用户 `messages` 全表；页面侧新增独立「搜索历史聊天」浮层与前后上下文窗口（`00048`），只搜用户可见消息（含附件文件名，`00051`），不移动实时推送与历史翻页游标 | [02](wiki/02-data-model.md#历史检索-已实现)、[04](wiki/04-messaging.md) |
@@ -141,15 +141,15 @@
 | 数据库连接池上限 | 单容器环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不再占用池外 `LISTEN` 长连接，也不放进 `DATABASE_URL` 以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
 | Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；2026-11-02 起提醒改为组装时插入、不落库：从最近一条用户消息起，每 4 轮没有可见正文的工具调用插一条不可见 user 提醒，写出正文或用户新消息即重新计数，不设上限（原为连续 5 轮、同一次沉默最多 3 次）。不写正文即沉默 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
-| Main 模型 | 初始默认 `deepseek/deepseek-v4.1-flash-1017`；管理员可在看板切换并持久化，覆盖 `MAIN_MODEL` 默认值。2026-10-30 用户指定维护者线上使用 ikun Gemini 4 Argon，生产已保存 `ikun:gemini-4-argon` | [05](wiki/05-main-runtime.md#模型)、[08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
-| ikun Gemini 与 Claude | 接入 ikun Gemini 原生协议（`ikun:gemini-*`）与 ikun Claude 原生 Messages 协议（`ikun:claude-*`），保留 OpenRouter；均供 Main 与独立上下文压缩选择，凭证由看板加密管理；2026-11-12 取消目录层对容量、专用模型黑名单与模态的过度拦截，放行 Sonnet 等全量模型 | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
+| 个人模型 | 2026-11-12 起在 App 按账号选择 Main、Subagent 和压缩模型（`00057`）。默认 `openrouter/free`，可选支持工具调用的 OpenRouter 免费文本模型 | [05](wiki/05-main-runtime.md#app-模型设置) |
+| ikun Gemini 与 Claude | 接入 ikun Gemini 原生协议（`ikun:gemini-*`）与 ikun Claude 原生 Messages 协议（`ikun:claude-*`），保留 OpenRouter；原生协议保留，凭证由看板加密管理；2026-11-12 取消目录层对容量、专用模型黑名单与模态的过度拦截，放行 Sonnet 等全量模型。该目录属于旧版全局配置 | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
 | 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | 系统提示词 | 迁入 Aether 的中文调研与表达提示词；适配历史能力，2026-10-30 改为 Main 正文即用户消息（正文不暴露内部推理），并要求耗时任务主动汇报进度；2026-11-02 起不以 system 角色发送，改为每次请求以代码常量现注入第一条不可见 user 指令、不落库；2026-11-03 起表达要求冷静客观平实，少用浮夸语言与比喻，不阿谀奉承；同日改为多讲：展开用户可能还不清楚或不了解的背景、术语和原因，不再要求短问题给短答案 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 请求组装与缓存 | 2026-11-02 先确认合并组装（已结束对话并成一条 user 消息），同日改为原生组装：指令注入后接上一个 compact 以来的全部消息原文（user/assistant 原样、tool 靠 tool_call_id 对应），前缀只追加、不改写。同日运行循环简化后：工具回执紧跟其 assistant 消息、按调用顺序排列；每条用户本人消息后插一条不可见 user 当前时间，取该消息的 `created_at`；时间与进度提醒都在组装时由消息算出、不落库，同一段历史每次组装逐字相同。发出前检查工具回执齐全（缺失在内存补中断回执）且最后一条为 user 或 tool；2026-11-08 删除该检查，由组装前补跑工具、只在还有活时组装来保证。理由是原生只追加同样利于前缀缓存，且省去合并转换层；压缩是唯一开启新世代的动作 | [05](wiki/05-main-runtime.md#请求组装规则2026-11-02) |
 | Gemini 工具回执与新输入 | 2026-11-05：同批工具回执合并为一条原生 user，新输入另起 user，时间跟随输入；按来源角色合并，避免新问题埋入工具结果。真实模型对照拆分后回答两题，但不保证先旧后新或两次回复 | [05](wiki/05-main-runtime.md#请求组装规则2026-11-02) |
 | 模型调用失败 | 聊天显示通用失败提示，具体错误记日志与 `steps.error`；模型单次请求与含上下文准备、重试和退避的一轮调用均限 10 分钟，最多重试 3 次；2026-11-12 确认 ikun Claude 以 `max_tokens` 结束且既无有效正文也无工具调用时，共用预算自动补试一次；联网工具独立保留 120 秒 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 工具执行与恢复 | 2026-10-28 确认先保存助手消息、工具执行后立刻存回执、恢复时按回执跳过已完成工具；外部工具允许重跑，用重复执行成本换取恢复简单（2026-11-09 扩展到正常停机，见「停机与开机」）；2026-10-30 改为同一步工具全部并行执行、不设并发上限，每个工具从连接池取自己的连接，锁连接由看守协程统一盯守；同日去掉联网工具原有的全局 2 秒启动间隔，调用立即发出 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
-| Subagent | 2026-11-12 重新设计引入（`00055`）：面向多条独立任务高吞吐并行，采用「异步后台并发 + 运行时自动投递 `subagent_event` + Main 把关与 `forward_subagent` 原文直通转发」方案。彻底抛弃旧版 `send_message` 工具；Subagent 运行在独立上下文，共享阿芒调研与表达规范，仅开放 7 个只读调研工具（联网搜索/抓取/读图、主对话历史检索、只读 `memory view`），沙箱电脑与写操作保留给 Main 单线程执行；独立任务合格时经 `forward_subagent` 零改写直发聊天气泡，不在 Main 上下文存双份长文；支持 `cancel_subagent` 中途取消、每用户最多 5 个并发与 15 分钟上限、看板可选独立模型（留空跟随 Main）及独立运行时间线观测（取代 2026-11-02 `00025` 删除旧实现的状态） | [05](wiki/05-main-runtime.md#异步后台-subagent-与零损耗直通转发2026-11-12) |
+| Subagent | 2026-11-12 重新设计引入（`00055`）：面向多条独立任务高吞吐并行，采用「异步后台并发 + 运行时自动投递 `subagent_event` + Main 把关与 `forward_subagent` 原文直通转发」方案。彻底抛弃旧版 `send_message` 工具；Subagent 运行在独立上下文，共享阿芒调研与表达规范，仅开放 7 个只读调研工具（联网搜索/抓取/读图、主对话历史检索、只读 `memory view`），沙箱电脑与写操作保留给 Main 单线程执行；独立任务合格时经 `forward_subagent` 零改写直发聊天气泡，不在 Main 上下文存双份长文；支持 `cancel_subagent` 中途取消、每用户最多 5 个并发与 15 分钟上限、在 App 可选独立模型（留空跟随 Main）及独立运行时间线观测（取代 2026-11-02 `00025` 删除旧实现的状态） | [05](wiki/05-main-runtime.md#异步后台-subagent-与零损耗直通转发2026-11-12) |
 | 近期实现顺序 | 当前将客户端迁移为纯 Web/PWA，保留界面与通信行为 | [05](wiki/05-main-runtime.md#实现顺序) |
 | 联网工具 | 沿用 Aether：`search(query, platform)` 使用 Serper 和 EveryInfra；`fetch_url(url)` 使用 Parallel 和 EveryInfra，供 Main 使用 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |
 | X（Twitter）搜索 | 2026-10-30 接入独立 `search_twitter(query, limit?, sort?)`，Main 使用看板 EveryInfra Key；默认 Top，不保证严格时间排序或全量结果；失败不自动重试，零结果正常返回，缺失计数不补零 | [05](wiki/05-main-runtime.md#search-与-fetch_url-已实现) |

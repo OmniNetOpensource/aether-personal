@@ -62,13 +62,13 @@ flowchart TD
     end
 
     subgraph L3["第三层：外部服务"]
-        MODEL["模型供应商：OpenRouter · ikun Gemini · ikun Claude"]
+        MODEL["App 模型供应商：OpenRouter 免费模型"]
         EXTERNAL["联网服务：Serper · Parallel · EveryInfra · Resend"]
         OSS["阿里云私有 OSS：聊天图片与工作区文件"]
         SANDBOX["阿里云 FC Sandbox + AgenticFS<br/>持久 /mnt/workspace · AIO MCP · VNC"]
     end
 
-    ADMIN["管理看板：admin/ · Main/Subagent 运行过程时间线与模型/凭证配置<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
+    ADMIN["管理看板：admin/ · Main/Subagent 运行过程时间线、全局运行参数与凭证<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
     ADMIN <-->|"独立密码登录 / Main 与 Subagent 轨迹、调用详情与配置"| API
     CLIENT <-->|"Caddy 轮询与健康检查 / WebSocket 登录、历史、收发与推送"| API
     DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API

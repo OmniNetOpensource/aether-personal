@@ -1,61 +1,72 @@
-// 本文件负责运行时模型设置：读取管理员保存在数据库中的 Main、Subagent 与压缩模型配置及闲置后台反思时长，覆盖默认值。
+// 本文件读取账号模型选择和部署全局的压缩阈值、闲置反思时长，并在首次设置前提供各自的默认值。
 
 package modelsettings
 
 import (
 	"context"
 	"errors"
-	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-// Settings 分别记录主对话、后台 Subagent 与上下文压缩的模型及输入容量；空 SubagentModel 或空 CompactModel 表示跟随 Main。
-// ReflectionIdleMinutes 是距离最近一次请求结束满多少分钟后，调度器投一次闲置后台反思触发。
-type Settings struct {
-	CompactAtTokens       int32      `json:"compact_at_tokens"`
-	ReflectionIdleMinutes int32      `json:"reflection_idle_minutes"`
-	MainContextLength     int64      `json:"main_context_length"`
-	SubagentContextLength int64      `json:"subagent_context_length"`
-	CompactContextLength  int64      `json:"compact_context_length"`
-	SubagentModel         string     `json:"subagent_model"`
-	CompactModel          string     `json:"compact_model"`
-	MainModel             string     `json:"main_model"`
-	Version               int64      `json:"version"`
-	UpdatedAt             *time.Time `json:"updated_at"`
-	UpdatedBy             *string    `json:"updated_by"`
-	Source                string     `json:"source"`
+// DefaultModel 由 OpenRouter 按请求能力从免费模型中路由。
+const DefaultModel = "openrouter/free"
+
+// Selection 是账号选择的模型 ID 和写入版本。Subagent 留空跟随 Main，压缩留空跟随当前 Agent。
+type Selection struct {
+	MainModel     string `json:"main_model"`
+	SubagentModel string `json:"subagent_model"`
+	CompactModel  string `json:"compact_model"`
+	Version       int64  `json:"version"`
 }
 
-// Load 读取看板保存的模型与目录能力；没有记录时使用默认模型，不另设输出额度。
-func Load(ctx context.Context, queries *database.Queries, defaults config.Config) (Settings, error) {
-	result := Settings{CompactAtTokens: 200000, ReflectionIdleMinutes: 120, MainModel: defaults.MainModel, Source: "environment"}
-	row, err := queries.GetModelSettings(ctx)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return Settings{}, err
+// UserSettings 还携带目录中的输入容量，供请求前阶段确定压缩阈值。
+type UserSettings struct {
+	Selection
+	MainContextLength     int64
+	SubagentContextLength int64
+}
+
+// LoadUser 只读取指定账号；尚无个人记录时使用免费路由及跟随规则。
+func LoadUser(ctx context.Context, queries *database.Queries, userID uuid.UUID) (UserSettings, error) {
+	row, err := queries.GetUserModelSettings(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UserSettings{Selection: Selection{MainModel: DefaultModel}}, nil
 	}
-	if err == nil {
-		result.CompactAtTokens = row.CompactAtTokens
-		result.ReflectionIdleMinutes = row.ReflectionIdleMinutes
-		if row.MainContextLength != nil {
-			result.MainContextLength = *row.MainContextLength
-		}
-		result.MainModel, result.Version = row.MainModel, row.Version
-		if row.SubagentModel != nil {
-			result.SubagentModel = *row.SubagentModel
-		}
-		if row.SubagentContextLength != nil {
-			result.SubagentContextLength = *row.SubagentContextLength
-		}
-		if row.CompactModel != nil {
-			result.CompactModel = *row.CompactModel
-		}
-		if row.CompactContextLength != nil {
-			result.CompactContextLength = *row.CompactContextLength
-		}
-		result.UpdatedAt, result.UpdatedBy, result.Source = &row.UpdatedAt, &row.UpdatedBy, "database"
+	if err != nil {
+		return UserSettings{}, err
 	}
-	return result, nil
+	var settings UserSettings
+	settings.MainModel, settings.Version = row.MainModel, row.Version
+	if row.MainContextLength != nil {
+		settings.MainContextLength = *row.MainContextLength
+	}
+	if row.SubagentModel != nil {
+		settings.SubagentModel = *row.SubagentModel
+	}
+	if row.SubagentContextLength != nil {
+		settings.SubagentContextLength = *row.SubagentContextLength
+	}
+	if row.CompactModel != nil {
+		settings.CompactModel = *row.CompactModel
+	}
+	return settings, nil
+}
+
+// RuntimeSettings 是管理看板负责的全局参数，由请求前阶段与调度器各取所需。
+type RuntimeSettings struct {
+	CompactAtTokens       int32 `json:"compact_at_tokens"`
+	ReflectionIdleMinutes int32 `json:"reflection_idle_minutes"`
+	Version               int64 `json:"version"`
+}
+
+// LoadRuntime 保留原有的部署阈值，并兼容尚未保存配置的实例。
+func LoadRuntime(ctx context.Context, queries *database.Queries) (RuntimeSettings, error) {
+	row, err := queries.GetRuntimeSettings(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeSettings{CompactAtTokens: 200000, ReflectionIdleMinutes: 120}, nil
+	}
+	return RuntimeSettings(row), err
 }

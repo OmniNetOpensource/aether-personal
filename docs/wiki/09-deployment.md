@@ -45,7 +45,7 @@ chmod 600 infra/prod/.env
 
 在服务器上生成两份不同的随机十六进制值，分别写入 `POSTGRES_PASSWORD` 和 `ORIGIN_AUTH_SECRET`。例如使用 `openssl rand -hex 32`，不要把结果发进聊天或提交到仓库。数据库密码使用十六进制，避免连接串中的保留字符。
 
-另用 `openssl rand -base64 32` 生成 `SERVICE_ENCRYPTION_KEY`，保存到生产 `.env` 并单独备份。模型、邮件和联网服务的 Key 在管理看板“服务配置”页填写，Resend 发件人必须属于该账户已验证的域名。`APP_ENV=prod` 和内部数据库地址由 Compose 设置。开发数据库和生产数据库不共用数据卷与主加密密钥。恢复数据库时必须同时恢复原主密钥。
+另用 `openssl rand -base64 32` 生成 `SERVICE_ENCRYPTION_KEY`，保存到生产 `.env` 并单独备份。在生产 `.env` 设置 `OPENROUTER_API_KEY`，供各账号的模型请求和目录共用。升级已有部署时也要设置此变量，确保切换到个人模型设置后仍可发送模型请求。其他服务的 Key 在管理看板的「配置」页填写。Resend 发件人必须属于该账户已验证的域名。`APP_ENV=prod` 和内部数据库地址由 Compose 设置。开发数据库和生产数据库不共用数据卷与主加密密钥。恢复数据库时必须同时恢复原主密钥。
 
 在 Cloudflare 创建仅允许聊天域名的 Turnstile widget，把公开 site key、秘密 Key、聊天域名分别填入 `TURNSTILE_SITE_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_HOSTNAME`。hostname 只填域名，不含协议和路径，例如 `aether.forkicks.fun`。缺少这些配置不阻止管理看板启动，但生产不发送登录验证码。不要将官方测试 Key 用于公开部署。验证与限流行为见 [03 生产验证码防刷](03-auth.md#生产验证码防刷)。
 

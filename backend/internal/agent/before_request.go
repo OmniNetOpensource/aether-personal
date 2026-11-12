@@ -62,6 +62,15 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 			return modelRequest{}, uuid.Nil, err
 		}
 	}
+	// 在开步骤前确定本轮模型，同一份选择用于步骤、压缩与普通请求。
+	settings, err := modelsettings.LoadUser(budget, queries, r.userID)
+	if err != nil {
+		return modelRequest{}, uuid.Nil, err
+	}
+	model, capacity := settings.MainModel, settings.MainContextLength
+	if r.subagentID != nil && settings.SubagentModel != "" {
+		model, capacity = settings.SubagentModel, settings.SubagentContextLength
+	}
 	var stepID uuid.UUID
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
@@ -72,14 +81,14 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 		stepID, err = txQueries.StartStep(ctx, database.StartStepParams{
 			UserID:     r.userID,
 			SubagentID: r.subagentID,
-			Model:      r.settings.MainModel,
+			Model:      model,
 		})
 		return err
 	})
 	if err != nil {
 		return modelRequest{}, uuid.Nil, err
 	}
-	request, err := r.prepareContext(budget, taskReminder)
+	request, err := r.prepareContext(budget, model, capacity, settings.CompactModel, taskReminder)
 	if err != nil {
 		return modelRequest{}, stepID, err
 	}
@@ -89,15 +98,11 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 
 // prepareContext 是每次调用模型前的上下文入口：按 Main 或 Subagent 身份选择模型与上限，读入当前世代的消息，
 // 判断要不要压缩，需要时先完成压缩，再按组装规则返回最终请求。
-func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context, model string, capacity int64, compactModel string, taskReminder bool) (modelRequest, error) {
 	queries := database.New(r.databasePool)
-	settings, err := modelsettings.Load(ctx, queries, r.settings)
+	settings, err := modelsettings.LoadRuntime(ctx, queries)
 	if err != nil {
 		return modelRequest{}, err
-	}
-	model, capacity := settings.MainModel, settings.MainContextLength
-	if r.subagentID != nil && settings.SubagentModel != "" {
-		model, capacity = settings.SubagentModel, settings.SubagentContextLength
 	}
 	rows, err := queries.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID, SubagentID: r.subagentID})
 	if err != nil {
@@ -153,9 +158,8 @@ func (r *Runner) prepareContext(ctx context.Context, taskReminder bool) (modelRe
 	if through == 0 {
 		return r.buildAgentRequest(rows, model, taskReminder), nil
 	}
-	compactModel := model
-	if settings.CompactModel != "" {
-		compactModel = settings.CompactModel
+	if compactModel == "" {
+		compactModel = model
 	}
 	compactMessages := r.buildCompactRequestMessages(rowsToCompact, compactPrompt)
 	summaryRequest := modelRequest{

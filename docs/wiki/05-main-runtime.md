@@ -233,11 +233,17 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 - ikun Gemini 改用 `:streamGenerateContent?alt=sse`，分片合并成与非流式相同的响应形状后走原有解析；流式特有的「只有 thoughtSignature、正文为空」分片并入前一段，不独立存档（详见 [08](08-admin-observability.md#ikun-gemini2026-10-30)）。
 - 失败约定（2026-10-30 用户确认）：流中途断开、或流结束却没有完成标记，按可重试的传输失败处理（沿用最多重试 3 次）；分片不是合法 JSON、工具调用缺名称等拼不出完整消息的情况按无效响应处理，不落库半成品。非 200 错误体仍整段读回取错误信息；分片累计沿用 8 MiB 上限。模型调用日志存档的是实际收到的原始分片。
 
-管理端可全局切换 Main 模型，保存到数据库，从下次请求读取配置时生效；环境变量提供未保存时的默认值，详见 [08](08-admin-observability.md#一键切换模型2026-10-23开发中)。
+### App 模型设置
 
-- Main 使用 `deepseek/deepseek-v4.1-flash-1017`（OpenRouter，上下文 1,048,576 token）。
-- 模型初始默认值由环境变量 `MAIN_MODEL` 配置，默认 `deepseek/deepseek-v4.1-flash-1017`，换模型无需改代码，部署时改配置即可。
-- OpenRouter 和 ikun Gemini 的服务凭证在看板保存；dev 与 prod 的实际请求都读取数据库，不使用旧环境变量兜底。服务未配置时模型请求失败，仍允许管理员登录看板配置。
+2026-11-12，用户要求将模型切换移到 App，由每个用户选择自己的模型。打开「账号 → 模型设置」即可选择 Main、Subagent 和上下文压缩模型。账号各自保存选择，避免一次切换影响其他用户。Subagent 留空时跟随 Main，压缩留空时跟随正在压缩的 Agent。
+
+未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。App 同时提供目录中支持工具调用的免费文本模型，供用户固定型号。模型目录、聊天、后台任务和压缩共用部署者通过 `OPENROUTER_API_KEY` 提供的 Key。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
+
+请求前阶段按账号读一次模型设置，用同一份选择创建执行步骤、准备压缩和组装请求。保存后下一次准备模型请求时生效。已开始的请求继续使用当时选定的模型。升级后，已有账号也从免费路由开始。管理看板保存全局压缩阈值和闲置反思时长。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
+
+App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-settings`。后端从会话取得账号 ID，保存具体型号前验证当前免费目录。目录不可用时仍可选择免费路由。版本冲突返回 409，重新加载可取回另一台设备保存的设置。
+
+### 模型接入历史
 
 2026-10-30，用户明确接入 Aether 的 ikun Gemini。Main 和上下文压缩可选择 `ikun:gemini-*`，请求使用 Gemini 原生协议。OpenRouter 的默认值与既有模型 ID 保留。环境变量、模型目录、签名续接与失败处理见 [08 ikun Gemini](08-admin-observability.md#ikun-gemini2026-10-30)。
 

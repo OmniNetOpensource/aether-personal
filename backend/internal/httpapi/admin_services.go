@@ -30,7 +30,7 @@ func (s *server) adminServices(w http.ResponseWriter, r *http.Request) {
 // updateAdminService 的空 Key 表示清除，省略或 null 表示保留；单条服务配置一起保存。
 func (s *server) updateAdminService(w http.ResponseWriter, r *http.Request) {
 	service := r.PathValue("service")
-	if !slices.ContainsFunc(services.Definitions, func(d services.Definition) bool { return d.ID == service }) {
+	if service == services.OpenRouter || !slices.ContainsFunc(services.Definitions, func(d services.Definition) bool { return d.ID == service }) {
 		http.NotFound(w, r)
 		return
 	}

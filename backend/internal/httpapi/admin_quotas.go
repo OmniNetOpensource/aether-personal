@@ -62,6 +62,9 @@ func (s *server) fetchServiceQuota(ctx context.Context, definition services.Defi
 	credentials, err := s.services.Load(ctx, definition.ID)
 	if errors.Is(err, services.ErrNotConfigured) {
 		quota.Status, quota.Detail = "not_configured", "尚未保存 Key"
+		if definition.ID == services.OpenRouter {
+			quota.Detail = "尚未设置 OPENROUTER_API_KEY"
+		}
 		return quota
 	}
 	if errors.Is(err, services.ErrUnreadable) {

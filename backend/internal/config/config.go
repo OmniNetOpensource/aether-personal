@@ -1,4 +1,4 @@
-// 本文件读取基础设施与模型默认值等启动配置；供应商凭证由看板保存到数据库，加密主密钥仍由部署环境提供。
+// 本文件读取基础设施、OpenRouter Key 与加密主密钥等部署配置，供后端启动时统一装配。
 
 package config
 
@@ -29,7 +29,7 @@ type Config struct {
 	RedisURL             string
 	DatabaseMaxConns     int32
 	AgentCapacity        int32
-	MainModel            string
+	OpenRouterAPIKey     string
 	FrontendDir          string
 	ImageCacheMaxBytes   int64
 	ImageCacheTTL        time.Duration
@@ -121,10 +121,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SERVICE_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
 	}
 
-	mainModel := os.Getenv("MAIN_MODEL")
-	if mainModel == "" {
-		mainModel = "deepseek/deepseek-v4.1-flash-1017"
-	}
 	var adminPasswordSalt, adminPasswordKey []byte
 	if value := os.Getenv("ADMIN_PASSWORD_HASH"); value != "" {
 		parts := strings.Split(value, "$")
@@ -156,7 +152,7 @@ func Load() (Config, error) {
 		RedisURL:             redisURL,
 		DatabaseMaxConns:     databaseMaxConns,
 		AgentCapacity:        agentCapacity,
-		MainModel:            mainModel,
+		OpenRouterAPIKey:     strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")),
 		FrontendDir:          os.Getenv("FRONTEND_DIR"),
 		ImageCacheMaxBytes:   imageCacheMaxBytes,
 		ImageCacheTTL:        imageCacheTTL,
