@@ -115,11 +115,12 @@ func (r *Runner) newInput(sequence int64) {
 }
 
 // modelRetry 是同一次回复跨轮共享的重试状态：十分钟预算从第一次尝试开始计时，覆盖上下文准备、请求与退避，
-// 临时故障最多再试 3 次。回复成功或被新输入取代后清零，下一次回复重新计时。
+// 共可再试 3 次，其中 ikun Claude 空截断最多补试一次。回复成功或被新输入取代后清零。
 type modelRetry struct {
-	budget  context.Context
-	cancel  context.CancelFunc
-	retries int
+	budget                  context.Context
+	cancel                  context.CancelFunc
+	retries                 int
+	sawClaudeEmptyMaxTokens bool
 }
 
 // reset 结束这次回复的预算，下一轮开始时重新计时。

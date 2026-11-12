@@ -6,12 +6,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 )
+
+// ErrClaudeEmptyMaxTokens 标记以 max_tokens 结束但没有正文或工具调用的回复，供请求后阶段决定是否补试。
+var ErrClaudeEmptyMaxTokens = errors.New("Claude response did not complete (stop reason: max_tokens, no text or tool calls)")
 
 // claudeProvider 承接 ikun Claude 的普通对话与上下文压缩。
 type claudeProvider struct{}
@@ -283,6 +287,23 @@ func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Respons
 	}
 	if !stopped {
 		return response, true, fmt.Errorf("Claude stream ended before completion")
+	}
+	// 只有未产出正文或工具块的 max_tokens 才能补试；思考与纯空白不算正文，未拼完的工具块也算工具调用。
+	if stopReason == "max_tokens" {
+		hasTextOrToolCall := false
+		for _, block := range blocks {
+			var blockType string
+			if err := json.Unmarshal(block.fields["type"], &blockType); err != nil {
+				return response, false, fmt.Errorf("decode Claude content block type: %w", err)
+			}
+			if blockType == "tool_use" || (blockType == "text" && strings.TrimSpace(block.text.String()) != "") {
+				hasTextOrToolCall = true
+				break
+			}
+		}
+		if !hasTextOrToolCall {
+			return response, false, ErrClaudeEmptyMaxTokens
+		}
 	}
 	if stopReason != "end_turn" && stopReason != "stop_sequence" && stopReason != "tool_use" && stopReason != "refusal" {
 		return response, false, fmt.Errorf("Claude response did not complete (stop reason: %s)", stopReason)

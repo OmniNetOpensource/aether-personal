@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -53,6 +54,11 @@ func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through in
 		}
 		retry.reset()
 		return roundDone, nil
+	}
+	// 空截断仍记为无效响应，但本轮第一次遇到时可以用现有退避补试一次。
+	if errors.Is(err, providers.ErrClaudeEmptyMaxTokens) {
+		retryable = !retry.sawClaudeEmptyMaxTokens
+		retry.sawClaudeEmptyMaxTokens = true
 	}
 	if retry.budget.Err() != nil {
 		err = fmt.Errorf("%w: %w", context.Cause(retry.budget), err)
