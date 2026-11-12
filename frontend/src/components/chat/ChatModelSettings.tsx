@@ -1,4 +1,4 @@
-// 本文件提供聊天内的个人模型设置浮层，支持搜索免费模型并保存 Main、Subagent 和压缩各自的选择。
+// 本文件提供聊天内的个人模型设置浮层，支持搜索各渠道模型并保存 Main、Subagent 和压缩各自的选择。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -105,7 +105,7 @@ export function ChatModelSettings({
       {settings && draft ? (
         <form className="chat-model-form" onSubmit={save}>
           <label>
-            搜索免费模型
+            搜索模型
             <input
               type="search"
               value={search}

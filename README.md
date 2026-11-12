@@ -20,7 +20,7 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
-| 模型服务 | 用户在 App 选择 OpenRouter 免费模型。Main 默认 `openrouter/free`。Subagent 默认跟随 Main，压缩默认跟随当前 Agent |
+| 模型服务 | 用户在 App 选择 OpenRouter、ikun Gemini 或 ikun Claude 模型。Main 默认 `openrouter/free`。Subagent 默认跟随 Main，压缩默认跟随当前 Agent |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |

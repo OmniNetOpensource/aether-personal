@@ -113,7 +113,7 @@ In-App Browser 已验证密码错误提示、正确密码进入概览、退出�
 
 「配置」页的「全局运行参数」可修改上下文压缩阈值和闲置反思时长。后端通过 `GET /admin/runtime-settings` 读取这两项设置，通过 `PUT /admin/runtime-settings` 保存。版本冲突返回 409，刷新后可看到当前值。压缩阈值从下一次准备模型请求时生效，反思时长从调度器下一次扫描时生效。
 
-2026-11-12，模型选择移到 App，用户按账号保存选择。看板的 OpenRouter 卡片显示环境变量配置状态和额度，模型目录、模型调用和额度查询均读取 `OPENROUTER_API_KEY`。见 [App 模型设置](05-main-runtime.md#app-模型设置)。
+2026-11-12，模型选择移到 App，用户按账号保存选择。看板的 OpenRouter 卡片显示环境变量配置状态和额度，OpenRouter 的目录、调用和额度查询均读取 `OPENROUTER_API_KEY`。见 [App 模型设置](05-main-runtime.md#app-模型设置)。
 
 ## 一键切换模型（2026-10-23，开发中）
 

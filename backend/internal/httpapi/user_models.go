@@ -1,4 +1,4 @@
-// 本文件提供 App 的个人模型设置：验证聊天会话，读取 OpenRouter 免费目录并保存当前账号的模型选择。
+// 本文件提供 App 的个人模型设置：验证聊天会话，读取已配置的模型目录并保存当前账号的模型选择。
 
 package httpapi
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
@@ -59,14 +60,21 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 		internalError(w, "load user model settings", err)
 		return
 	}
-	models, err := s.freeModels(r.Context())
-	var catalogNotice string
-	if errors.Is(err, services.ErrNotConfigured) {
-		catalogNotice = "部署尚未配置 OpenRouter API Key。"
-	} else if err != nil {
-		slog.Error("load free model catalog", "error", err)
-		catalogNotice = "免费模型目录暂时不可用。"
+	// 已配置渠道独立返回目录，一家失败时仍可以选择其他渠道。
+	models, failures := s.modelCatalog(r.Context(), nil)
+	var notices []string
+	for _, failure := range failures {
+		if errors.Is(failure.err, services.ErrNotConfigured) {
+			if failure.service == services.OpenRouter {
+				notices = append(notices, "部署尚未配置 OpenRouter API Key。")
+			}
+			continue
+		}
+		slog.Error("load model catalog", "service", failure.service, "error", failure.err)
+		notices = append(notices, failure.name+" 模型目录暂时不可用。")
 	}
+	slices.Sort(notices)
+
 	writeAdminJSON(w, struct {
 		Selection     modelsettings.Selection `json:"selection"`
 		Models        []userModel             `json:"models"`
@@ -74,11 +82,11 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 	}{
 		Selection:     settings.Selection,
 		Models:        append([]userModel{{ID: modelsettings.DefaultModel, Name: "OpenRouter 免费自动选择"}}, models...),
-		CatalogNotice: catalogNotice,
+		CatalogNotice: strings.Join(notices, " "),
 	})
 }
 
-// saveUserModels 校验免费模型目录与客户端版本，一次更新该账号的三种选择。
+// saveUserModels 校验所选渠道的模型目录与客户端版本，一次更新该账号的三种选择。
 func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	var selection modelsettings.Selection
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
@@ -88,31 +96,29 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 		return
 	}
 
-	// 默认路由和跟随选项不依赖目录可用性；具体免费型号须出现在当前工具模型目录。
+	// 默认路由和跟随选项始终可保存。具体型号按实际请求使用的渠道校验。
 	selectedModels := []string{selection.MainModel, selection.SubagentModel, selection.CompactModel}
-	needsCatalog := false
+	selectedProviders := map[string]bool{}
 	for _, id := range selectedModels {
 		if id == "" || id == modelsettings.DefaultModel {
 			continue
 		}
-		if len(id) > 160 || !strings.HasSuffix(id, ":free") {
-			http.Error(w, "请选择 OpenRouter 免费模型", http.StatusBadRequest)
+		if len(id) > 160 {
+			http.Error(w, "模型 ID 过长", http.StatusBadRequest)
 			return
 		}
-		needsCatalog = true
+		selectedProviders[providers.ForModel(id).Service()] = true
 	}
-
-	// 固定型号的目录容量由服务端保存；自动路由的实际型号随请求变化。
 	capacities := map[string]*int64{"": nil, modelsettings.DefaultModel: nil}
-	if needsCatalog {
-		models, err := s.freeModels(r.Context())
-		if errors.Is(err, services.ErrNotConfigured) {
-			http.Error(w, "部署尚未配置 OpenRouter API Key", http.StatusServiceUnavailable)
-			return
-		}
-		if err != nil {
-			slog.Error("validate free model catalog", "error", err)
-			http.Error(w, "免费模型目录暂时不可用，请稍后重试", http.StatusBadGateway)
+	if len(selectedProviders) > 0 {
+		models, failures := s.modelCatalog(r.Context(), selectedProviders)
+		for _, failure := range failures {
+			if errors.Is(failure.err, services.ErrNotConfigured) {
+				http.Error(w, failure.name+" 尚未配置", http.StatusServiceUnavailable)
+				return
+			}
+			slog.Error("validate model catalog", "service", failure.service, "error", failure.err)
+			http.Error(w, failure.name+" 模型目录暂时不可用，请稍后重试", http.StatusBadGateway)
 			return
 		}
 		for _, model := range models {
@@ -121,7 +127,7 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 	}
 	for _, id := range selectedModels {
 		if _, listed := capacities[id]; !listed {
-			http.Error(w, "所选免费模型已不可用，请重新选择", http.StatusBadRequest)
+			http.Error(w, "所选模型已不可用，请重新选择", http.StatusBadRequest)
 			return
 		}
 	}
@@ -147,12 +153,60 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 	writeAdminJSON(w, selection)
 }
 
-// freeModels 从 OpenRouter 目录保留支持工具调用的免费文本模型，供展示和保存共用。
-func (s *server) freeModels(ctx context.Context) ([]userModel, error) {
-	credentials, err := s.services.Load(ctx, services.OpenRouter)
-	if err != nil {
-		return nil, err
+// catalogFailure 记录目录不可用的渠道，App 仅显示固定文案。
+type catalogFailure struct {
+	service string
+	name    string
+	err     error
+}
+
+// modelCatalog 并行读取所需渠道。requested 为空时读取全部已配置渠道。
+func (s *server) modelCatalog(ctx context.Context, requested map[string]bool) ([]userModel, []catalogFailure) {
+	sources := []struct {
+		service string
+		name    string
+		fetch   func(context.Context, services.Settings) ([]userModel, error)
+	}{
+		{services.OpenRouter, "OpenRouter", s.openRouterModels},
+		{services.IkunGemini, "ikun Gemini", s.ikunGeminiModels},
+		{services.IkunClaude, "ikun Claude", s.ikunClaudeModels},
 	}
+	type result struct {
+		models  []userModel
+		failure catalogFailure
+	}
+	results := make(chan result, len(sources))
+	count := 0
+	for _, source := range sources {
+		if requested != nil && !requested[source.service] {
+			continue
+		}
+		count++
+		go func() {
+			credentials, err := s.services.Load(ctx, source.service)
+			var models []userModel
+			if err == nil {
+				models, err = source.fetch(ctx, credentials)
+			}
+			results <- result{models, catalogFailure{source.service, source.name, err}}
+		}()
+	}
+	var models []userModel
+	var failures []catalogFailure
+	for range count {
+		result := <-results
+		if result.failure.err != nil {
+			failures = append(failures, result.failure)
+			continue
+		}
+		models = append(models, result.models...)
+	}
+	slices.SortFunc(models, func(a, b userModel) int { return strings.Compare(a.Name, b.Name) })
+	return models, failures
+}
+
+// openRouterModels 保留原看板的工具能力条件，价格不参与目录筛选。
+func (s *server) openRouterModels(ctx context.Context, credentials services.Settings) ([]userModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
@@ -182,9 +236,6 @@ func (s *server) freeModels(ctx context.Context) ([]userModel, error) {
 			Name                string   `json:"name"`
 			ContextLength       int64    `json:"context_length"`
 			SupportedParameters []string `json:"supported_parameters"`
-			Architecture        struct {
-				OutputModalities []string `json:"output_modalities"`
-			} `json:"architecture"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &catalog); err != nil {
@@ -192,8 +243,8 @@ func (s *server) freeModels(ctx context.Context) ([]userModel, error) {
 	}
 	var models []userModel
 	for _, entry := range catalog.Data {
-		if !strings.HasSuffix(entry.ID, ":free") || len(entry.ID) > 160 ||
-			!slices.Contains(entry.SupportedParameters, "tools") || !slices.Contains(entry.Architecture.OutputModalities, "text") {
+		if entry.ID == "" || entry.ID == modelsettings.DefaultModel || len(entry.ID) > 160 ||
+			!slices.Contains(entry.SupportedParameters, "tools") {
 			continue
 		}
 		model := userModel{ID: entry.ID, Name: entry.Name}
@@ -202,6 +253,5 @@ func (s *server) freeModels(ctx context.Context) ([]userModel, error) {
 		}
 		models = append(models, model)
 	}
-	slices.SortFunc(models, func(a, b userModel) int { return strings.Compare(a.Name, b.Name) })
 	return models, nil
 }

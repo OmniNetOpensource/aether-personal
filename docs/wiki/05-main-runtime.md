@@ -237,11 +237,11 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 
 2026-11-12，用户要求将模型切换移到 App，由每个用户选择自己的模型。打开「账号 → 模型设置」即可选择 Main、Subagent 和上下文压缩模型。账号各自保存选择，避免一次切换影响其他用户。Subagent 留空时跟随 Main，压缩留空时跟随正在压缩的 Agent。
 
-未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。App 同时提供目录中支持工具调用的免费文本模型，供用户固定型号。模型目录、聊天、后台任务和压缩共用部署者通过 `OPENROUTER_API_KEY` 提供的 Key。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
+未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。2026-11-13，用户明确免费仅是默认值。App 列出原看板支持的全部模型，包括 OpenRouter 的免费与付费模型，以及已配置的 ikun Gemini 和 ikun Claude。OpenRouter 的目录和请求共用环境变量 `OPENROUTER_API_KEY`，ikun 使用部署者在看板配置的凭证。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
 
 请求前阶段按账号读一次模型设置，用同一份选择创建执行步骤、准备压缩和组装请求。保存后下一次准备模型请求时生效。已开始的请求继续使用当时选定的模型。升级后，已有账号也从免费路由开始。管理看板保存全局压缩阈值和闲置反思时长。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
 
-App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-settings`。后端从会话取得账号 ID，保存具体型号前验证当前免费目录。目录不可用时仍可选择免费路由。版本冲突返回 409，重新加载可取回另一台设备保存的设置。
+App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-settings`。后端从会话取得账号 ID，保存具体型号前验证所选渠道的实时目录。一个渠道失败时仍可选择其他可用渠道或免费路由。版本冲突返回 409，重新加载可取回另一台设备保存的设置。
 
 ### 模型接入历史
 
