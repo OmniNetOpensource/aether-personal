@@ -69,7 +69,7 @@ button.link {
   background: transparent;
 }
 
-/* 连接尚未就绪时占满剩余高度，避免外壳先塌成一条。 */
+/* 连接尚未就绪时占满剩余高度，展示阿芒呼吸轻弹与暖金波纹，避免首屏等待单调或塌成一条。 */
 .loading {
   flex: 1;
   min-height: 0;
@@ -83,8 +83,143 @@ button.link {
 .muted {
   color: var(--text-muted);
 }
-.loading .muted {
+.loading-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+.loading-figure {
+  position: relative;
+  width: 136px;
+  height: 136px;
+  display: grid;
+  place-items: center;
+}
+.loading-glow {
+  position: absolute;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #f6cf8329 0%, #f6cf8300 72%);
+  pointer-events: none;
+}
+.loading-ripple {
+  position: absolute;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 1.5px solid #f6cf8354;
+  pointer-events: none;
+  animation: loading-ripple 2.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+.loading-ripple-delayed {
+  animation-delay: -1.4s;
+}
+.loading-mascot {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  overflow: visible;
+}
+.loading-mascot-body {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: loading-bounce 2.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.loading-mascot-shadow {
+  fill: #07150e;
+  opacity: 0.36;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: loading-shadow 2.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.loading-mascot-eyes {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: loading-blink 5.2s ease-in-out infinite;
+}
+.loading-label {
+  display: inline-flex;
+  align-items: baseline;
   color: var(--on-forest-muted);
+  font-size: 16px;
+  line-height: 24px;
+  letter-spacing: 0.02em;
+}
+.loading-ellipsis > span {
+  display: inline-block;
+  width: 0.32em;
+  text-align: center;
+  animation: loading-dot 1.5s ease-in-out infinite;
+}
+.loading-ellipsis > span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.loading-ellipsis > span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes loading-ripple {
+  0% {
+    transform: translateY(4px) scale(0.72);
+    opacity: 0;
+  }
+  22% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateY(4px) scale(1.68);
+    opacity: 0;
+  }
+}
+@keyframes loading-bounce {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.035, 0.965);
+  }
+  50% {
+    transform: translateY(-8px) scale(0.975, 1.03);
+  }
+}
+@keyframes loading-shadow {
+  0%,
+  100% {
+    transform: scaleX(1.05);
+    opacity: 0.36;
+  }
+  50% {
+    transform: scaleX(0.8);
+    opacity: 0.18;
+  }
+}
+@keyframes loading-blink {
+  0%,
+  38%,
+  42%,
+  84%,
+  88%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  40%,
+  86%,
+  90% {
+    transform: scaleY(0.08);
+  }
+}
+@keyframes loading-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 /* 消息列表在输入框背后滚动，底部留白等于输入框实测高度。 */
@@ -1011,8 +1146,16 @@ button.link {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dot {
+  .dot,
+  .loading-ripple,
+  .loading-mascot-body,
+  .loading-mascot-shadow,
+  .loading-mascot-eyes,
+  .loading-ellipsis > span {
     animation: none;
+  }
+  .loading-ripple {
+    opacity: 0.28;
   }
   .multimodal-composer,
   .chip-remove,

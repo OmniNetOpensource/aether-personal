@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { ChatController } from './lib/ChatController.js';
 import { ChatPage } from './components/chat/ChatPage.js';
+import { LoadingScreen } from './components/LoadingScreen.js';
 import { LoginPage } from './components/login/LoginPage.js';
 import { PwaControls } from './components/PwaControls.js';
 
@@ -65,9 +66,7 @@ export function App() {
   return (
     <>
       {!controller || controller.initializing ? (
-        <main className="loading">
-          <p className="muted">正在加载…</p>
-        </main>
+        <LoadingScreen />
       ) : controller.token ? (
         <ChatPage controller={controller} />
       ) : (
