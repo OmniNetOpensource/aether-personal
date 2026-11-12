@@ -1,78 +1,56 @@
-// 本文件是 PWA 控件组件：注册 Service Worker、检测新版本并提示更新，注册失败时提示离线启动不可用。
+// 本文件注册 Service Worker，并在打开、重新联网或回到前台时检查最新版本。
 
 import { useEffect, useState } from 'react';
 
+// PwaControls 为活跃页面定期检查更新；Service Worker 安装完成后负责切换应用页面。
 export function PwaControls() {
-  const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
-  const [updating, setUpdating] = useState(false);
   const [offlineUnavailable, setOfflineUnavailable] = useState(false);
   useEffect(() => {
     if (process.env.NODE_ENV !== 'production' || !('serviceWorker' in navigator)) return;
     let disposed = false;
     let registration: ServiceWorkerRegistration | undefined;
-    let installing: ServiceWorker | null = null;
-    const installed = () => {
-      if (!disposed && installing?.state === 'installed' && navigator.serviceWorker.controller)
-        setWaiting(registration?.waiting ?? null);
-    };
-    const updateFound = () => {
-      installing?.removeEventListener('statechange', installed);
-      installing = registration?.installing ?? null;
-      installing?.addEventListener('statechange', installed);
-    };
+    let checking = false;
+
+    // 一分钟检查一次活跃标签页，焦点、前后台和网络变化时立即再检查。
     const refresh = () => {
-      if (!document.hidden && navigator.onLine) void registration?.update().catch(() => {});
+      if (!registration || checking || document.hidden || !navigator.onLine) return;
+      checking = true;
+      void registration
+        .update()
+        .catch(() => {})
+        .finally(() => {
+          checking = false;
+        });
     };
     void navigator.serviceWorker
       .register('/sw.js', { updateViaCache: 'none' })
       .then((value) => {
         if (disposed) return;
         registration = value;
-        if (value.waiting) setWaiting(value.waiting);
-        value.addEventListener('updatefound', updateFound);
-        updateFound();
+        refresh();
       })
       .catch(() => {
         if (!disposed) setOfflineUnavailable(true);
       });
+
+    const interval = window.setInterval(refresh, 60_000);
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
     return () => {
       disposed = true;
-      registration?.removeEventListener('updatefound', updateFound);
-      installing?.removeEventListener('statechange', installed);
+      window.clearInterval(interval);
       document.removeEventListener('visibilitychange', refresh);
       window.removeEventListener('online', refresh);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
     };
   }, []);
-  const update = () => {
-    if (!waiting) return;
-    if (waiting.state === 'activated') {
-      location.reload();
-      return;
-    }
-    if (waiting.state === 'redundant') {
-      setWaiting(null);
-      return;
-    }
-    setUpdating(true);
-    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), {
-      once: true,
-    });
-    waiting.postMessage({ type: 'SKIP_WAITING' });
-  };
-  return (
-    <>
-      {offlineUnavailable && (
-        <span className="connection-status" role="status">
-          离线启动暂不可用
-        </span>
-      )}
-      {waiting && (
-        <button type="button" className="app-button" disabled={updating} onClick={update}>
-          {updating ? '更新中…' : '更新应用'}
-        </button>
-      )}
-    </>
-  );
+
+  return offlineUnavailable ? (
+    <span className="connection-status" role="status">
+      离线启动暂不可用
+    </span>
+  ) : null;
 }

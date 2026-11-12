@@ -76,7 +76,7 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-前端工程位于 `frontend/`，TanStack Start 管理文件路由与 HTML 外壳，React 渲染标准 DOM。Web 与移动 PWA 共用 SPA 静态产物 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和更新提示；聊天需要联网。见 [前端说明](frontend/README.md)。
+前端工程位于 `frontend/`，TanStack Start 管理文件路由与 HTML 外壳，React 渲染标准 DOM。Web 与移动 PWA 共用 SPA 静态产物 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和自动更新；聊天需要联网。见 [前端说明](frontend/README.md)。
 
 ## 本地开发
 

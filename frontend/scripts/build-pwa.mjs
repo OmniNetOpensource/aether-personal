@@ -1,4 +1,4 @@
-// 本文件是 PWA 构建后处理脚本：生成多尺寸应用图标与带版本哈希的 Service Worker，写入构建输出目录。
+// 本文件是 PWA 构建后处理脚本：生成应用图标与带版本哈希的 Service Worker。联网导航读取当前页面，缓存用于离线启动。
 
 import { createHash } from 'node:crypto';
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -48,27 +48,41 @@ const worker = `const CACHE = 'aether-shell-${version}';
 const ASSETS = ${JSON.stringify(urls)};
 const PATHS = new Set(ASSETS);
 
+// 只有应用页面随版本切换刷新，静态资源与 API 不参与页面导航。
+const isAppPage = (pathname) =>
+  pathname === '/' || pathname === '/index.html' || /^\\/s\\/[^/]+$/.test(pathname);
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' })))));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' })));
+    await self.skipWaiting();
+  })());
 });
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) {
-      if (key.startsWith('aether-shell-') && key !== CACHE) await caches.delete(key);
-    }
+    const previous = (await caches.keys()).filter((key) => key.startsWith('aether-shell-') && key !== CACHE);
+    await Promise.all(previous.map((key) => caches.delete(key)));
     await self.clients.claim();
+    if (previous.length === 0) return;
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const client of clients) {
+      if (isAppPage(new URL(client.url).pathname)) {
+        // 导航会等待激活结束，不能把导航结果纳入 activate 的 waitUntil。
+        void client.navigate(client.url).catch(() => {});
+      }
+    }
   })());
-});
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin || request.headers.has('Authorization')) return;
-  // The explicit asset list excludes all API calls, messages, shares API and authentication responses.
-  if (url.pathname === '/' || url.pathname === '/index.html' || /^\/s\/[^/]+$/.test(url.pathname)) {
-    event.respondWith(caches.open(CACHE).then(async (cache) => (await cache.match('/')) || fetch(request)));
+  // HTML 联网时请求最新版本，网络失败时读取缓存。其他缓存命中来自公开静态资源清单。
+  if (request.mode === 'navigate' && isAppPage(url.pathname)) {
+    event.respondWith(fetch(request, { cache: 'no-cache' }).catch(async () =>
+      (await caches.match('/', { cacheName: CACHE })) ?? Response.error(),
+    ));
   } else if (PATHS.has(url.pathname)) {
     event.respondWith(caches.open(CACHE).then(async (cache) => (await cache.match(url.pathname)) || fetch(request)));
   }

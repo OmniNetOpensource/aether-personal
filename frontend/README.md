@@ -46,7 +46,7 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 
 登录沿用 `aether_session` 和 `aether_email`，兼容 Flutter 的旧键与 JSON 编码；浏览器无法保存登录时显示错误。草稿按账号写入当前标签页的 sessionStorage，刷新与手动更新后恢复；关闭标签页后不保证保留。发送失败保留重发按钮，同一次消息重发沿用 `client_message_id`。
 
-新版下载完成后出现「更新应用」，用户点击后才切换并刷新。构建内容和 Service Worker 生成脚本共同决定缓存版本。缓存入口使用 `/`，避免 Go 将 `/index.html` 重定向到 `/` 后，缓存的重定向响应无法用于导航。系统推送通知、后台持续连接和离线消息队列未实现。
+联网导航优先读取当前页面，网络请求失败时使用缓存的应用外壳。前台页面每分钟检查一次版本，打开页面、回到前台或重新联网时立即检查。新版资源下载完成后，Service Worker 自动激活并刷新它控制的应用页面。构建内容和 Service Worker 生成脚本共同决定缓存版本，离线入口为 `/`。
 
 ## 文件职责
 
@@ -66,7 +66,7 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 | `src/Markdown.tsx` | 同款 remark / GFM / KaTeX 管线，清洗后渲染 React DOM，展示 HTTP(S) 图片 |
 | `src/MarkdownCodeBlock.tsx`、`src/shiki.ts`、`src/markdown.css` | 代码高亮与复制、按需语言包、Markdown 排版与移动端滚动 |
 | `src/platform.ts` | 浏览器登录存储与来源链接校验 |
-| `src/PwaControls.tsx` | Service Worker 注册、离线启动状态与显式更新 |
+| `src/components/PwaControls.tsx` | Service Worker 注册、自动检查更新与离线启动状态 |
 | `src/style.css`、`src/palette.css` | 响应式布局与现有绿、黄、奶油白配色 |
 | `public/manifest.webmanifest` | PWA 名称、启动地址、窗口模式与图标清单 |
 | `scripts/build-pwa.mjs` | 生成图标、按构建内容生成静态资源缓存与 Service Worker |
