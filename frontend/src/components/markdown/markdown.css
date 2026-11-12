@@ -183,7 +183,7 @@
   margin-bottom: 0;
 }
 
-/* 高亮 token 同时携带两套颜色，和页面一样随系统外观立即切换。 */
+/* 高亮 token 同时携带两套颜色，随系统外观或画板显式主题立即切换。 */
 .markdown-code-line > span {
   color: var(--shiki-light, inherit);
   background-color: var(--shiki-light-bg, transparent);
@@ -192,11 +192,18 @@
   text-decoration: var(--shiki-light-text-decoration, none);
 }
 @media (prefers-color-scheme: dark) {
-  .markdown-code-line > span {
+  :root:not([data-theme='light']) .markdown-code-line > span {
     color: var(--shiki-dark, inherit);
     background-color: var(--shiki-dark-bg, transparent);
     font-style: var(--shiki-dark-font-style, normal);
     font-weight: var(--shiki-dark-font-weight, normal);
     text-decoration: var(--shiki-dark-text-decoration, none);
   }
+}
+[data-theme='dark'] .markdown-code-line > span {
+  color: var(--shiki-dark, inherit);
+  background-color: var(--shiki-dark-bg, transparent);
+  font-style: var(--shiki-dark-font-style, normal);
+  font-weight: var(--shiki-dark-font-weight, normal);
+  text-decoration: var(--shiki-dark-text-decoration, none);
 }

@@ -1080,9 +1080,12 @@ button.link {
   background: #ffffff80;
 }
 @media (prefers-color-scheme: dark) {
-  .user-bubble .file-card {
+  :root:not([data-theme='light']) .user-bubble .file-card {
     background: #00000033;
   }
+}
+[data-theme='dark'] .user-bubble .file-card {
+  background: #00000033;
 }
 .file-card:hover {
   border-color: var(--line-strong);

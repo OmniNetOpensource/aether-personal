@@ -1,5 +1,5 @@
-# Makefile 编排全仓构建、静态检查、本地开发与生产一键发布；不包含任何本地测试目标。
-.PHONY: dev frontend admin check edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup publish publish-check
+# Makefile 编排全仓构建、静态检查、本地开发、设计画布预览与生产一键发布；不包含任何本地测试目标。
+.PHONY: dev design frontend admin check edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup publish publish-check
 
 PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
 
@@ -50,6 +50,9 @@ dev: frontend
 	$(MAKE) -C backend db-up
 	$(MAKE) -C backend migrate
 	$(MAKE) -C backend run
+
+design:
+	cd frontend && npm run design
 
 admin:
 	cd admin && npm ci && npm run build && npm start

@@ -1,0 +1,475 @@
+/* 本文件定义本地设计画布的工作台布局样式：使用独立 dc- 前缀避免与真实聊天组件类名冲突。 */
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--canvas);
+  color: var(--text);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.dc-style-probe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 外层采用左侧固定模块栏 + 右侧可滚动无限画板区，贴近设计工具的翻页动线。 */
+.dc-shell {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.dc-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px 16px 18px;
+  background: #142f20;
+  color: #f4f0de;
+  border-right: 1px solid #2b5039;
+  overflow-y: auto;
+}
+
+.dc-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px;
+}
+
+.dc-brand img {
+  border-radius: 11px;
+  flex-shrink: 0;
+}
+
+.dc-brand h1 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 700;
+  color: #fff4d6;
+}
+
+.dc-brand p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 17px;
+  color: #b7cbb8;
+}
+
+.dc-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dc-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #dbe6da;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dc-nav-item:hover {
+  background: #1e422e;
+}
+
+.dc-nav-item.is-active {
+  background: #f6cf83;
+  color: #173b29;
+  font-weight: 600;
+}
+
+.dc-nav-index {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.dc-nav-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.dc-nav-count {
+  font-size: 12px;
+  opacity: 0.78;
+}
+
+.dc-sidebar-note {
+  margin-top: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f2419;
+  color: #b7cbb8;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.dc-sidebar-note code {
+  color: #f6cf83;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+/* 右侧主工作区带吸顶控制栏，方便滚动查看下方画板时随时切视口或亮暗模式。 */
+.dc-workspace {
+  overflow: auto;
+  background: var(--canvas);
+}
+
+.dc-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 28px;
+  background: color-mix(in srgb, var(--canvas) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+
+.dc-toolbar-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 26px;
+}
+
+.dc-toolbar-heading p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--text-muted);
+}
+
+.dc-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.dc-segmented {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.dc-segmented button {
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dc-segmented button.is-selected {
+  background: var(--forest);
+  color: var(--on-forest);
+}
+
+/* 场景卡片与画板舞台。 */
+.dc-scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 24px 28px 48px;
+}
+
+.dc-scene-card {
+  padding: 22px 24px 26px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.dc-scene-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.dc-scene-header h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 24px;
+}
+
+.dc-scene-header p {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.dc-scene-id {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dc-artboard-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.dc-frame-unit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dc-frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.dc-theme-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.dc-theme-badge--light {
+  background: #ece8d5;
+  color: #204b32;
+}
+
+.dc-theme-badge--dark {
+  background: #173b29;
+  color: #fff4d6;
+}
+
+.dc-frame-size {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.dc-open-link {
+  margin-left: auto;
+  color: var(--accent-text);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.dc-open-link:hover {
+  text-decoration: underline;
+}
+
+.dc-frame-stage {
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 30px var(--shadow);
+  background: #173b29;
+}
+
+.dc-frame-stage iframe {
+  display: block;
+  border: 0;
+}
+
+/* 配色变量与排版规范页。 */
+.dc-tokens-page {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding: 24px 28px 52px;
+}
+
+.dc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dc-section-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.dc-token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+}
+
+.dc-token-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.dc-token-swatches {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 76px;
+  border-bottom: 1px solid var(--line);
+  background-image:
+    linear-gradient(45deg, #8882 25%, transparent 25%),
+    linear-gradient(-45deg, #8882 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #8882 75%),
+    linear-gradient(-45deg, transparent 75%, #8882 75%);
+  background-size: 14px 14px;
+  background-position:
+    0 0,
+    0 7px,
+    7px -7px,
+    -7px 0;
+}
+
+.dc-swatch-cell {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  padding: 6px 8px;
+}
+
+.dc-swatch-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.dc-swatch-tag {
+  position: relative;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #0000008c;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.dc-token-meta {
+  padding: 10px 12px 12px;
+}
+
+.dc-token-name {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.dc-token-usage {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.dc-type-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 18px;
+}
+
+.dc-type-sheet {
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.dc-type-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.dc-type-sheet-header code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.dc-type-row {
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.dc-type-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.dc-type-row p {
+  margin: 6px 0 0;
+}
+
+.dc-type-spec {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dc-inline-code-sample {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 15px;
+}
+
+@media (max-width: 900px) {
+  .dc-shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+}

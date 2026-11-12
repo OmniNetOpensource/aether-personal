@@ -9,6 +9,7 @@
   "scripts": {
     "build": "rsbuild build --config web.config.ts && npm run check && node scripts/build-pwa.mjs",
     "dev": "rsbuild dev --config web.config.ts",
+    "design": "rsbuild dev --config design.config.ts",
     "check": "tsc --noEmit",
     "format": "prettier --write src scripts *.ts *.json public/manifest.webmanifest"
   },
