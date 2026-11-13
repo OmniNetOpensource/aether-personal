@@ -7,7 +7,7 @@ export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: 'UTF-8' },
-      { title: '阿芒' },
+      { title: 'aether' },
       {
         name: 'viewport',
         content:
@@ -16,8 +16,8 @@ export const Route = createRootRoute({
       { name: 'color-scheme', content: 'light dark' },
       { name: 'apple-mobile-web-app-capable', content: 'yes' },
       { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
-      { name: 'apple-mobile-web-app-title', content: '阿芒' },
-      { name: 'description', content: '和阿芒聊聊，你的个人 AI 助手。' },
+      { name: 'apple-mobile-web-app-title', content: 'aether' },
+      { name: 'description', content: '和 aether 聊聊，你的个人 AI 助手。' },
     ],
     links: [
       { rel: 'icon', type: 'image/png', href: '/app-icon.png' },
@@ -42,7 +42,7 @@ function RootDocument() {
         <div id="root">
           <Outlet />
         </div>
-        <noscript>请开启 JavaScript，和阿芒继续对话。</noscript>
+        <noscript>请开启 JavaScript，和 aether 继续对话。</noscript>
         <Scripts />
       </body>
     </html>

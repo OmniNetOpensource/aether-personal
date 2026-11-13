@@ -1,10 +1,10 @@
-// 本文件是首屏连接加载组件：在 HTML 预渲染外壳与 WebSocket 握手期间展示阿芒角色唤醒动画，零外部图片请求。
+// 本文件是首屏连接加载组件：在 HTML 预渲染外壳与 WebSocket 握手期间展示 aether 角色唤醒动画，零外部图片请求。
 
 // LoadingScreen 供路由挂起、应用初始化与设计画布共用，保证预渲染到水合阶段 DOM 结构一致不闪屏。
 export function LoadingScreen() {
   return (
     <main className="loading" aria-busy="true">
-      <div className="loading-stage" role="status" aria-live="polite" aria-label="正在连接阿芒">
+      <div className="loading-stage" role="status" aria-live="polite" aria-label="正在连接 aether">
         <div className="loading-figure" aria-hidden="true">
           <span className="loading-glow" />
           <span className="loading-ripple" />

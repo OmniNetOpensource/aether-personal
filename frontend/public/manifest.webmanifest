@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "阿芒 · Aether",
-  "short_name": "阿芒",
-  "description": "和阿芒聊聊，你的个人 AI 助手。",
+  "name": "aether",
+  "short_name": "aether",
+  "description": "和 aether 聊聊，你的个人 AI 助手。",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

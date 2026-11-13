@@ -125,8 +125,8 @@ export function LoginPage({ controller }: { controller: ChatController }) {
             void submit();
           }}
         >
-          <img className="mark" src={controller.iconURL} alt="阿芒" width="56" height="56" />
-          <h1 className="login-title">和阿芒聊聊</h1>
+          <img className="mark" src={controller.iconURL} alt="aether" width="56" height="56" />
+          <h1 className="login-title">和 aether 聊聊</h1>
           <p className="login-subtitle">
             {devLogin
               ? '本地开发环境，一键进入测试对话。'

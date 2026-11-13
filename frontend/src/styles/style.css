@@ -69,7 +69,7 @@ button.link {
   background: transparent;
 }
 
-/* 连接尚未就绪时占满剩余高度，展示阿芒呼吸轻弹与暖金波纹，避免首屏等待单调或塌成一条。 */
+/* 连接尚未就绪时占满剩余高度，展示 aether 呼吸轻弹与暖金波纹，避免首屏等待单调或塌成一条。 */
 .loading {
   flex: 1;
   min-height: 0;

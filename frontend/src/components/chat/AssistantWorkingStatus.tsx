@@ -2,7 +2,7 @@
 
 export function AssistantWorkingStatus() {
   return (
-    <div className="thinking" role="status" aria-label="阿芒正在处理">
+    <div className="thinking" role="status" aria-label="aether 正在处理">
       <div className="thinking-dots" aria-hidden="true">
         <span className="dot" />
         <span className="dot dot-two" />

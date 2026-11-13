@@ -1,4 +1,4 @@
-# 阿芒 · Aether Web/PWA
+# aether Web/PWA
 
 TanStack Start、React 与 TypeScript 实现邮箱登录和 Main 聊天，使用文件路由与 SPA 模式。桌面直接使用浏览器，移动端安装同一份 Web 应用为 PWA。Start 在构建时预渲染 HTML 外壳，浏览器通过 Go WebSocket 恢复登录与聊天。
 

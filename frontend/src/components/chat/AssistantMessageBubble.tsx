@@ -1,4 +1,4 @@
-// 本文件是助手消息气泡组件：渲染可折叠的 Markdown 正文，或展示阿芒从工作区发回的独立图片与可下载文件气泡。
+// 本文件是助手消息气泡组件：渲染可折叠的 Markdown 正文，或展示 aether 从工作区发回的独立图片与可下载文件气泡。
 
 import type { ChatMessage } from '../../lib/ChatController.js';
 import { Markdown } from '../markdown/Markdown.js';
@@ -25,7 +25,7 @@ export function AssistantMessageBubble({
   );
   return (
     <div className={`message-row ${joinedWithPrevious ? 'joined' : ''}`}>
-      <article className="message-column assistant-column" aria-label="阿芒">
+      <article className="message-column assistant-column" aria-label="aether">
         <div
           className={`bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >

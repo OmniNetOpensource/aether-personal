@@ -105,11 +105,11 @@ export function SharedMessagesPage({ shareToken }: { shareToken: string }) {
       <main className="shared-page">
         <div className="shared-empty-wrap">
           <section className="shared-empty-card" role="status">
-            <img className="mark" src="/app-icon.png" alt="阿芒" />
+            <img className="mark" src="/app-icon.png" alt="aether" />
             <h1>该分享不存在或已被取消</h1>
             <p>分享链接可能已失效，或已被分享者主动撤回。</p>
             <Link to="/" className="shared-empty-action">
-              打开阿芒
+              打开 aether
             </Link>
           </section>
         </div>
@@ -122,7 +122,7 @@ export function SharedMessagesPage({ shareToken }: { shareToken: string }) {
       <main className="shared-page">
         <div className="shared-empty-wrap">
           <section className="shared-empty-card" role="alert">
-            <img className="mark" src="/app-icon.png" alt="阿芒" />
+            <img className="mark" src="/app-icon.png" alt="aether" />
             <h1>暂时无法打开分享</h1>
             <p>{state.message}</p>
             <button
@@ -149,16 +149,16 @@ export function SharedMessagesPage({ shareToken }: { shareToken: string }) {
       <header className="shared-header">
         <div className="shared-header-inner">
           <div className="shared-brand">
-            <img className="shared-brand-icon" src="/app-icon.png" alt="阿芒" />
+            <img className="shared-brand-icon" src="/app-icon.png" alt="aether" />
             <div className="shared-brand-text">
-              <span className="shared-brand-title">阿芒 · 对话分享</span>
+              <span className="shared-brand-title">aether · 对话分享</span>
               <span className="shared-brand-meta">
                 分享于 {formattedDate} · 共 {state.messages.length} 条消息
               </span>
             </div>
           </div>
           <Link to="/" className="shared-open-home">
-            打开阿芒
+            打开 aether
           </Link>
         </div>
       </header>

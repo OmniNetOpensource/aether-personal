@@ -344,9 +344,9 @@ export function AdminApp() {
     <div className="layout">
       <aside className="sidebar">
         <a className="brand" href="/">
-          <img className="brand-icon" src="/app-icon.png" alt="阿芒" width={34} height={34} />
+          <img className="brand-icon" src="/app-icon.png" alt="aether" width={34} height={34} />
           <span>
-            阿芒<span className="brand-sub">CONTROL ROOM</span>
+            aether<span className="brand-sub">CONTROL ROOM</span>
           </span>
         </a>
         <div className="nav-label">工作空间</div>
@@ -608,13 +608,13 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
     <main className="login-page">
       <div className="login-story">
         <a className="brand" href="/">
-          <img className="brand-icon" src="/app-icon.png" alt="阿芒" width={34} height={34} />
+          <img className="brand-icon" src="/app-icon.png" alt="aether" width={34} height={34} />
           <span>
-            阿芒<span className="brand-sub">CONTROL ROOM</span>
+            aether<span className="brand-sub">CONTROL ROOM</span>
           </span>
         </a>
         <div className="login-story-body">
-          <div className="eyebrow">阿芒 · AETHER</div>
+          <div className="eyebrow">aether</div>
           <h1>
             每一次调用，
             <br />

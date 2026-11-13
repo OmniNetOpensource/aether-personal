@@ -7,10 +7,10 @@ export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: 'UTF-8' },
-      { title: '阿芒 · 管理看板' },
+      { title: 'aether · 管理看板' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { name: 'color-scheme', content: 'light dark' },
-      { name: 'description', content: '阿芒 用户与 Agent 调用观察看板' },
+      { name: 'description', content: 'aether 用户与 Agent 调用观察看板' },
     ],
     links: [
       { rel: 'icon', type: 'image/png', href: '/app-icon.png' },

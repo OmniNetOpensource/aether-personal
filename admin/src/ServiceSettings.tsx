@@ -292,7 +292,7 @@ function ServiceCard({
           发件人
           <input
             maxLength={320}
-            placeholder="Aether <noreply@已验证域名>"
+            placeholder="aether <noreply@已验证域名>"
             value={emailFrom}
             disabled={saving}
             onChange={(event) => setEmailFrom(event.target.value)}

@@ -254,7 +254,7 @@ export function ChatHistorySearch({
                       >
                         <span className="history-hit-meta">
                           <span className="history-hit-sender">
-                            {hit.sender === 'user' ? '你' : '阿芒'}
+                            {hit.sender === 'user' ? '你' : 'aether'}
                           </span>
                           <time dateTime={hit.created_at}>
                             {new Date(hit.created_at).toLocaleString('zh-CN', {

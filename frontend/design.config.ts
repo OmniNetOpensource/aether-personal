@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   html: {
-    title: '阿芒 · 设计画布',
+    title: 'aether · 设计画布',
     favicon: './public/app-icon.png',
     mountId: 'root',
   },
