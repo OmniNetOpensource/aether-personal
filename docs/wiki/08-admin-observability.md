@@ -76,7 +76,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 
 2026-10-26，用户要求：“只需要输入密码就可以进入看板”。看板改用共享管理员密码，不需要邮箱或验证码。选择理由是减少管理入口的登录步骤。聊天继续使用邮箱验证码，其会话与管理会话完全分离。
 
-在本仓库根目录执行 `python3 scripts/set-admin-password.py`，两次输入至少 12 个字符的密码。脚本使用随机 16 字节盐和 PBKDF2-HMAC-SHA256（600,000 次）生成哈希，把带单引号的 `ADMIN_PASSWORD_HASH` 写入未提交的 `backend/.env`。保留引号，避免加载环境变量时把哈希里的 `$` 当作变量展开。后端启动时验证格式，留空则关闭管理入口。
+在本仓库根目录执行 `python3 scripts/set-admin-password.py`，两次输入非空且 UTF-8 编码不超过 1024 字节的密码。脚本使用随机 16 字节盐和 PBKDF2-HMAC-SHA256（600,000 次）生成哈希，把带单引号的 `ADMIN_PASSWORD_HASH` 写入未提交的 `backend/.env`。保留引号，避免加载环境变量时把哈希里的 `$` 当作变量展开。后端启动时验证格式，留空则关闭管理入口。
 
 `python3 scripts/set-admin-password.py --generate` 可生成本地初始密码。明文只保存到被 Git 忽略的 `backend/bin/admin-password.txt`，文件权限为 600，不打印到服务日志。手动设置新密码时移除该初始密码文件。修改后重启后端，旧看板会话立即失效。
 

@@ -23,11 +23,11 @@ if not env_path.is_file():
 if args.generate:
     password = secrets.token_urlsafe(18)
 else:
-    password = getpass.getpass("管理员密码（至少 12 个字符）：")
+    password = getpass.getpass("管理员密码：")
     if password != getpass.getpass("再次输入管理员密码："):
         parser.error("两次密码不一致")
-if len(password) < 12 or len(password.encode()) > 1024:
-    parser.error("密码需至少 12 个字符，且 UTF-8 编码不超过 1024 字节")
+if not password or len(password.encode()) > 1024:
+    parser.error("密码不能为空，且 UTF-8 编码不超过 1024 字节")
 
 salt = secrets.token_bytes(16)
 key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600000)
