@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -139,7 +138,7 @@ const (
 	roundStop
 )
 
-// run 是 agent loop：在独占协程里一轮轮执行三个阶段，直到当前 Agent 没有活（Main 还会检查收尾任务提醒）。
+// run 是 agent loop：在独占协程里一轮轮执行三个阶段，直到当前 Agent 没有活。
 // 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
 // 启动与结束时的聊天通知由 Manager 调度层在租约生效后与释放后统一触发。
 func (r *Runner) run(parent context.Context) error {
@@ -164,14 +163,11 @@ func (r *Runner) run(parent context.Context) error {
 			retry.cancel()
 		}
 	}()
-	taskReminder := false
-	// remindedTaskSignature 记录上一次收尾提醒时的未完成任务集合；集合没变就不重复提醒，避免模型始终不更新任务状态时无限续跑。
-	var remindedTaskSignature string
 	for {
 		if retry.budget == nil {
 			retry.budget, retry.cancel = context.WithDeadlineCause(runCtx, time.Now().Add(modelRequestTimeout), errModelRetryTimeout)
 		}
-		request, stepID, err := r.beforeRequest(runCtx, retry.budget, &through, taskReminder)
+		request, stepID, err := r.beforeRequest(runCtx, retry.budget, &through)
 		var replyID uuid.UUID
 		var response chatResponse
 		retryable := false
@@ -192,55 +188,8 @@ func (r *Runner) run(parent context.Context) error {
 		if err != nil {
 			return fmt.Errorf("check agent work: %w", err)
 		}
-		if r.subagentID != nil {
-			if !hasWork {
-				return nil
-			}
-			continue
-		}
-		// Main 收尾后检查任务队列：若已无排队待启动项且仍有后台 Subagent 在跑，静候 subagent_event 唤醒即可；否则提醒一次核对状态。
-		taskReminder = false
 		if !hasWork {
-			signature, err := r.unfinishedTaskSignature(runCtx)
-			if err != nil {
-				return fmt.Errorf("check unfinished tasks: %w", err)
-			}
-			if signature == "" || signature == remindedTaskSignature {
-				return nil
-			}
-			remindedTaskSignature, taskReminder = signature, true
+			return nil
 		}
 	}
-}
-
-// unfinishedTaskSignature 把需要 Main 立即处理的未完成任务拼成签名：若仅剩 in_progress 任务且后台仍有运行中的 Subagent，
-// 说明 Main 正等待后台回报，返回空串不提前催促；所有后台 Subagent 都已结束后仍未结项时再触发提醒。
-func (r *Runner) unfinishedTaskSignature(ctx context.Context) (string, error) {
-	queries := database.New(r.databasePool)
-	rows, err := queries.ListTasks(ctx, database.ListTasksParams{UserID: r.userID, IncludeClosed: false})
-	if err != nil {
-		return "", err
-	}
-	var signature strings.Builder
-	var queuedCount, inProgressCount int
-	for _, row := range rows {
-		if row.Task.Status == "queued" {
-			queuedCount++
-		} else if row.Task.Status == "in_progress" {
-			inProgressCount++
-		} else {
-			continue
-		}
-		fmt.Fprintf(&signature, "%s:%s;", row.Task.ID, row.Task.Status)
-	}
-	if queuedCount == 0 && inProgressCount > 0 {
-		runningSubagents, err := queries.HasRunningSubagents(ctx, r.userID)
-		if err != nil {
-			return "", err
-		}
-		if runningSubagents {
-			return "", nil
-		}
-	}
-	return signature.String(), nil
 }

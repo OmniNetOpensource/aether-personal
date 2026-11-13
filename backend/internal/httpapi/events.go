@@ -32,7 +32,7 @@ const (
 )
 
 // readyEvent 是连接建立后后端发出的第一个事件：告知登录状态，
-// 已登录时同时带上最新一页历史、桌面可用性与任务快照，前端收到后才结束 loading 态。
+// 已登录时同时带上最新一页历史与桌面可用性，前端收到后才结束 loading 态。
 type readyEvent struct {
 	ChangeCursor     int64         `json:"change_cursor,string"`
 	Type             string        `json:"type"`
@@ -41,7 +41,6 @@ type readyEvent struct {
 	DesktopAvailable bool          `json:"desktop_available,omitempty"`
 	Email            string        `json:"email,omitempty"`
 	History          *chatMessages `json:"history,omitempty"`
-	Tasks            []chatTask    `json:"tasks,omitempty"`
 	TurnstileSiteKey string        `json:"turnstile_site_key,omitempty"`
 }
 
@@ -54,7 +53,6 @@ type authenticatedEvent struct {
 	Email            string       `json:"email"`
 	DesktopAvailable bool         `json:"desktop_available,omitempty"`
 	History          chatMessages `json:"history"`
-	Tasks            []chatTask   `json:"tasks"`
 }
 
 type codeSentEvent struct {
@@ -106,13 +104,12 @@ type shareDeletedEvent struct {
 	ShareID   uuid.UUID `json:"share_id"`
 }
 
-// messagesEvent 推送增量可见消息，并携带 Main 处理状态与当前任务队列快照。
+// messagesEvent 推送增量可见消息，并携带 Main 处理状态。
 type messagesEvent struct {
-	ChangeCursor int64      `json:"change_cursor,string"`
-	Type         string     `json:"type"`
-	MainThinking bool       `json:"main_thinking"`
-	MainFailed   bool       `json:"main_failed"`
-	Tasks        []chatTask `json:"tasks"`
+	ChangeCursor int64  `json:"change_cursor,string"`
+	Type         string `json:"type"`
+	MainThinking bool   `json:"main_thinking"`
+	MainFailed   bool   `json:"main_failed"`
 	chatMessages
 }
 

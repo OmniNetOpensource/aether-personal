@@ -1,4 +1,4 @@
-// 本文件是聊天 WebSocket 主通道：处理登录与发送等客户端命令、推送历史与新消息及实时任务进展，并借助 Redis 广播跨实例唤醒推送。
+// 本文件是聊天 WebSocket 主通道：处理登录与发送等客户端命令、推送历史与新消息及运行状态，并借助 Redis 广播跨实例唤醒推送。
 
 package httpapi
 
@@ -226,13 +226,6 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ready.DesktopAvailable = desktopAvailable
-		tasks, err := s.listChatTasks(ctx, userID)
-		if err != nil {
-			slog.Error("load initial tasks failed", "user_id", userID, "error", err)
-			connection.Close(websocket.StatusInternalError, "internal server error")
-			return
-		}
-		ready.Tasks = tasks
 	}
 	if authenticated && hello.LastPosition == nil && hello.LastChangeCursor == nil {
 		history, err := s.historyPage(ctx, userID, uuid.Max)
@@ -495,13 +488,8 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 		slog.Error("check desktop availability failed", "error", err)
 		return false
 	}
-	tasks, err := s.listChatTasks(ctx, session.UserID)
-	if err != nil {
-		slog.Error("load initial tasks failed", "user_id", session.UserID, "error", err)
-		return false
-	}
 	return relay.send(ctx, authenticatedEvent{
-		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, DesktopAvailable: desktopAvailable, History: history, Tasks: tasks, ChangeCursor: *changeCursor,
+		Type: "authenticated", RequestID: frame.RequestID, Token: token, Email: session.Email, DesktopAvailable: desktopAvailable, History: history, ChangeCursor: *changeCursor,
 	}) == nil
 }
 
@@ -537,7 +525,7 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 	return relay.send(ctx, deliveredEvent{Type: "delivered", ClientMessageID: frame.ClientMessageID}) == nil
 }
 
-// pushChatMessages 按变更序号补发消息，并把本次读到的游标交给连接用于重连；同一事件还附带 Main 状态与任务队列快照，供前端一次更新列表与进展指示。
+// pushChatMessages 按变更序号补发消息，并把本次读到的游标交给连接用于重连；同一事件还附带 Main 状态，供前端一次更新列表与运行指示。
 func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID uuid.UUID, changeCursor *int64) error {
 	// 单页查询上限 100 行，循环取到不满页为止，避免积压较多时漏掉后面的消息。
 	var rows []database.ListChatRowsAfterRow
@@ -561,11 +549,6 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		slog.Error("get Main activity failed", "user_id", userID, "error", err)
 		return err
 	}
-	tasks, err := s.listChatTasks(ctx, userID)
-	if err != nil {
-		slog.Error("list chat tasks failed", "user_id", userID, "error", err)
-		return err
-	}
 	thinking := (s.agents != nil && s.agents.HasActiveLease(ctx, userID))
 	if !thinking {
 		subagentsRunning, err := s.queries.HasRunningSubagents(ctx, userID)
@@ -576,7 +559,7 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		thinking = subagentsRunning
 	}
 	return relay.send(ctx, messagesEvent{
-		Type: "messages", MainThinking: thinking, MainFailed: status.Failed, Tasks: tasks, ChangeCursor: *changeCursor,
+		Type: "messages", MainThinking: thinking, MainFailed: status.Failed, ChangeCursor: *changeCursor,
 		chatMessages: chatMessages{Messages: s.chatMessagesWithPreviews(ctx, rows)},
 	})
 }

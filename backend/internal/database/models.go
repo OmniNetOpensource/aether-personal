@@ -196,16 +196,6 @@ type Subagent struct {
 	FinishedAt *time.Time
 }
 
-type Task struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	Title       string
-	Description string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
 type User struct {
 	ID                        uuid.UUID
 	Email                     string

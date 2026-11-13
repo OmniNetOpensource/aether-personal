@@ -41,9 +41,6 @@ type Tool struct {
 
 // all 是 Main 的完整工具登记表，顺序即发给 Main 模型的顺序。
 var all = append([]Tool{
-	listTasksTool,
-	recordTaskInputTool,
-	updateTaskTool,
 	spawnSubagentTool,
 	forwardSubagentTool,
 	cancelSubagentTool,
@@ -58,7 +55,7 @@ var all = append([]Tool{
 	readImageTool,
 }, sandboxTools()...)
 
-// subagentAll 是 Subagent 的只读调研工具登记表：禁止电脑操作、写记忆、改任务/日程及继续派生子代理。
+// subagentAll 是 Subagent 的只读调研工具登记表：禁止电脑操作、写记忆、改日程及继续派生子代理。
 var subagentAll = []Tool{
 	searchMessageTool,
 	readMessageTool,

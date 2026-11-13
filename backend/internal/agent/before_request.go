@@ -19,7 +19,7 @@ import (
 
 // beforeRequest 是请求前阶段的入口：把当前 Agent 的数据库状态整理到可以发请求，开一条步骤，再产出这一次的请求。
 // through 随本轮实际读到的消息更新，失败时由请求后阶段据此停住；准备失败时已开的步骤交给失败收尾结束。
-func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, taskReminder bool) (modelRequest, uuid.UUID, error) {
+func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (modelRequest, uuid.UUID, error) {
 	queries := database.New(r.databasePool)
 	// 在校验本轮租约代数的短事务内收拾上次中断留下的记录，防止已失去租约的旧实例误清接管实例正在运行的调用与步骤；
 	// 必须排在开新步骤之前，否则新步骤也会被标成中断。
@@ -88,7 +88,7 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 	if err != nil {
 		return modelRequest{}, uuid.Nil, err
 	}
-	request, err := r.prepareContext(budget, model, capacity, settings.CompactModel, taskReminder)
+	request, err := r.prepareContext(budget, model, capacity, settings.CompactModel)
 	if err != nil {
 		return modelRequest{}, stepID, err
 	}
@@ -98,7 +98,7 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64, task
 
 // prepareContext 是每次调用模型前的上下文入口：按 Main 或 Subagent 身份选择模型与上限，读入当前世代的消息，
 // 判断要不要压缩，需要时先完成压缩，再按组装规则返回最终请求。
-func (r *Runner) prepareContext(ctx context.Context, model string, capacity int64, compactModel string, taskReminder bool) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context, model string, capacity int64, compactModel string) (modelRequest, error) {
 	queries := database.New(r.databasePool)
 	settings, err := modelsettings.LoadRuntime(ctx, queries)
 	if err != nil {
@@ -130,7 +130,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		reason = "capacity"
 	}
 	if reason == "" {
-		return r.buildAgentRequest(rows, model, taskReminder), nil
+		return r.buildAgentRequest(rows, model), nil
 	}
 	// 待压缩范围：Main 消息尾部有未回复的用户本人新消息时保留该段原文；工具续跑或 Subagent 全量压缩。
 	keepFrom := len(rows)
@@ -156,7 +156,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		}
 	}
 	if through == 0 {
-		return r.buildAgentRequest(rows, model, taskReminder), nil
+		return r.buildAgentRequest(rows, model), nil
 	}
 	if compactModel == "" {
 		compactModel = model
@@ -236,7 +236,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 	if err != nil {
 		return modelRequest{}, err
 	}
-	return r.buildAgentRequest(rows, model, taskReminder), nil
+	return r.buildAgentRequest(rows, model), nil
 }
 
 // silentToolRoundsBeforeReminder 是从最近一条用户消息或 Main 的可见正文算起，连续多少轮只调工具后插入一次进度提醒。
@@ -332,11 +332,8 @@ func (r *Runner) buildRequestMessages(rows []database.ListAgentContextRowsRow) [
 }
 
 // buildAgentRequest 组装固定指令与历史，并附上当前角色允许的工具定义打包成完整请求。
-func (r *Runner) buildAgentRequest(rows []database.ListAgentContextRowsRow, model string, taskReminder bool) modelRequest {
+func (r *Runner) buildAgentRequest(rows []database.ListAgentContextRowsRow, model string) modelRequest {
 	messages := r.buildRequestMessages(rows)
-	if taskReminder && r.subagentID == nil {
-		messages = append(messages, runtimeMessage(taskReminderMessageName, taskIncompleteReminder))
-	}
 	var inputSequence int64
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
