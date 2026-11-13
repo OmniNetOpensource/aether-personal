@@ -1,4 +1,4 @@
-// 本文件是聊天业务控制器：管理登录、实时消息与任务队列快照、发送、上传与个人模型设置，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
+// 本文件是聊天业务控制器：管理登录、实时消息、发送、上传与个人模型设置，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
@@ -7,36 +7,13 @@ import type { ModelSelection } from './modelSettings.js';
 import type { ClientCommand } from './ServerEventRelay.js';
 import type {
   ChatPage,
-  ChatTask,
   MessageShareSummary,
   RequestFailedCode,
   ServerEvent,
-  TaskStatus,
 } from './serverEvents.js';
 
 import { messageFileSchema, messageImageSchema } from './messageAttachments.js';
 import type { MessageFile, MessageImage, MessagePart } from './messageAttachments.js';
-
-// isOpenTask 判断任务是否处于未结束状态，供右上角角标、输入框胶囊与任务清单分组共用。
-export function isOpenTask(task: ChatTask): boolean {
-  return task.status === 'in_progress' || task.status === 'queued' || task.status === 'waiting';
-}
-
-// taskStatusLabel 返回任务状态的中文展示文案，保持输入框胶囊与任务清单用词一致。
-export function taskStatusLabel(status: TaskStatus): string {
-  switch (status) {
-    case 'in_progress':
-      return '进行中';
-    case 'queued':
-      return '排队中';
-    case 'waiting':
-      return '等待回复';
-    case 'completed':
-      return '已完成';
-    case 'cancelled':
-      return '已取消';
-  }
-}
 
 // ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
 export interface ChatMessage {
@@ -107,9 +84,6 @@ interface PendingRequest {
 // 并通过中转发送聊天命令；上传与模型设置使用同源 HTTP。
 export class ChatController {
   messages: ChatMessage[] = [];
-  tasks: ChatTask[] = [];
-  // taskReplyDrafts 按任务 ID 暂存浮层中等待回复卡片的未发送草稿，收起浮层查看历史时不丢失输入。
-  taskReplyDrafts = new Map<string, string>();
   initializing = true;
   connected = false;
   mainThinking = false;
@@ -241,9 +215,6 @@ export class ChatController {
           this.connected = true;
           this.desktopAvailable = event.desktop_available === true;
           this.email = event.email ?? this.email;
-          if (event.tasks !== undefined) {
-            this.tasks = event.tasks;
-          }
           if (event.history) {
             this.mergeHistory(event.history);
           }
@@ -251,8 +222,6 @@ export class ChatController {
         } else {
           this.connected = false;
           this.desktopAvailable = false;
-          this.tasks = [];
-          this.taskReplyDrafts.clear();
           if (this.token) {
             this.token = null;
             clearSession();
@@ -278,7 +247,6 @@ export class ChatController {
             this.token = event.token;
             this.email = event.email;
             this.desktopAvailable = event.desktop_available === true;
-            this.tasks = event.tasks ?? [];
             this.connected = true;
             this.mergeHistory(event.history);
             this.error = null;
@@ -313,9 +281,6 @@ export class ChatController {
         this.connected = true;
         this.mainThinking = event.main_thinking === true;
         this.mainFailed = event.main_failed === true;
-        if (event.tasks !== undefined) {
-          this.tasks = event.tasks;
-        }
         this.error = null;
         this.merge(event);
         break;
@@ -349,8 +314,6 @@ export class ChatController {
     this.oldestHistoryPosition = undefined;
     this.hasMoreHistory = true;
     this.messages = [];
-    this.tasks = [];
-    this.taskReplyDrafts.clear();
     clearSession();
   }
 
@@ -583,7 +546,7 @@ export class ChatController {
     return messageImageSchema.parse(await response.json());
   }
 
-  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；消息只携带服务端生成的 OSS 引用，阿芒需要时经 sandbox_import_file 导入电脑。
+  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；消息只携带服务端生成的 OSS 引用，aether 需要时经 sandbox_import_file 导入电脑。
   async uploadFile(file: File): Promise<MessageFile> {
     if (!this.token) throw new Error('请先登录');
     const response = await fetch(this.baseURL + '/files?name=' + encodeURIComponent(file.name), {

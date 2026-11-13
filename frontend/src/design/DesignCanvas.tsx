@@ -38,7 +38,7 @@ const sceneGroups: SceneGroup[] = [
       {
         id: 'loading',
         title: '首屏连接加载态',
-        note: 'WebSocket 尚未收到 ready 时的阿芒角色呼吸轻弹、眨眼与暖金连接波纹动画。',
+        note: 'WebSocket 尚未收到 ready 时的 aether 角色呼吸轻弹、眨眼与暖金连接波纹动画。',
       },
       {
         id: 'login-email',
@@ -70,7 +70,7 @@ const sceneGroups: SceneGroup[] = [
       {
         id: 'chat-daily',
         title: '日常多轮对话与气泡衔接',
-        note: '展示跨日/半小时时间分隔、同说话人两分钟内紧凑圆角衔接及右上角四枚悬浮入口。',
+        note: '展示跨日/半小时时间分隔、同说话人两分钟内紧凑圆角衔接及右上角悬浮入口。',
       },
       {
         id: 'chat-markdown',
@@ -106,13 +106,8 @@ const sceneGroups: SceneGroup[] = [
       },
       {
         id: 'status-thinking',
-        title: '阿芒正在处理（思考动态）',
+        title: 'aether 正在处理（思考动态）',
         note: 'Main 运行期间在消息列表尾部展示三点呼吸动画。',
-      },
-      {
-        id: 'status-tasks',
-        title: '实时任务进度胶囊与角标',
-        note: '存在未完成任务时在输入框上方浮现当前主任务与排队数胶囊，右上角任务入口同步显示角标。',
       },
       {
         id: 'status-failed',
@@ -129,13 +124,8 @@ const sceneGroups: SceneGroup[] = [
   {
     id: 'overlays',
     title: '浮层与弹窗',
-    subtitle: '任务进展清单、右上角账号菜单、历史关键词搜索、原文上下文定位窗口与只读实时桌面。',
+    subtitle: '右上角账号菜单、历史关键词搜索、原文上下文定位窗口与只读实时桌面。',
     scenes: [
-      {
-        id: 'overlay-tasks',
-        title: '任务进展浮层',
-        note: '实时展示进行中、排队中、等待回复与近期已结束任务；等待回复卡片可直接输入并附带任务上下文发送。',
-      },
       {
         id: 'overlay-account',
         title: '账号与退出登录浮层',
@@ -309,7 +299,7 @@ function TokensSpecView() {
               </header>
               <div className="dc-type-row">
                 <span className="dc-type-spec">登录主标题 · 28px / 36px · 700</span>
-                <p style={{ fontSize: 28, lineHeight: '36px', fontWeight: 700 }}>和阿芒聊聊</p>
+                <p style={{ fontSize: 28, lineHeight: '36px', fontWeight: 700 }}>和 aether 聊聊</p>
               </div>
               <div className="dc-type-row">
                 <span className="dc-type-spec">Markdown 二级标题 · 26px（1.45em）· 700</span>
@@ -435,9 +425,9 @@ export function DesignCanvas() {
     <div className="dc-shell">
       <aside className="dc-sidebar" aria-label="设计画布分组导航">
         <div className="dc-brand">
-          <img src="/app-icon.png" alt="阿芒" width="40" height="40" />
+          <img src="/app-icon.png" alt="aether" width="40" height="40" />
           <div>
-            <h1>阿芒 · 设计画布</h1>
+            <h1>aether · 设计画布</h1>
             <p>真实组件与样式 · 免后端预览</p>
           </div>
         </div>

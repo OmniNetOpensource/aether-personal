@@ -63,24 +63,6 @@ export const publicMessageShareSchema = z.object({
   messages: z.array(chatMessageRowSchema),
 });
 
-// 任务快照随连接就绪、登录和消息事件整表同步，前端只读展示。
-export const taskStatusSchema = z.enum([
-  'in_progress',
-  'queued',
-  'waiting',
-  'completed',
-  'cancelled',
-]);
-
-export const chatTaskSchema = z.object({
-  id: z.uuid(),
-  title: z.string(),
-  description: z.string(),
-  status: taskStatusSchema,
-  created_at: z.iso.datetime({ offset: true }),
-  updated_at: z.iso.datetime({ offset: true }),
-});
-
 export const serverEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('ready'),
@@ -91,7 +73,6 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     turnstile_site_key: z.string().optional(),
     email: z.string().optional(),
     history: chatPageSchema.optional(),
-    tasks: z.array(chatTaskSchema).optional(),
   }),
   z.object({
     type: z.literal('authenticated'),
@@ -101,7 +82,6 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     email: z.string().min(1),
     desktop_available: z.boolean().optional(),
     history: chatPageSchema,
-    tasks: z.array(chatTaskSchema).optional(),
   }),
   z.object({ type: z.literal('code_sent'), request_id: z.uuid() }),
   chatPageSchema.extend({ type: z.literal('history'), request_id: z.uuid() }),
@@ -137,7 +117,6 @@ export const serverEventSchema = z.discriminatedUnion('type', [
     change_cursor: z.string().regex(/^\d+$/).optional(),
     main_thinking: z.boolean().optional(),
     main_failed: z.boolean().optional(),
-    tasks: z.array(chatTaskSchema).optional(),
   }),
   z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),
   z.object({ type: z.literal('logged_out'), request_id: z.uuid() }),
@@ -154,5 +133,3 @@ export type RequestFailedCode = z.infer<typeof requestFailedCodeSchema>;
 export type ChatSearchHit = z.infer<typeof chatSearchHitSchema>;
 export type MessageShareSummary = z.infer<typeof messageShareSummarySchema>;
 export type PublicMessageShare = z.infer<typeof publicMessageShareSchema>;
-export type TaskStatus = z.infer<typeof taskStatusSchema>;
-export type ChatTask = z.infer<typeof chatTaskSchema>;

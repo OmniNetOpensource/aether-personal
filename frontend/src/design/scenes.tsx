@@ -6,7 +6,6 @@ import { ChatHistoryContext } from '../components/chat/ChatHistoryContext.js';
 import { ChatHistorySearch } from '../components/chat/ChatHistorySearch.js';
 import { ChatMessageList } from '../components/chat/ChatMessageList.js';
 import { ChatPage } from '../components/chat/ChatPage.js';
-import { ChatTaskSheet } from '../components/chat/ChatTaskSheet.js';
 import { DesktopViewer } from '../components/chat/DesktopViewer.js';
 import { MessageComposer } from '../components/chat/MessageComposer.js';
 import type { MessageComposerHandle } from '../components/chat/MessageComposer.js';
@@ -15,7 +14,7 @@ import { LoginPage } from '../components/login/LoginPage.js';
 import { ChatController } from '../lib/ChatController.js';
 import type { ChatMessage } from '../lib/ChatController.js';
 import type { MessagePart } from '../lib/messageAttachments.js';
-import type { ChatPage as ChatPagePayload, ChatTask } from '../lib/serverEvents.js';
+import type { ChatPage as ChatPagePayload } from '../lib/serverEvents.js';
 import '../styles/style.css';
 
 // sampleSketchDataUrl 生成一张森林绿与柔黄配色的离线矢量示意图，避免画布预览依赖外部图片网络。
@@ -136,52 +135,6 @@ const longCollapsedText = `### 为什么把持久事实全部留在 PostgreSQL
 4. **后续扩容路径自然**
    只要数据库与对象存储共享，对等无状态后端容器可以从两台平滑横向增加，不需要修改会话路由协议。`;
 
-// sampleTasks 覆盖进行中、排队中、等待回复、已完成与已取消五种状态，供胶囊与清单画板共用。
-const sampleTasks: ChatTask[] = [
-  {
-    id: '01960000-0000-7000-8000-000000000501',
-    title: '核对工作区最新静态检查并汇总告警',
-    description:
-      '进入 /mnt/workspace 执行 go build、go vet 与前端类型检查，按模块整理告警原因与修复建议。',
-    status: 'in_progress',
-    created_at: '2026-11-12T10:35:00+08:00',
-    updated_at: '2026-11-12T10:36:12+08:00',
-  },
-  {
-    id: '01960000-0000-7000-8000-000000000502',
-    title: '导出三季度云服务器与对象存储账单对比表',
-    description:
-      '对比新加坡单机双实例改造前后的月度账单明细：\n1. 计算与带宽固定成本\n2. 私有 OSS 存储量与回源请求变化\n3. Redis 共享图片缓存上线后的请求减幅\n生成 xlsx 文件发回聊天。',
-    status: 'queued',
-    created_at: '2026-11-12T10:38:00+08:00',
-    updated_at: '2026-11-12T10:38:00+08:00',
-  },
-  {
-    id: '01960000-0000-7000-8000-000000000503',
-    title: '预约下周三团队架构复盘提醒',
-    description: '等待确认具体复盘开始时间（上午 10:00 或下午 15:00）以及是否需要提前半小时提醒。',
-    status: 'waiting',
-    created_at: '2026-11-12T09:50:00+08:00',
-    updated_at: '2026-11-12T09:55:20+08:00',
-  },
-  {
-    id: '01960000-0000-7000-8000-000000000504',
-    title: '检查双实例滚动发布期间的长工具调用交接记录',
-    description: '核对 api-1 收到停止信号后归还租约与 api-2 接手步骤的日志时间差。',
-    status: 'completed',
-    created_at: '2026-11-11T09:40:10+08:00',
-    updated_at: '2026-11-11T09:41:32+08:00',
-  },
-  {
-    id: '01960000-0000-7000-8000-000000000505',
-    title: '整理旧版单进程监听脚本归档',
-    description: '已确认不再保留池外 LISTEN 脚本，用户要求直接取消该整理项。',
-    status: 'cancelled',
-    created_at: '2026-11-10T18:10:00+08:00',
-    updated_at: '2026-11-10T18:14:05+08:00',
-  },
-];
-
 // createPreviewController 生成不建立真实网络连接的控制器实例，并填入当前画板所需的静态快照。
 function createPreviewController(options: {
   email?: string;
@@ -195,7 +148,6 @@ function createPreviewController(options: {
   hasMoreHistory?: boolean;
   error?: string | null;
   messages?: ChatMessage[];
-  tasks?: ChatTask[];
   sendError?: string;
 }): ChatController {
   const controller = new ChatController();
@@ -211,7 +163,6 @@ function createPreviewController(options: {
   controller.hasMoreHistory = options.hasMoreHistory ?? false;
   controller.error = options.error ?? null;
   controller.messages = options.messages ?? dailyMessages;
-  controller.tasks = options.tasks ?? [];
 
   // 画布内点击操作都在内存里即时回应，避免触发真实 WebSocket 超时计时器。
   controller.requestCode = async () => {};
@@ -723,26 +674,6 @@ function buildSceneElement(sceneId: string) {
       return <ChatPage controller={controller} />;
     }
 
-    case 'status-tasks': {
-      sessionStorage.removeItem('aether_draft:tasks@aether.design');
-      const controller = createPreviewController({
-        email: 'tasks@aether.design',
-        connected: true,
-        mainThinking: true,
-        tasks: sampleTasks,
-        messages: [
-          ...dailyMessages.slice(2),
-          createMessage(
-            106,
-            true,
-            '2026-11-12T10:35:00+08:00',
-            '去工作区跑一下静态检查，另外把三季度账单对比表也排上。',
-          ),
-        ],
-      });
-      return <ChatPage controller={controller} />;
-    }
-
     case 'status-failed': {
       sessionStorage.removeItem('aether_draft:failed@aether.design');
       const controller = createPreviewController({
@@ -771,22 +702,6 @@ function buildSceneElement(sceneId: string) {
           <button type="button" className="app-button">
             更新应用
           </button>
-        </>
-      );
-    }
-
-    case 'overlay-tasks': {
-      sessionStorage.removeItem('aether_draft:overlay-tasks@aether.design');
-      const controller = createPreviewController({
-        email: 'overlay-tasks@aether.design',
-        connected: true,
-        mainThinking: true,
-        tasks: sampleTasks,
-      });
-      return (
-        <>
-          <ChatPage controller={controller} />
-          <ChatTaskSheet controller={controller} onClose={() => {}} />
         </>
       );
     }

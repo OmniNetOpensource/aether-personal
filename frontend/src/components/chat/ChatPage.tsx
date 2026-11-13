@@ -1,13 +1,11 @@
-// 本文件组合聊天列表、输入框、实时任务进展浮层、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
+// 本文件组合聊天列表、输入框、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
 
 import { useEffect, useRef, useState } from 'react';
-import { isOpenTask } from '../../lib/ChatController.js';
 import type { ChatController } from '../../lib/ChatController.js';
 import type { MessageComposerHandle } from './MessageComposer.js';
 import { ChatMessageList } from './ChatMessageList.js';
 import { MessageComposer } from './MessageComposer.js';
 import { ChatHistorySearch } from './ChatHistorySearch.js';
-import { ChatTaskSheet } from './ChatTaskSheet.js';
 import { DesktopViewer } from './DesktopViewer.js';
 import { ChatModelSettings } from './ChatModelSettings.js';
 
@@ -15,7 +13,6 @@ import { ChatModelSettings } from './ChatModelSettings.js';
 export function ChatPage({ controller }: { controller: ChatController }) {
   const composer = useRef<MessageComposerHandle | null>(null);
   const accountWrap = useRef<HTMLDivElement>(null);
-  const [tasksOpen, setTasksOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -23,7 +20,6 @@ export function ChatPage({ controller }: { controller: ChatController }) {
   const accountButton = useRef<HTMLButtonElement>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [latestRequest, setLatestRequest] = useState(0);
-  const openTaskCount = controller.tasks.filter(isOpenTask).length;
 
   // 点击账号浮层外部或按下 Escape 时收起菜单，避免遮挡消息阅读。
   useEffect(() => {
@@ -53,14 +49,7 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           composer.current?.insertQuote(quote);
         }}
       />
-      <MessageComposer
-        controller={controller}
-        composerRef={composer}
-        onOpenTasks={() => {
-          setAccountOpen(false);
-          setTasksOpen(true);
-        }}
-      />
+      <MessageComposer controller={controller} composerRef={composer} />
       <div className="chat-floating-actions">
         {controller.desktopAvailable && (
           <button
@@ -79,30 +68,6 @@ export function ChatPage({ controller }: { controller: ChatController }) {
             </svg>
           </button>
         )}
-        <button
-          type="button"
-          className="chat-tasks-launch"
-          aria-label={openTaskCount > 0 ? `任务进展（${openTaskCount} 项未完成）` : '任务进展'}
-          title="任务进展"
-          onClick={() => {
-            setAccountOpen(false);
-            setTasksOpen(true);
-          }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m4.5 7.5 1.8 1.8 3.2-3.3" />
-            <path d="M12.5 7.5h7" />
-            <circle cx="6.5" cy="12.5" r="1.2" />
-            <path d="M12.5 12.5h7" />
-            <circle cx="6.5" cy="17.5" r="1.2" />
-            <path d="M12.5 17.5h7" />
-          </svg>
-          {openTaskCount > 0 && (
-            <span className="chat-tasks-badge" aria-hidden="true">
-              {openTaskCount > 99 ? '99+' : openTaskCount}
-            </span>
-          )}
-        </button>
         <button
           type="button"
           className="chat-search-launch"
@@ -169,16 +134,6 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           onClose={() => {
             setModelsOpen(false);
             accountButton.current?.focus({ preventScroll: true });
-          }}
-        />
-      )}
-      {tasksOpen && (
-        <ChatTaskSheet
-          controller={controller}
-          onClose={() => setTasksOpen(false)}
-          onSent={() => {
-            setTasksOpen(false);
-            setLatestRequest((value) => value + 1);
           }}
         />
       )}

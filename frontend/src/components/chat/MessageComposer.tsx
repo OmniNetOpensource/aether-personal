@@ -1,4 +1,4 @@
-// 本文件组合实时任务进度胶囊、多模态编辑器与发送工具栏：统一管理文字、引用、图片与文件上传和草稿，展示发送中与发送失败，发送成功后清空输入。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片与文件上传和草稿，展示发送中与发送失败，发送成功后清空输入。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -6,9 +6,7 @@ import { uploadAttachments } from '../../lib/messageAttachments.js';
 import type { MessagePart, MessageQuote } from '../../lib/messageAttachments.js';
 import { RichMessageInput } from './RichMessageInput.js';
 import type { RichMessageInputHandle } from './RichMessageInput.js';
-import { isOpenTask, taskStatusLabel } from '../../lib/ChatController.js';
 import type { ChatController } from '../../lib/ChatController.js';
-import './chatTasks.css';
 
 // MessageComposerHandle 供消息列表把选区引用插入当前光标处。
 export interface MessageComposerHandle {
@@ -19,12 +17,10 @@ export interface MessageComposerHandle {
 export function MessageComposer({
   controller,
   composerRef,
-  onOpenTasks,
   hidden = false,
 }: {
   controller: ChatController;
   composerRef: RefObject<MessageComposerHandle | null>;
-  onOpenTasks?: () => void;
   hidden?: boolean;
 }) {
   const draftKey = `aether_draft:${controller.email}`;
@@ -136,55 +132,8 @@ export function MessageComposer({
       setSending(false);
     }
   };
-  // 提取未结束任务，供输入框上方胶囊实时展示当前主任务与剩余排队情况。
-  const openTasks = controller.tasks.filter(isOpenTask);
-  const leadTask = openTasks.find((task) => task.status === 'in_progress') ?? openTasks[0];
-  let queueSummary = '';
-  if (leadTask) {
-    if (leadTask.status === 'in_progress') {
-      const otherInProgressCount =
-        openTasks.filter((task) => task.status === 'in_progress').length - 1;
-      const queuedCount = openTasks.filter((task) => task.status === 'queued').length;
-      const waitingCount = openTasks.filter((task) => task.status === 'waiting').length;
-      const restParts: string[] = [];
-      if (otherInProgressCount > 0) restParts.push(`其余 ${otherInProgressCount} 项并行中`);
-      if (queuedCount > 0) restParts.push(`${queuedCount} 项排队`);
-      if (waitingCount > 0) restParts.push(`${waitingCount} 项等待`);
-      queueSummary = restParts.length > 0 ? restParts.join(' · ') : '查看详情';
-    } else {
-      queueSummary = openTasks.length > 1 ? `共 ${openTasks.length} 项待办` : '查看详情';
-    }
-  }
-
   return (
     <div className="composer-padding" ref={composerPadding} hidden={hidden}>
-      {leadTask && (
-        <button
-          type="button"
-          className="composer-task-bar"
-          onClick={onOpenTasks}
-          aria-label={`查看任务进展：${taskStatusLabel(leadTask.status)} ${leadTask.title}`}
-        >
-          <span className="composer-task-main">
-            <span className={`task-status-pill is-${leadTask.status}`}>
-              {leadTask.status === 'in_progress' && (
-                <span
-                  className={`task-live-dot${controller.connected && controller.mainThinking ? ' is-pulsing' : ''}`}
-                  aria-hidden="true"
-                />
-              )}
-              {taskStatusLabel(leadTask.status)}
-            </span>
-            <span className="composer-task-title">{leadTask.title}</span>
-          </span>
-          <span className="composer-task-meta">
-            <span>{queueSummary}</span>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m9 6 6 6-6 6" />
-            </svg>
-          </span>
-        </button>
-      )}
       {!controller.connected && (
         <p className="composer-connection-hint" role="status">
           {typeof navigator !== 'undefined' && !navigator.onLine
