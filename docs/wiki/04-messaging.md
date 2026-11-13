@@ -22,7 +22,7 @@
 
 2026-11-11 更新：后端采用对齐 LangSmith Data Plane 的**对等无状态多容器架构**（生产单机部署 `api-1`、`api-2` 与纯内存 `redis`），每个容器同时接收 WebSocket 与运行 Main。选择理由是在不增加额外主机成本的前提下，消除发布更新与单容器异常期间的连接中断，详见 [05](05-main-runtime.md#对等多实例调度与停机交接2026-11-11)。
 
-- 消息、任务、记忆和轨迹 100% 保存在 PostgreSQL，进程与 Redis 均不保存业务持久状态。
+- 消息、记忆和轨迹 100% 保存在 PostgreSQL，进程与 Redis 均不保存业务持久状态。
 - WebSocket 负载均衡无需配置 Sticky Session：HTTP `Upgrade` 完成后即固定在所连容器，跨容器实时推送通过 Redis Pub/Sub 频道 `chat:notify` 广播用户 ID，持有该用户连接的容器收到后各自查表推送。
 - 用户消息提交后，`Manager.Wake` 通过单次 Redis Pipeline 发布 `agent:input`（跨实例打断未占位思考）并去重推入 `agent:wake_queue`（唤醒空闲容器竞争消费）。
 - PostgreSQL 不再占用池外 `LISTEN` 长连接，完全回归短事务读写。
@@ -93,14 +93,14 @@ sequenceDiagram
 
 | 事件 | 说明 |
 | --- | --- |
-| `{"type": "ready", "authenticated": false, "dev_login": false, "change_cursor": "0"}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`、`tasks` 快照，首次连接同时带最新一页 `history` |
-| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}, "tasks": [...], "change_cursor": "123"}` | 在当前连接上登录成功，带最新一页历史与当前任务快照 |
+| `{"type": "ready", "authenticated": false, "dev_login": false, "change_cursor": "0"}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
+| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}, "change_cursor": "123"}` | 在当前连接上登录成功，带最新一页历史 |
 | `{"type": "code_sent", "request_id": "..."}` | 验证码已发送 |
 | `{"type": "history", "request_id": "...", "messages": [...]}` | 一页历史消息 |
 | `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
 | `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
 | `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
-| `{"type": "messages", "messages": [...], "tasks": [...], "main_thinking": false, "main_failed": false, "change_cursor": "123"}` | 新消息、当前任务队列快照与 Main 处理、失败状态；失败时列表底部显示重试提示，新输入清除，重连从数据库恢复 |
+| `{"type": "messages", "messages": [...], "main_thinking": false, "main_failed": false, "change_cursor": "123"}` | 新消息与 Main 处理、失败状态；失败时列表底部显示重试提示，新输入清除，重连从数据库恢复 |
 
 2026-11-03，助手开始输出时先占住行位置，整条回复完成后才对用户可见。一条旧行可能晚于后来的用户消息推送，因此聊天按 `position` 排序，实时同步单独用 `change_cursor`。新可见消息用写入时的序号，隐藏行转为可见时分配一个新的变更序号。首屏先读取推送游标再取历史，期间提交的消息可以按 ID 去重。历史翻页只推进历史断点。兼容旧客户端传 `last_position`，服务端用对应的原始写入序号补发后续变更。
 
@@ -188,7 +188,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前用户的 Main 持有 Redis 执行租约或有运行中的后台 Subagent 时为 true（2026-11-12 起由持有租约与后台运行状态决定，排队等待领单期间保持 false，真正认领开跑时才亮起）；Main 已释放租约且无运行中 Subagent 时为 false。状态依据 Redis 租约与数据库查询，首次连接与重连都会同步，历史翻页不覆盖这个实时状态。Runner 抢占租约与释放租约时均通知连接重新查询，30 秒心跳也重新同步以补偿漏通知。
 
-前端尊重系统的减少动画设置；用户上翻历史时，不因气泡变化强制滚动。读屏标签为“Aether 正在思考”。选择理由是用户能确认 Main 仍在处理，同时保持只有消息列表和输入框的界面。
+前端尊重系统的减少动画设置；用户上翻历史时，不因气泡变化强制滚动。读屏标签为“aether 正在处理”。选择理由是用户能确认 Main 仍在处理，同时保持只有消息列表和输入框的界面。
 
 已通过 Go 构建、静态检查、现有 PostgreSQL 集成检查，以及 Flutter 静态检查、14 项现有测试与 Web 构建。真实聊天任务中已观察到三点气泡，并确认任务完成后自动收起，刷新后的空闲状态无残留；未新增测试文件。
 

@@ -19,9 +19,6 @@ erDiagram
     users ||--o{ sessions : "登录"
     users ||--o| user_model_settings : "个人模型选择"
     users ||--o{ messages : "拥有"
-    users ||--o{ tasks : "需求队列"
-    tasks ||--o{ task_messages : "关联消息"
-    messages ||--o{ task_messages : "需求与补充来源"
     users ||--o{ memory_files : "记忆根文档与主题文件"
     users ||--o{ schedules : "定时任务"
     users ||--o{ steps : "产生"
@@ -38,8 +35,6 @@ erDiagram
 | `users` | 用户；每个用户即一个长期 Main | `已实现` |
 | `subagents` | 异步后台只读调研与独立任务 Subagent：标题、状态、栅栏代数、最终输出或错误、起止时间（`00055`） | `已实现` |
 | `messages` | Main 与各 Subagent 的上下文列表（`subagent_id` 为空即 Main，非空受约束必为 `visible = false`） | `已实现` |
-| `tasks` | 持久化需求、补充后的完整要求与执行状态；支持多项独立任务并行 `in_progress`（`00055`） | `开发中` |
-| `task_messages` | 关联任务与全部相关用户消息；任务工具聚合为 `related_message_ids` 返回 | `开发中` |
 | `memory_files` | 用户私有 `/memories` 文本文件，包含 `memory.md` 根和详细主题 | `开发中` |
 | `schedules` | 定时任务：标题、到点交给 Main 的上下文、可空的 `cron` 与 `timezone`（同时为空即一次性）和下次触发时间，见 [10](10-schedules.md) | `开发中` |
 | `sandbox_workspaces` | 用户与独立 AgenticFS 工作区的绑定及加密的当前实例令牌/流量令牌，见 [07](07-sandbox.md) | `已实现` |
@@ -67,7 +62,6 @@ erDiagram
 | `email` | text | 登录邮箱，唯一 |
 | `main_failed_through_sequence` | bigint | Main 上次运行失败时的最大消息序号；最新消息不超过它时不再自动重试，空表示没有失败停住（`00026`） |
 | `main_lease_epoch` | bigint | 单调递增的 Main 执行代数（默认 0，`00052`）；每次实例抢占用户租约后原子递增，Runner 所有写库事务核对该代数防止跨实例脑裂覆盖 |
-| `task_input_through_sequence` | bigint | 已登记需求的用户输入位置；只标记分类完成，与任务完成、聊天已读无关（`00034`） |
 | `created_at` | timestamptz | 注册时间 |
 
 ### `subagents`
@@ -107,31 +101,9 @@ erDiagram
 
 用户多模态消息继续使用 `messages.content` JSONB，不新增图片二进制列。`content` 保存模型所需的文本与 OSS 图片引用，附带的 `parts` 保存按用户编辑顺序排列的文字、引用位置和图片元信息；`user_text` 用于回显原始正文。图片本体在私有 OSS Bucket，预览签名只在向前端发出时生成。图片读取为 base64 发生在模型渠道适配前，详见 [04](04-messaging.md#引用图片与多模态输入框)。
 
-### `tasks`
+### `tasks`（已于 2026-11-13 移除）
 
-Main 按任务登记完整要求，补充说明更新同一任务。每个用户同时最多一项任务执行中。2026-11-06，用户确认删除冗余的 `source_sequence`（`00039`），并纠正自动按 ID 领取的假设：下一项由模型读取任务列表后自行选择。UUIDv7 的 `id` 用于标识和稳定列举，不代表执行优先级。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | uuid | 主键，默认 `uuidv7()` |
-| `user_id` | uuid | 所属用户，引用 `users.id` |
-| `title` | text | 完整标题，1 至 200 字符 |
-| `description` | text | 当前完整目标、背景与约束，1 至 32,000 字符 |
-| `status` | text | `queued`、`in_progress`、`waiting`、`completed`、`cancelled`；默认 `queued` |
-| `created_at`、`updated_at` | timestamptz | 创建与最后变更时间 |
-
-上述字段均非空。`tasks_one_in_progress_per_user` 部分唯一索引保证每用户最多一项 `in_progress`。任务只保存需求和状态，不关联助手消息或文件产物，详见 [11](11-tasks.md)。
-
-### `task_messages`
-
-两列分别引用任务和用户原始消息，联合主键 `(task_id, message_id)` 防止重复关联。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `task_id` | uuid，非空 | 引用 `tasks.id` |
-| `message_id` | uuid，非空 | 引用 `messages.id` |
-
-一个任务可以由多条输入共同说明，一条输入也可以提出多个任务，因此用户输入通过此表保存多对多关联，不复制消息正文。`related_message_ids` 不是任务表里的数组列；查询时只返回相关用户输入的 ID，按消息序号排列。登记输入和关联消息在同一事务里提交。
+`tasks` 表及历史关联表 `task_messages`、`users.task_input_through_sequence` 已依次由 `00043` 与 `00058_drop_tasks.sql` 删除，设计沿革与移除理由见 [11](11-tasks.md)。
 
 ### `memory_files`
 
@@ -256,7 +228,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 
 ## 外键
 
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`tasks`、`task_messages`、`memory_files`、`schedules`、`steps`、`sessions` 随之自动删除，不留残余数据。涉及的外键：`schedules → users`、`tasks → users`、`task_messages → tasks`、`task_messages → messages`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`。误删由“仅管理员可删除”与数据库备份防范。
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`memory_files`、`schedules`、`steps`、`sessions`、`subagents`、`sandbox_workspaces`、`user_model_settings` 随之自动删除，不留残余数据。涉及的外键：`schedules → users`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`、`subagents → users`。误删由“仅管理员可删除”与数据库备份防范。
 
 ## 索引
 
@@ -311,6 +283,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00053_merge_idle_work_minutes.sql` | 将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），配合持续按最近一次请求触发 | `已实现` |
 | `00054_drop_workspace_sync_cursor.sql` | 删除 `sandbox_workspaces.synced_through_sequence`，聊天附件改为由 `sandbox_import_file` 按需导入工作区 | `已实现` |
 | `00055_add_subagents.sql` | 放开 `tasks` 单进行中唯一索引；新建 `subagents` 表与栅栏代数；为 `messages`、`steps`、`model_calls` 增加 `subagent_id` 隔离列与索引；为 `model_settings` 增加可选 `subagent_model` | `已实现` |
+| `00058_drop_tasks.sql` | 删除持久化需求队列 `tasks` 表及索引，整体移除任务系统 | `开发中` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

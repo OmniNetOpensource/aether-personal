@@ -1,6 +1,6 @@
 # 05 Main 运行时
 
-每个用户拥有一个长期主对话 Main，并可按需并发派生多个独立上下文的异步后台 Subagent（2026-11-12 重新设计引入，见下文「异步后台 Subagent 与零损耗直通转发（2026-11-12）」）。Main 与用户之间是一条永不重置的长期对话，使用同一份 `messageList`。Main 与 Subagent 均为逻辑概念：平时不占任何进程，有活时由任意空闲的对等后端容器通过 Redis 抢占对应执行租约并启动 Runner 协程运行，处理完即释放。代码在 `backend/internal/agent/`。持久化需求队列支持多项独立任务并行处于 `in_progress`，详见 [11 需求队列](11-tasks.md)。
+每个用户拥有一个长期主对话 Main，并可按需并发派生多个独立上下文的异步后台 Subagent（2026-11-12 重新设计引入，见下文「异步后台 Subagent 与零损耗直通转发（2026-11-12）」）。Main 与用户之间是一条永不重置的长期对话，使用同一份 `messageList`。Main 与 Subagent 均为逻辑概念：平时不占任何进程，有活时由任意空闲的对等后端容器通过 Redis 抢占对应执行租约并启动 Runner 协程运行，处理完即释放。代码在 `backend/internal/agent/`。此前曾实验的持久化需求队列已于 2026-11-13 整体移除，见 [11 需求队列](11-tasks.md)。
 
 ## 实现顺序
 
@@ -20,7 +20,7 @@ Main 直接使用执行工具完成任务，当前包括 `search`、`fetch_url`�
 
 ## Main 如何回复用户
 
-2026-11-06 更新：任务工具只管理需求、补充与状态，不绑定回答、文件等产物。助手正文独立保存和展示；登记与任务选择阶段只调用工具。任务完成只更新状态，不要求登记结果，见 [11](11-tasks.md#只管理任务不绑定产物)。
+2026-11-13 更新：移除 `tasks` 需求队列、三个任务工具及收尾任务提醒（迁移 `00058_drop_tasks.sql`）。日常简单请求直接回答，不再强制每条输入先登记再流转状态，多目标并行与长期延续交由上下文、并行后台 Subagent 与压缩摘要处理，详见 [11](11-tasks.md)。此前 2026-11-06 至 2026-11-12 的记录保留供追溯。
 
 2026-10-30，用户改为：Main 模型生成的正文就是发给用户的消息。后端等模型整条回复生成结束后再一次性推给前端，不逐段推送；正文为空则不产生用户消息。2026-11-03 起，只有最近一次用户输入之后已经给过有效正文，才允许无正文、无工具调用地结束；否则补试一次，仍为空则显示失败，见下文「模型调用失败」。这一条取代 2026-10-23「只通过 `send_message` 回复用户、禁止直接输出正文」的旧约定。项目尚未上线，旧约定下的数据直接清空，不做兼容。
 
@@ -111,7 +111,7 @@ flowchart TD
     SAVE --> RECOVER
     CALL -->|失去租约代数| SILENT["静默让位，不记失败位置"]
     CALL -->|最终失败 / 超时| FAIL["校验代数补中断回执、记下失败位置"]
-    RECOVER -->|消息尾部无活且无需任务提醒| RELEASE["注销本机字典、释放 Redis 租约、复查 HasMainWork 补入队"]
+    RECOVER -->|消息尾部无活| RELEASE["注销本机字典、释放 Redis 租约、复查 HasMainWork 补入队"]
     SILENT --> RELEASE
     FAIL --> RELEASE
 ```
@@ -198,9 +198,6 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 
 | 工具 | 作用 | 状态 |
 | --- | --- | --- |
-| `list_tasks` | 读取当前用户的任务列表，可选择包含已完成与已取消的任务 | `开发中` |
-| `record_task_input` | 原子登记一条用户消息的全部新目标与补充 | `开发中` |
-| `update_task` | 启动一项或多项排队任务为 `in_progress`，或将进行中任务标为完成、等待或退回排队 | `开发中` |
 | `spawn_subagent` | 在独立干净上下文中异步启动后台只读调研/分析 Subagent，同轮可并发启动多个；跑完后由运行时自动向 Main 投递 `subagent_event` | `开发中` |
 | `forward_subagent` | 将已完成独立任务 Subagent 的完整原文零改写直通推送为聊天助手气泡，不经 Main 重新流式生成，也不在 Main 上下文重复存储 | `开发中` |
 | `cancel_subagent` | 用户取消或更改方向时立即中止仍在后台运行的 Subagent | `开发中` |
@@ -221,7 +218,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 
 原 Subagent 交付检查（最后一次工具调用必须是成功投递给 Main 的 `send_message`、未交付时纠正一次）已于 2026-11-02 随 Subagent 一并删除，`delivery.go` 与摘要中的投递状态字段不再存在。
 
-Main 不做正文内容的交付检查。正文在助手消息落库时成为用户消息；既无正文又无工具调用的回复按合法的沉默结束保存，不再按任务状态补试。任务是否真正满足用户目标仍由模型判断。
+Main 不做正文内容的交付检查。正文在助手消息落库时成为用户消息；既无正文又无工具调用的回复按合法的沉默结束保存。是否真正满足用户目标仍由模型判断。
 
 ## 模型
 
@@ -271,6 +268,8 @@ App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-setting
 
 同日，用户要求再多讲一些，把用户可能还不清楚或不了解的地方讲出来。因此删掉「回答篇幅与问题相称、短问题给短答案」，改为：回答超过最短结论；背景、术语含义、原因，以及容易被当成已知或容易忽略的部分都展开；不默认对方已有这些上下文；短问题在话题需要铺垫时仍然讲够。由浅入深的段落从「可以稍微展开」改为先讲清所依赖的背景再往下走。进度汇报仍保持简短，这条只约束最终回答的信息量。新文本随应用部署对全部 Main 生效。
 
+2026-11-13，用户希望 aether 有锋芒，把注意力放在事情本身。Main 与后台 Subagent 共用新的表达指令，直接给出关键判断、批评和分歧，讲清敏感议题的事实、利益冲突和实际影响，并把有用的细节讲够。判断的力度以证据为准，拿不准就明说。两处原有的冷静、克制措辞由这段共用指令取代，便于后台 Subagent 的原文直接作为 aether 的回答交付。
+
 ## 模型调用失败
 
 - 失败写入对应 `steps.error` 并由 `slog.Error` 记录；每次请求尝试单独记一步。2026-11-03，用户确认耗尽补试后应明确显示失败，替代原先只记内部错误的约定。聊天底部显示“回复失败，请再发一条消息重试。”，不展示供应商错误或内部细节。提示根据数据库中 Main 的失败位置恢复，刷新或重连后仍可见，新输入到达后清除。
@@ -282,19 +281,19 @@ App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-setting
 
 ## 异步后台 Subagent 与零损耗直通转发（2026-11-12）
 
-2026-11-12，用户要求在一次性收到多条可并行任务时让阿芒具备并行处理能力以提高吞吐量，并在审阅工业界实践（Anthropic Research、Claude Code、OpenAI Agents SDK、Cognition「并行贡献智力、单线程执行写入」、OpenClaw 异步完成投递与 LangChain `forward_message` 防转述损耗实验）后逐项确认以下设计，取代 2026-11-02 删除 Subagent 的状态（迁移 `00055_add_subagents`）：
+2026-11-12，用户要求在一次性收到多条可并行任务时让 aether 具备并行处理能力以提高吞吐量，并在审阅工业界实践（Anthropic Research、Claude Code、OpenAI Agents SDK、Cognition「并行贡献智力、单线程执行写入」、OpenClaw 异步完成投递与 LangChain `forward_message` 防转述损耗实验）后逐项确认以下设计，取代 2026-11-02 删除 Subagent 的状态（迁移 `00055_add_subagents`）：
 
 1. **异步后台并发与自动完成投递（抛弃旧版 `send_message` 工具）**
    - Main 通过数据库工具 `spawn_subagent(title, prompt)` 在用户消息事务内原子创建 `subagents` 记录与首条指派消息，提交后推入独立的 Redis 队列 `agent:subagent_wake_queue`；Main 可以在同一轮并发启动多个 Subagent 后立即结束本轮，运行期间用户随时发来新消息 Main 均能秒级接手继续并行，无队头阻塞。
    - Subagent 不配备任何跨代理发消息工具：它在干净上下文窗口内使用并行工具完成调研，写出无工具调用的最终回复即代表完成（若返回空白最终回复按无效响应最多重试 3 次）。请求后阶段在单一 PostgreSQL 事务内按固定锁序（先 `LockUserMessages`、后 `LockSubagent`）保存最终回复、将 `subagents` 标为 `completed` 并保存 `output`，同时向 Main 的 `messages` 插入不可见的 `name = "subagent_event"` 触发消息并唤醒 Main；耗尽重试或达到 15 分钟上限时同样标为 `failed` 并投递失败原因，绝不静默丢单。
 2. **Main 把关 + `forward_subagent` 零损耗直通转发**
-   - 为消除主代理二次改写长文带来的「传话筒效应」（信息损耗与双倍流式生成延迟），`SubagentInstructions` 共享阿芒全套调研严谨性与平实中文表达规范，要求直接产出面向用户的完整终稿。
-   - `subagent_event` 到达 Main 后：若属于独立任务且结果合格，Main 调用 `forward_subagent(subagent_id)`（启用 `UserVisibleParts`）并将对应 `task` 标为 `completed`——后端直接将 `subagents.output` 封装进工具回执的 `parts` 作为可见聊天气泡推送前端，模型侧请求组装自动剥离 `parts`，使该篇长文在 Main 上下文中仅保留 `subagent_event` 这一份拷贝（后续追问不断片，且不翻倍占用压缩额度）；若属于同一复杂任务拆出的多路调研，则由 Main 等齐各路 `subagent_event` 后综合回复。
+   - 为消除主代理二次改写长文带来的「传话筒效应」（信息损耗与双倍流式生成延迟），`SubagentInstructions` 沿用 Main 的调研和表达指令，要求直接产出面向用户的完整终稿。
+   - `subagent_event` 到达 Main 后：若属于独立请求且结果合格，Main 调用 `forward_subagent(subagent_id)`（启用 `UserVisibleParts`）——后端直接将 `subagents.output` 封装进工具回执的 `parts` 作为可见聊天气泡推送前端，模型侧请求组装自动剥离 `parts`，使该篇长文在 Main 上下文中仅保留 `subagent_event` 这一份拷贝（后续追问不断片，且不翻倍占用压缩额度）；若属于同一复杂问题拆出的多路调研，则由 Main 等齐各路 `subagent_event` 后综合回复。
 3. **只读工具隔离、独立锁与多实例配额保护**
-   - **单线程写入边界**：每位用户只有一台共享桌面与 `/mnt/workspace` 的沙箱电脑，因此 Subagent 仅开放 7 个只读工具（`search`、`search_twitter`、`fetch_url`、`read_image`、`search_message`、`read_message` 与仅限 `view` 命令的 `memory`）；沙箱电脑、写记忆、任务队列和定时安排保留给 Main 单线程执行，物理杜绝并发写冲突与无限递归派生。
-   - **细粒度锁与配额**：Subagent 常规步骤与工具回执使用独立的 `LockSubagent` 与 `subagents.lease_epoch`，不阻塞主聊天写入；`Manager` 使用独立的 `subagentSlots` 槽位池，并通过 Redis Lua 原子限制**单用户最多同时运行 5 个 Subagent、单个最长 15 分钟**，超出部分留在库中待前序结束后自动补位；用户中途取消任务时，Main 调用 `cancel_subagent` 递增代数并经 `agent:subagent_cancel` 广播立即中止远端执行。
+   - **单线程写入边界**：每位用户只有一台共享桌面与 `/mnt/workspace` 的沙箱电脑，因此 Subagent 仅开放 7 个只读工具（`search`、`search_twitter`、`fetch_url`、`read_image`、`search_message`、`read_message` 与仅限 `view` 命令的 `memory`）；沙箱电脑、写记忆和定时安排保留给 Main 单线程执行，物理杜绝并发写冲突与无限递归派生。
+   - **细粒度锁与配额**：Subagent 常规步骤与工具回执使用独立的 `LockSubagent` 与 `subagents.lease_epoch`，不阻塞主聊天写入；`Manager` 使用独立的 `subagentSlots` 槽位池，并通过 Redis Lua 原子限制**单用户最多同时运行 5 个 Subagent、单个最长 15 分钟**，超出部分留在库中待前序结束后自动补位；用户中途取消请求时，Main 调用 `cancel_subagent` 递增代数并经 `agent:subagent_cancel` 广播立即中止远端执行。
 4. **模型配置、聊天指示与看板观测**
-   - 管理看板「配置」页新增可选的 Subagent 模型（`model_settings.subagent_model`，留空默认跟随 Main）；「运行过程」页支持在 Main 与各 Subagent 的独立时间线间切换或一键跳转；只要 Main 或任意后台 Subagent 仍在运行，聊天底部三点思考气泡与任务栏绿点保持显示，且期间不触发闲置后台反思。
+   - 管理看板「配置」页新增可选的 Subagent 模型（`model_settings.subagent_model`，留空默认跟随 Main）；「运行过程」页支持在 Main 与各 Subagent 的独立时间线间切换或一键跳转；只要 Main 或任意后台 Subagent 仍在运行，聊天底部三点思考气泡保持显示，且期间不触发闲置后台反思。
 
 ## 删除 Subagent（2026-11-02，历史记录）
 

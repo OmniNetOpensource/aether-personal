@@ -1,6 +1,6 @@
 flowchart TD
     subgraph L1["第一层：TanStack Start Web 应用 · 移动端 PWA"]
-        CLIENT["Main 聊天界面：WebSocket · 任务进展 · 历史搜索 · 离线草稿 · 账号退出"]
+        CLIENT["Main 聊天界面：WebSocket · 历史搜索 · 离线草稿 · 账号退出"]
         DESKTOP_UI["只读实时桌面（noVNC / RFB）<br/>按工作区绑定显示入口"]
     end
 
@@ -10,19 +10,17 @@ flowchart TD
         IMAGES["存储与缓存：私有 OSS 读写签名 · Redis 共享图片缓存"]
         MANAGER["Manager：对等实例双队列调度<br/>Main 与 Subagent 独立槽位池 · 租约续期 · 思考打断与子代理取消 · 5 秒补偿"]
         REDIS[("Redis 8（纯内存无持久化）：Main/Subagent 唤醒队列 · 临时租约 · 思考打断/取消/聊天推送 Pub/Sub · oss:// 图片缓存")]
-        DB[("PostgreSQL：消息历史 · Main/Subagent 栅栏代数 · 并行需求队列 · 后台 Subagent · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
+        DB[("PostgreSQL：消息历史 · Main/Subagent 栅栏代数 · 后台 Subagent · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
 
         subgraph MAINBOX["每用户固定一个 Main + 按需并行后台 Subagent"]
             MAIN["Main Runtime：三阶段 Agent Loop · 编排与电脑执行 · 把关与直通转发"]
             SUB["Subagent Runtime：独立上下文 · 每用户最多 5 并发 / 15 分钟上限<br/>只读联网调研 · 历史检索 · 只读 memory view"]
-            TASKS["需求队列：登记输入 · 支持多项独立任务并行 in_progress"]
             SEARCH["search_message / read_message"]
             MEMORY["memory 工具渐进加载<br/>Main 读写 · Subagent 只读 view"]
             SCHEDULE["schedule 工具<br/>一次性 / 周期 cron 定时任务"]
 
             MAIN -->|"spawn_subagent 异步派发 / cancel_subagent 中止"| SUB
             SUB -->|"结束时原子写入 subagent_event 唤醒"| MAIN
-            MAIN <-->|"登记补充 / 并行启动与结项"| TASKS
             MAIN <-->|"搜索与按 ID 读取"| SEARCH
             SUB <-->|"只读检索主对话历史"| SEARCH
             MAIN <-->|"根索引与主题按需读写"| MEMORY
@@ -51,7 +49,6 @@ flowchart TD
         MAIN <-->|"发送前将 oss:// 解析为 base64"| IMAGES
         SUB <-->|"发送前将 oss:// 解析为 base64"| IMAGES
 
-        TASKS <-->|"任务与状态 / 回执同事务"| DB
         SEARCH <-->|"按用户搜索主对话历史"| DB
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
         SCHEDULE <-->|"安排与回执同事务"| DB
