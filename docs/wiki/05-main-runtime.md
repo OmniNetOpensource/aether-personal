@@ -204,10 +204,10 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 
 | 工具 | 作用 | 状态 |
 | --- | --- | --- |
-| `spawn_subagent` | 在独立干净上下文中异步启动后台只读调研/分析 Subagent，同轮可并发启动多个；跑完后由运行时自动向 Main 投递 `subagent_event` | `开发中` |
-| `forward_subagent` | 将已完成独立任务 Subagent 的完整原文零改写直通推送为聊天助手气泡，不经 Main 重新流式生成，也不在 Main 上下文重复存储 | `开发中` |
-| `cancel_subagent` | 用户取消或更改方向时立即中止仍在后台运行的 Subagent | `开发中` |
-| `list_subagents` | 查看当前用户近期的后台 Subagent 状态摘要 | `开发中` |
+| `spawn_subagent` | 在独立干净上下文中异步启动后台只读调研/分析 Subagent，同轮可并发启动多个；跑完后由运行时自动向 Main 投递 `subagent_event` | `已暂时禁用`（2026-11-14 从 Main 工具表摘除，仅保留后端运行框架） |
+| `forward_subagent` | 将已完成独立任务 Subagent 的完整原文零改写直通推送为聊天助手气泡，不经 Main 重新流式生成，也不在 Main 上下文重复存储 | `已暂时禁用` |
+| `cancel_subagent` | 用户取消或更改方向时立即中止仍在后台运行的 Subagent | `已暂时禁用` |
+| `list_subagents` | 查看当前用户近期的后台 Subagent 状态摘要 | `已暂时禁用` |
 | `read_message` | 按 ID 读取主对话完整消息，受用户权限与消息归属限制（Main 与 Subagent 共用） | `已实现` |
 | `search_message` | 在主对话完整历史中按关键词搜索，参数含 `keyword` 与 `who`（Main 与 Subagent 共用），见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
 | `memory` | Main 具备 `view/create/str_replace/insert/delete/rename` 完整能力；Subagent 仅开放只读 `view` 命令，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
@@ -285,7 +285,9 @@ App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-setting
 - 临时性错误（网络错误、超时、限流 429、服务端 5xx）最多重试 3 次，间隔为 1、2、4 秒。每轮模型调用从上下文准备开始计时，包含可能触发的压缩、全部尝试和退避，共用 10 分钟总预算；重试不重置截止时间。预算耗尽即取消请求并结束本轮，数据库收尾使用独立于该预算的上下文；模型请求日志保留实际耗时并记为传输失败。若进程退出先发生，仍按外部中断处理。独立发起的压缩请求同样使用模型客户端的 10 分钟单次上限。
 - 失败收尾时若已有请求未覆盖的新输入，则继续调度；否则记下当时的最大序号，Main 停住不再重试；失败前的消息留在上下文中，用户下次发消息时，Main 会一并看到之前未回复的消息。
 
-## 异步后台 Subagent 与零损耗直通转发（2026-11-12）
+## 异步后台 Subagent 与零损耗直通转发（2026-11-12；2026-11-14 暂时禁用）
+
+2026-11-14，用户要求暂时禁用 Subagent 工具：已从 Main 工具登记表 `tools.all` 中移除 `spawn_subagent`、`forward_subagent`、`cancel_subagent`、`list_subagents` 并同步调整 `MainInstructions` 与 `mainCompletionPrompt`，改为由 Main 直接并行调用只读工具或亲自完成任务；后台 Subagent 运行时、工具实现、数据库表及看板/前端配置保留不动以便后续随时恢复。以下为 2026-11-12 引入时的设计记录。
 
 2026-11-12，用户要求在一次性收到多条可并行任务时让 aether 具备并行处理能力以提高吞吐量，并在审阅工业界实践（Anthropic Research、Claude Code、OpenAI Agents SDK、Cognition「并行贡献智力、单线程执行写入」、OpenClaw 异步完成投递与 LangChain `forward_message` 防转述损耗实验）后逐项确认以下设计，取代 2026-11-02 删除 Subagent 的状态（迁移 `00055_add_subagents`）：
 
