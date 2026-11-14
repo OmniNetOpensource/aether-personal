@@ -1,4 +1,4 @@
-// 本文件是后台调度器：定期扫描到期的定时安排与闲置到期的对话，把保存的上下文或后台反思指令作为不可见触发消息投进该用户的对话，再唤醒 Main。
+// 本文件是定时安排调度器：定期扫描并投递 Agent 通过 schedule 工具创建的到期定时安排，把保存的上下文作为不可见触发消息投进该用户的对话，再唤醒 Main。
 
 package scheduler
 
@@ -6,24 +6,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// scanInterval 是扫描间隔，定时安排与闲置后台反思的触发精度就在这个量级。
+// scanInterval 是扫描间隔，定时安排的触发精度就在这个量级。
 const scanInterval = 5 * time.Second
 
-// Run 每隔 scanInterval 扫一次到期安排和到期的闲置后台反思并逐条投递，直到进程退出。它是调度器的最外层：
-// 失败在这里记录，没投递成功的安排或后台反思仍然到期，下一次扫描会再试。
+// Run 每隔 scanInterval 扫一次到期安排并逐条投递，直到进程退出。它是调度器的最外层：
+// 失败在这里记录，没投递成功的安排仍然到期，下一次扫描会再试。
 func Run(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager) {
 	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
@@ -36,22 +34,6 @@ func Run(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager) {
 		for _, schedule := range due {
 			if err := deliverSchedule(ctx, pool, manager, schedule.UserID, schedule.ID); err != nil && ctx.Err() == nil {
 				slog.Error("deliver schedule failed", "schedule_id", schedule.ID, "error", err)
-			}
-		}
-		// 闲置时长每次扫描现读看板设置，管理员修改后下一次扫描就生效。
-		settings, err := modelsettings.LoadRuntime(ctx, queries)
-		if err != nil && ctx.Err() == nil {
-			slog.Error("load reflection settings failed", "error", err)
-		}
-		if err == nil {
-			due, err := queries.ListReflectionDue(ctx, database.ListReflectionDueParams{IdleMinutes: settings.ReflectionIdleMinutes})
-			if err != nil && ctx.Err() == nil {
-				slog.Error("scan reflection failed", "error", err)
-			}
-			for _, userID := range due {
-				if err := deliverReflection(ctx, pool, manager, userID, settings.ReflectionIdleMinutes); err != nil && ctx.Err() == nil {
-					slog.Error("deliver reflection failed", "user_id", userID, "error", err)
-				}
 			}
 		}
 		select {
@@ -103,37 +85,6 @@ func deliverSchedule(ctx context.Context, pool *pgxpool.Pool, manager *agent.Man
 			return err
 		}
 		return queries.AdvanceSchedule(ctx, database.AdvanceScheduleParams{ID: item.ID, NextRunAt: next})
-	})
-	if err != nil || sequence == 0 {
-		return err
-	}
-	manager.Wake(ctx, userID, sequence)
-	return nil
-}
-
-// deliverReflection 给一个闲置到期的用户投一次后台反思触发：在用户消息锁内按同样条件复查，
-// 扫描之后又来了新消息、开始了新请求或已被其他实例抢先投递的用户不再重复投递；提交后唤醒该用户的 Main。
-func deliverReflection(ctx context.Context, pool *pgxpool.Pool, manager *agent.Manager, userID uuid.UUID, idleMinutes int32) error {
-	var sequence int64
-	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-		queries := database.New(tx)
-		if err := queries.LockUserMessages(ctx, userID); err != nil {
-			return err
-		}
-		due, err := queries.ListReflectionDue(ctx, database.ListReflectionDueParams{
-			UserID:      &userID,
-			IdleMinutes: idleMinutes,
-		})
-		if err != nil || len(due) == 0 {
-			return err
-		}
-		prompt := fmt.Sprintf(agent.ReflectionPrompt, idleMinutes, time.Now().UTC().Format(time.RFC3339))
-		content, err := json.Marshal(map[string]string{"role": "user", "name": agent.ReflectionMessageName, "content": prompt})
-		if err != nil {
-			return err
-		}
-		sequence, err = queries.InsertTriggerMessage(ctx, database.InsertTriggerMessageParams{UserID: userID, Content: content})
-		return err
 	})
 	if err != nil || sequence == 0 {
 		return err
