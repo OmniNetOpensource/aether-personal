@@ -283,19 +283,12 @@ const SubagentEventPrompt = `Background subagent finished. This is an internal c
 // ScheduleEventPrompt 是定时触发消息的开头，后面接调度器写入的安排快照 JSON；说明这不是用户新消息。
 const ScheduleEventPrompt = `Scheduled trigger. This is not a new message from the person: you arranged it earlier with the schedule tool and it is due now. Act on the saved context below. If delivered_at is well after scheduled_for, take the delay into account. Recurring runs missed during downtime are combined into this one delivery.`
 
-// ReflectionPrompt 是闲置后台反思触发消息的正文（%d 填闲置分钟数，%s 填投递时的 UTC 时间）：
-// 先扫描最近对话，看情况更新记忆，再只在近期对话支撑得住时指出一件对方没说出口的需要或还没意识到的问题。
-const ReflectionPrompt = `Idle reflection. This is not a message from the person: at least %d minutes have passed since the last request finished. Use this quiet run as follows:
+// ReflectionPrompt 是闲置后台主动触发消息的正文（%d 填闲置分钟数，%s 填投递时的 UTC 时间）：
+// 阅读近期对话，先看是否有用户潜在需要但未意识到的内容并直接告知（没有则沉默），再按需更新记忆。
+const ReflectionPrompt = `Idle check. This is not a message from the person: at least %d minutes have passed since the last request finished. Read the recent conversation (using search_message and read_message if needed) and do the following:
 
-1. Scan the recent conversation. Read what is already in this context, including summaries of older stretches. When a detail was compacted away or you need the person's original wording, use search_message and read_message to recover those messages. Stay with what they have actually been saying and living through lately; do not mine the whole history.
-
-2. Update memory only when that scan warrants it. Memory exists so future conversations understand this person without making them repeat themselves; anything you do not write down is lost. Read /memories/memory.md, the topics tied to what you just scanned, and /memories/topics/suggestions.md (create it and link it from the root when it does not exist). Where the recent conversation adds, corrects, or outdates a note, edit it: correct wrong or outdated notes; add lasting preferences, personal details, goals, plans and recurring concerns that the person's own words support; record how they reacted to an earlier observation in suggestions.md; merge duplicates and drop what no longer matters. Keep memory.md a short index of core agreements and topic links, and put details in topic files. If nothing needs to change, leave the files as they are.
-
-3. Look for one thing they have not said. From the recent conversation, consider both:
-- A need they may have but have not brought up, implied by what they have been doing, asking, or struggling with.
-- A problem they are going through but have not recognized: a pattern, risk, or stuck point visible across those conversations that they have not named.
-
-Choose at most the single most useful observation, and only when the recent conversation actually supports it. If it is new, append it to /memories/topics/suggestions.md with the date and a short description before writing. Say it in one short, concrete message, and label it as your reading rather than as a fact they stated. If nothing is genuinely supported, or you would only be repeating something already in suggestions.md, end with no assistant text. Do not mention this background check. Do not continue or redo earlier work.
+1. Check if there is anything the person may potentially need without having realized it. If so, proactively tell them directly. Say nothing else—do not mention this background check, do not continue or redo earlier work, and if there is nothing useful that they might need without realizing it, end silently with no assistant text.
+2. Check whether memory needs updating. Read /memories/memory.md and relevant topic files, and update them only if necessary; otherwise leave the files unchanged.
 Current time (UTC): %s`
 
 // currentTimePrompt 紧跟每条用户消息，%s 填这条消息固定的 UTC 入库时间。
