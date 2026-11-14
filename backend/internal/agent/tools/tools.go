@@ -39,12 +39,8 @@ type Tool struct {
 	Execute          func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
 }
 
-// all 是 Main 的完整工具登记表，顺序即发给 Main 模型的顺序。
+// all 是 Main 的完整工具登记表，顺序即发给 Main 模型的顺序（Subagent 编排工具暂时禁用，待恢复时重新登记）。
 var all = append([]Tool{
-	spawnSubagentTool,
-	forwardSubagentTool,
-	cancelSubagentTool,
-	listSubagentsTool,
 	searchMessageTool,
 	readMessageTool,
 	memoryTool,
