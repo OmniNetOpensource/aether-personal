@@ -1,5 +1,5 @@
 // 本文件是 agent loop 的请求阶段：发出请求前阶段组装好的请求，收回完整回复并写下这次调用的日志；
-// 首段输出到达时插入占位定下回复的位置，回复本身由请求后阶段保存。压缩请求也经 sendModelRequest 发送。
+// 普通与压缩请求共用出站文本过滤；首段输出到达时插入占位，完整回复由请求后阶段保存。
 
 package agent
 
@@ -102,7 +102,12 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 
 // sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，终态日志在返回前由 finishModelCall 落库。
 func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, journal database.StartModelCallParams, onOutput func() error) (response chatResponse, retryable bool, err error) {
-	resolved, err := r.toolDeps.Images.ResolveMessages(ctx, prepared.Messages)
+	// 先过滤请求中的文本，再展开图片并转换为渠道协议。普通请求与压缩请求共用这条路径。
+	filtered, err := filterModelMessages(prepared.Messages)
+	if err != nil {
+		return response, false, err
+	}
+	resolved, err := r.toolDeps.Images.ResolveMessages(ctx, filtered)
 	if err != nil {
 		return response, false, err
 	}
