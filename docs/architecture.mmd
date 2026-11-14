@@ -53,9 +53,12 @@ flowchart TD
         MEMORY <-->|"按用户与文件路径 / 文本正文"| DB
         SCHEDULE <-->|"安排与回执同事务"| DB
 
-        SCHEDULER["调度器：每 5 秒扫描<br/>到期定时任务 · 无后台运行时的闲置反思"]
-        SCHEDULER <-->|"行锁防重插入不可见 schedule_event / reflection"| DB
+        SCHEDULER["定时调度器 scheduler：每 5 秒扫描到期 schedule"]
+        SCHEDULER <-->|"行锁防重插入不可见 schedule_event"| DB
         SCHEDULER -->|"插入后经 Redis 唤醒"| MANAGER
+        PROACTIVE["主动触发 proactive：每 5 秒扫描闲置到期用户"]
+        PROACTIVE <-->|"行锁防重插入不可见 reflection"| DB
+        PROACTIVE -->|"插入后经 Redis 唤醒"| MANAGER
     end
 
     subgraph L3["第三层：外部服务"]
