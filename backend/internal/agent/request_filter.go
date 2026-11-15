@@ -1,4 +1,4 @@
-// 本文件用同一词表过滤所有模型请求中的消息文本，并保留工具调用和渠道协议字段。
+// 本文件把所有模型请求中命中词表的消息文本替换为拼音，并保留工具调用和渠道协议字段。
 
 package agent
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// modelFilterWords 是编译进后端的词表，每行一个字面匹配词。
+// modelFilterWords 是编译进后端的词表，每行用制表符分隔原词和拼音。
 //
 //go:embed model_filter_words.txt
 var modelFilterWords string
@@ -18,12 +18,12 @@ var modelFilterWords string
 // modelTextReplacer 在进程内共用，按词表顺序解决同一位置的匹配。
 var modelTextReplacer = newModelTextReplacer()
 
-// newModelTextReplacer 从词表生成替换规则，空行不参与匹配。
+// newModelTextReplacer 按词表生成字面替换规则，保留拼音音节之间的空格。
 func newModelTextReplacer() *strings.Replacer {
 	var replacements []string
 	for _, line := range strings.Split(modelFilterWords, "\n") {
-		if word := strings.TrimSpace(line); word != "" {
-			replacements = append(replacements, word, "[已过滤]")
+		if word, pinyin, found := strings.Cut(strings.TrimSpace(line), "\t"); found {
+			replacements = append(replacements, word, pinyin)
 		}
 	}
 	return strings.NewReplacer(replacements...)
