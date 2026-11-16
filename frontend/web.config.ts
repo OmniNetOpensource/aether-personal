@@ -18,6 +18,7 @@ export default defineConfig({
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
       '/sandbox/desktop': { target: 'http://127.0.0.1:8080', ws: true },
       '/model-settings': { target: 'http://127.0.0.1:8080' },
+      '/memory-files': { target: 'http://127.0.0.1:8080' },
       '/images': { target: 'http://127.0.0.1:8080' },
       '/files': { target: 'http://127.0.0.1:8080' },
       '/shares': { target: 'http://127.0.0.1:8080' },

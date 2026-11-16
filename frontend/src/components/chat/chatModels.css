@@ -2,6 +2,7 @@
 
 /* 账号菜单内的普通操作与退出按钮使用相同触控尺寸。 */
 .chat-account-models {
+  display: block;
   width: 100%;
   margin-bottom: 8px;
   padding: 8px 12px;
@@ -11,6 +12,8 @@
   font-size: 15px;
   font-weight: 500;
   line-height: 22px;
+  text-align: center;
+  text-decoration: none;
 }
 
 /* 原生模态窗口在桌面居中，窄屏可滚动，适配亮暗主题。 */

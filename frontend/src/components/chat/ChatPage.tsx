@@ -1,5 +1,6 @@
 // 本文件组合聊天列表、输入框、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
 
+import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatController } from '../../lib/ChatController.js';
 import type { MessageComposerHandle } from './MessageComposer.js';
@@ -113,6 +114,13 @@ export function ChatPage({ controller }: { controller: ChatController }) {
               >
                 模型设置
               </button>
+              <Link
+                to="/memories"
+                className="chat-account-models chat-account-link"
+                onClick={() => setAccountOpen(false)}
+              >
+                查看记忆
+              </Link>
               <button
                 type="button"
                 className="chat-account-logout"

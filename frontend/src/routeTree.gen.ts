@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root';
 import { Route as IndexRouteImport } from './routes/index';
+import { Route as MemoriesRouteImport } from './routes/memories';
 import { Route as SShareIdRouteImport } from './routes/s.$shareId';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const MemoriesRoute = MemoriesRouteImport.update({
+  id: '/memories',
+  path: '/memories',
   getParentRoute: () => rootRouteImport,
 } as any);
 const SShareIdRoute = SShareIdRouteImport.update({
@@ -25,27 +31,31 @@ const SShareIdRoute = SShareIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
+  '/memories': typeof MemoriesRoute;
   '/s/$shareId': typeof SShareIdRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
+  '/memories': typeof MemoriesRoute;
   '/s/$shareId': typeof SShareIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   '/': typeof IndexRoute;
+  '/memories': typeof MemoriesRoute;
   '/s/$shareId': typeof SShareIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: '/' | '/s/$shareId';
+  fullPaths: '/' | '/memories' | '/s/$shareId';
   fileRoutesByTo: FileRoutesByTo;
-  to: '/' | '/s/$shareId';
-  id: '__root__' | '/' | '/s/$shareId';
+  to: '/' | '/memories' | '/s/$shareId';
+  id: '__root__' | '/' | '/memories' | '/s/$shareId';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
+  MemoriesRoute: typeof MemoriesRoute;
   SShareIdRoute: typeof SShareIdRoute;
 }
 
@@ -56,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/';
       fullPath: '/';
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/memories': {
+      id: '/memories';
+      path: '/memories';
+      fullPath: '/memories';
+      preLoaderRoute: typeof MemoriesRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     '/s/$shareId': {
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  MemoriesRoute: MemoriesRoute,
   SShareIdRoute: SShareIdRoute,
 };
 export const routeTree = rootRouteImport

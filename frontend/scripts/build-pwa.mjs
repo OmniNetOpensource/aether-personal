@@ -50,7 +50,10 @@ const PATHS = new Set(ASSETS);
 
 // 只有应用页面随版本切换刷新，静态资源与 API 不参与页面导航。
 const isAppPage = (pathname) =>
-  pathname === '/' || pathname === '/index.html' || /^\\/s\\/[^/]+$/.test(pathname);
+  pathname === '/' ||
+  pathname === '/index.html' ||
+  pathname === '/memories' ||
+  /^\\/s\\/[^/]+$/.test(pathname);
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
