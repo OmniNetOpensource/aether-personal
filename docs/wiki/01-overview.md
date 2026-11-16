@@ -75,7 +75,7 @@ flowchart LR
 
 PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/build-pwa.mjs` 从现有图标生成普通图标、Apple 图标与带安全边距的 maskable 图标，随后按构建内容生成 Service Worker。缓存只包含本次构建的公开静态资源，不缓存认证响应、消息 API 或 WebSocket。入口缓存 `/`，避免 Go 对 `/index.html` 的重定向影响离线导航。
 
-PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
+PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱、「模型设置」、「查看记忆」（跳转 `/memories` 只读记忆浏览器）与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
 
 2026-11-02，用户要求前端改为 TanStack Start。Start 基于现有 React、React DOM 与 TypeScript，接管文件路由、HTML 外壳和构建时预渲染，底层构建工具保留 Rsbuild。当前采用 [Start 官方 SPA 模式](https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode)：构建时生成公开的 HTML 外壳，登录与聊天在浏览器启动后通过既有 Go WebSocket 恢复。聊天数据属于登录用户，当前无需为了搜索引擎渲染消息，因此继续静态部署，避免新增常驻 JavaScript 服务或第二套认证与消息 API。
 
