@@ -8,6 +8,8 @@ const apiMethods = new Map([
   ['/files', 'POST'],
   ['/healthz', 'GET'],
   ['/model-settings', 'GET, PUT'],
+  ['/memory-files', 'GET'],
+  ['/memory-files/content', 'GET'],
 ]);
 
 // resolveApiMethod 识别固定 API 路径与动态公开分享读取路径对应的允许 HTTP 方法。
@@ -26,8 +28,11 @@ export default {
       if (/^\/(auth|admin|sandbox|shares)(\/|$)/.test(url.pathname)) {
         return new Response('Not found', { status: 404 });
       }
-      // 公开分享阅读页 /s/<token> 复用 SPA 根外壳，缺失的脚本与静态资源路径仍原样返回 404。
-      if (/^\/s\/[^/]+$/.test(url.pathname) && (request.method === 'GET' || request.method === 'HEAD')) {
+      // 公开分享阅读页 /s/<token> 与只读记忆查看页 /memories 复用 SPA 根外壳，缺失的脚本与静态资源路径仍原样返回 404。
+      if (
+        (url.pathname === '/memories' || /^\/s\/[^/]+$/.test(url.pathname)) &&
+        (request.method === 'GET' || request.method === 'HEAD')
+      ) {
         return env.ASSETS.fetch(new Request(new URL('/', url.origin), request));
       }
       return env.ASSETS.fetch(request);
