@@ -12,6 +12,14 @@ WHERE user_id = $1 ORDER BY path;
 -- name: GetMemoryFile :one
 SELECT content FROM memory_files WHERE user_id = $1 AND path = $2;
 
+-- name: ListUserMemoryFiles :many
+SELECT path, octet_length(content)::bigint AS bytes, updated_at FROM memory_files
+WHERE user_id = $1 ORDER BY path;
+
+-- name: GetUserMemoryFile :one
+SELECT path, content, octet_length(content)::bigint AS bytes, updated_at FROM memory_files
+WHERE user_id = $1 AND path = $2;
+
 -- name: CreateMemoryFile :exec
 INSERT INTO memory_files (user_id, path, content) VALUES ($1, $2, $3);
 

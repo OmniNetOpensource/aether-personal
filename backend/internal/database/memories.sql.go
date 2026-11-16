@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -70,6 +71,35 @@ func (q *Queries) GetMemoryFile(ctx context.Context, arg GetMemoryFileParams) (s
 	return content, err
 }
 
+const getUserMemoryFile = `-- name: GetUserMemoryFile :one
+SELECT path, content, octet_length(content)::bigint AS bytes, updated_at FROM memory_files
+WHERE user_id = $1 AND path = $2
+`
+
+type GetUserMemoryFileParams struct {
+	UserID uuid.UUID
+	Path   string
+}
+
+type GetUserMemoryFileRow struct {
+	Path      string
+	Content   string
+	Bytes     int64
+	UpdatedAt time.Time
+}
+
+func (q *Queries) GetUserMemoryFile(ctx context.Context, arg GetUserMemoryFileParams) (GetUserMemoryFileRow, error) {
+	row := q.db.QueryRow(ctx, getUserMemoryFile, arg.UserID, arg.Path)
+	var i GetUserMemoryFileRow
+	err := row.Scan(
+		&i.Path,
+		&i.Content,
+		&i.Bytes,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listMemoryFiles = `-- name: ListMemoryFiles :many
 SELECT path, octet_length(content)::bigint AS bytes FROM memory_files
 WHERE user_id = $1 ORDER BY path
@@ -90,6 +120,37 @@ func (q *Queries) ListMemoryFiles(ctx context.Context, userID uuid.UUID) ([]List
 	for rows.Next() {
 		var i ListMemoryFilesRow
 		if err := rows.Scan(&i.Path, &i.Bytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserMemoryFiles = `-- name: ListUserMemoryFiles :many
+SELECT path, octet_length(content)::bigint AS bytes, updated_at FROM memory_files
+WHERE user_id = $1 ORDER BY path
+`
+
+type ListUserMemoryFilesRow struct {
+	Path      string
+	Bytes     int64
+	UpdatedAt time.Time
+}
+
+func (q *Queries) ListUserMemoryFiles(ctx context.Context, userID uuid.UUID) ([]ListUserMemoryFilesRow, error) {
+	rows, err := q.db.Query(ctx, listUserMemoryFiles, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserMemoryFilesRow
+	for rows.Next() {
+		var i ListUserMemoryFilesRow
+		if err := rows.Scan(&i.Path, &i.Bytes, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

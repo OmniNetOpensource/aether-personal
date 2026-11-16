@@ -63,6 +63,8 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *re
 	mux.Handle("PUT /admin/runtime-settings", s.requireAdmin(http.HandlerFunc(s.updateAdminRuntimeSettings)))
 	mux.HandleFunc("GET /model-settings", s.requireChatUser(s.getUserModels))
 	mux.HandleFunc("PUT /model-settings", s.requireChatUser(s.saveUserModels))
+	mux.HandleFunc("GET /memory-files", s.requireChatUser(s.listMemoryFiles))
+	mux.HandleFunc("GET /memory-files/content", s.requireChatUser(s.getMemoryFileContent))
 	mux.Handle("GET /admin/quotas", s.requireAdmin(http.HandlerFunc(s.adminQuotas)))
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
@@ -72,6 +74,7 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *re
 	mux.HandleFunc("POST /images", s.uploadImage)
 	mux.HandleFunc("POST /files", s.uploadFile)
 	if appConfig.FrontendDir != "" {
+		mux.HandleFunc("GET /memories", s.serveFrontendShell)
 		mux.HandleFunc("GET /s/{token}", s.serveFrontendShell)
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
 	}
