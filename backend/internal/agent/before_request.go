@@ -132,21 +132,14 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 	if reason == "" {
 		return r.buildAgentRequest(rows, model), nil
 	}
-	// 待压缩范围：Main 消息尾部有未回复的用户本人新消息时保留该段原文；工具续跑或 Subagent 全量压缩。
-	keepFrom := len(rows)
-	for keepFrom > 0 && !rows[keepFrom-1].IsSummary && parseContextMessage(rows[keepFrom-1].Content).Role == "user" {
-		keepFrom--
-	}
-	keepsUserMessage := false
-	for _, row := range rows[keepFrom:] {
-		if row.Sender != nil && *row.Sender == "user" {
-			keepsUserMessage = true
+	// 待压缩范围：从最新一条摘要（若有）压到最新一条 assistant；若该 assistant 带工具调用，则延展到它最后的 tool 回执，避免拆散工具链，其后消息保留原文。
+	keepFrom := 0
+	for index := len(rows) - 1; index >= 0; index-- {
+		role := parseContextMessage(rows[index].Content).Role
+		if role == "assistant" || role == "tool" {
+			keepFrom = index + 1
+			break
 		}
-	}
-	if keepsUserMessage {
-		reason = "user_message"
-	} else {
-		keepFrom = len(rows)
 	}
 	rowsToCompact := rows[:keepFrom]
 	var through int64
