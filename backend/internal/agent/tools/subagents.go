@@ -154,9 +154,6 @@ func executeCancelSubagent(ctx context.Context, _ Dependencies, queries *databas
 		return "", err
 	}
 	if affected == 1 {
-		if err := queries.InterruptModelCalls(ctx, database.InterruptModelCallsParams{UserID: userID, SubagentID: &subagentID}); err != nil {
-			return "", err
-		}
 		if err := queries.DiscardGeneratingReply(ctx, database.DiscardGeneratingReplyParams{UserID: userID, SubagentID: &subagentID}); err != nil {
 			return "", err
 		}

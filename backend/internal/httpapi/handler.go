@@ -60,7 +60,6 @@ func NewHandler(wsCtx, drainCtx context.Context, databasePool *pgxpool.Pool, red
 	mux.Handle("POST /admin/logout", s.requireAdmin(http.HandlerFunc(s.adminLogout)))
 	mux.Handle("GET /admin/me", s.requireAdmin(http.HandlerFunc(s.adminMe)))
 	mux.Handle("GET /admin/snapshot", s.requireAdmin(http.HandlerFunc(s.adminSnapshot)))
-	mux.Handle("GET /admin/calls/{id}", s.requireAdmin(http.HandlerFunc(s.adminCallDetail)))
 	mux.Handle("GET /admin/timeline", s.requireAdmin(http.HandlerFunc(s.adminTimeline)))
 	mux.Handle("GET /admin/timeline/messages/{id}", s.requireAdmin(http.HandlerFunc(s.adminTimelineMessage)))
 	mux.Handle("GET /admin/runtime-settings", s.requireAdmin(http.HandlerFunc(s.adminRuntimeSettings)))

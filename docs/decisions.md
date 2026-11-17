@@ -28,8 +28,8 @@
 | 项目定位 | 2026-10-30 改为以维护者自用为主的开源 personal agent，其他人也可自行部署或使用维护者实例；不再以企业 fork 服务其终端用户为首要目标 | [01](wiki/01-overview.md#项目定位) |
 | 项目名称 | `aether-personal` | [01](wiki/01-overview.md#代码托管) |
 | 用户删除 | 仅管理员可删除，用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
-| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（全局运行参数与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 运行过程页支持查看各 Subagent 独立轨迹，模型选择移至 App | [08](wiki/08-admin-observability.md) |
-| Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、Subagent 回报、失败请求和不可见指令，支持在 Main 与各后台 Subagent 间切换与一键跳转，长内容截断后按需加载 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
+| 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（全局运行参数与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 运行过程页支持查看各 Subagent 独立轨迹，模型选择移至 App；2026-11-17 移除 `model_calls` 表（`00059`）与请求详情弹窗，运行过程时间线直接展示消息轨迹 | [08](wiki/08-admin-observability.md) |
+| Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、Subagent 回报和不可见指令，支持在 Main 与各后台 Subagent 间切换与一键跳转，长内容截断后按需加载；2026-11-17 随 `model_calls` 移除不再展示单次调用元数据与请求/响应详情 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
 | API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务（已删除） | 2026-11-13 整体移除：`tasks` 表（`00058`）、三个任务工具、收尾提醒轮以及前端任务进度胶囊与浮层全部删除；理由是每条简单请求先登记再改状态的 2~3 轮工具调用开销过高、影响响应速度与日常体感，多目标并行直接交由上下文与 `spawn_subagent` 处理。此前 2026-11-06 新增、2026-11-07 增设收尾提醒、2026-11-12 新增前端展示及 `00055` 放开并发的历史记录保留供追溯 | [11](wiki/11-tasks.md) |
@@ -73,7 +73,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`memory_files`、`schedules`、`sandbox_workspaces`、`model_calls`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions` | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`memory_files`、`schedules`、`sandbox_workspaces`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions`（`model_calls` 已于 2026-11-17 由 `00059` 移除） | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
@@ -129,7 +129,7 @@
 | 实现顺序 | 最小对话 → 边生成边显示 → 更多工具 → 压缩与历史检索（Subagent 已于 2026-11-02 删除） | [05](wiki/05-main-runtime.md#实现顺序) |
 | 主对话 | 每用户一条长期主对话，同一份 `messageList` | [05](wiki/05-main-runtime.md) |
 | Schedule | 2026-11-08 重新加入：Main 用 `schedule` 工具设置一次性（带偏移时间）或周期（五段 cron 加 IANA 时区）定时任务；后台调度器每 5 秒扫描，到期把保存的上下文作为不可见 `schedule_event` 消息投进对话并唤醒 Main，投递与推进同事务、不重复投递，停机错过的周期触发合并成一次；一次性安排投递后删除。聊天界面不加任何东西，查看与修改通过对话完成。理由是提醒与周期检查都是常见用法，复用消息尾部判断有活，agent loop 不需改动。此前 2026-11-03 曾删除旧实现（`00030`） | [10](wiki/10-schedules.md) |
-| 闲置后台反思 | 2026-11-08 新增闲置反思，2026-11-09 曾由 `00047` 拆成三阶段；2026-11-11 改为距离最近一次请求满 `reflection_idle_minutes`（默认 120 分钟，看板可调）即持续触发、不受是否投递过限制，并由 `00053` 合并回单一 `reflection` 触发。2026-11-14 拆出独立的 `internal/proactive/proactive.go` 循环（`scheduler.go` 只管 `schedule`），并将提示词精简为两步：阅读近期对话，1. 若有用户潜在需要但未意识到的内容则直接告知（不说其他内容，没有则沉默）；2. 按需更新记忆。2026-11-16 补充限制：若上一条主对话输入本身是一次空的 proactive（其后没有对用户可见的消息），则不再触发下一次 proactive，直到有新输入为止 | [10](wiki/10-schedules.md#闲置后台反思) |
+| 闲置后台反思 | 2026-11-08 新增闲置反思，2026-11-09 曾由 `00047` 拆成三阶段；2026-11-11 改为距离最近一次请求满 `reflection_idle_minutes`（默认 120 分钟，看板可调）即持续触发、不受是否投递过限制，并由 `00053` 合并回单一 `reflection` 触发。2026-11-14 拆出独立的 `internal/proactive/proactive.go` 循环（`scheduler.go` 只管 `schedule`），并将提示词精简为两步：阅读近期对话，1. 若有用户潜在需要但未意识到的内容则直接告知（不说其他内容，没有则沉默）；2. 按需更新记忆。2026-11-16 补充限制：若上一条主对话输入本身是一次空的 proactive（其后没有对用户可见的消息），则不再触发下一次 proactive，直到有新输入为止；2026-11-17 随 `model_calls` 删除改为直接根据 `messages` 表最新一条 Main 消息的时间判断闲置时长 | [10](wiki/10-schedules.md#闲置后台反思) |
 | 回复用户 | 正文在完整生成后推送；独立任务可通过 `forward_subagent` 零改写直发。2026-11-06 曾去掉任务产物绑定、2026-11-13 整体移除任务队列，见 [11](wiki/11-tasks.md)。 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
 | 连续消息与多个请求 | 2026-11-04：按目标判断消息关系，不同目标分别处理，同一目标的补充与修正合并处理；换话题不自动取消旧请求，逐个核对结果、必要澄清或阻塞原因，压缩摘要保留各请求状态，避免漏答。2026-11-06 至 2026-11-12 曾引入持久化 `tasks` 队列，2026-11-13 因轻问题额外多轮工具调用过重已整体移除，直接通过上下文、并行 Subagent 与摘要保持连续性 | [05](wiki/05-main-runtime.md#连续消息与多个请求2026-11-04)、[11](wiki/11-tasks.md) |
 | 运行循环 | 2026-11-08 按三阶段重排：请求前（清理上次进程退出的残留、补跑缺回执的工具、开步骤、压缩与组装）、请求（发出并收回完整回复）、请求后（保存回复并执行工具、重试、失败收尾），循环主体只判断还有没有活；残留清理由运行开头挪到每轮请求前开头，重试改为循环的下一轮，删除 Manager 对临时数据库错误的退避重试、启动读不到待办即退出。理由是代码直接展现三个阶段，修改时容易定位并限定范围，且不再防御走不到的场景，见 [05](wiki/05-main-runtime.md#agent-loop-三阶段2026-11-08)。2026-11-06 改为单进程 Manager 直接唤醒、启动时恢复，取代仅通知调度，见 [05](wiki/05-main-runtime.md#停机与开机2026-11-09)。2026-11-07 曾增加 `task_reminder` 收尾任务提醒，2026-11-13 随任务系统整体移除，`runner.go` 恢复为仅依 `HasMainWork` 判断是否继续。以下为原有基础：2026-11-02 简化：用户消息入库、一批工具回执齐全后唤醒 Runner；Runner 只看消息尾部决定执行缺回执的工具、回复或停下，要不要运行由视图 `main_work`（最新一条消息）判断；失败收尾记 `users.main_failed_through_sequence`，有更新的消息才再试；assistant 消息与 step 同事务落库，删除 `steps.model_reply`。理由是消息表成为唯一事实，不再另外维护已读位置与未完成步骤。2026-11-03 改为 Runner 只认 PostgreSQL 通知：删每秒与启动扫描和各处进程内直接唤醒，接受漏通知后靠下一次通知顺带恢复、无时限保证，理由是调度只留一条事件路径 | [05](wiki/05-main-runtime.md#运行循环-已实现) |

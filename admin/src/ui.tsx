@@ -102,15 +102,6 @@ export function CopyChip({
   );
 }
 
-// RequestIds 把这次模型请求在本系统中的调用 ID 放到列表、时间线与详情顶部，供直接复制。
-export function RequestIds({ id, notify }: { id: string; notify: (message: string) => void }) {
-  return (
-    <div className="request-ids">
-      <CopyChip label="调用 ID" value={id} notify={notify} />
-    </div>
-  );
-}
-
 // Foldable 把长文本放进可折叠区域；展开状态按 storageKey 记在外部 Map 里，自动刷新重绘后保持不变。短文本默认展开。
 export function Foldable({
   storageKey,

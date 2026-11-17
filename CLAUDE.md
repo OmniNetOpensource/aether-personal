@@ -26,7 +26,7 @@
 核心是 `backend/internal/agent/` 的 agent loop，每一轮依次走三个阶段，说明见 `docs/wiki/05-main-runtime.md` 的「Agent loop 三阶段」：
 
 - 请求前 `before_request.go`：整理状态并产出请求——清理上次进程退出的残留、补跑缺回执的工具、开步骤、读设置、必要时压缩、组装请求。
-- 请求 `request.go`：发出请求并收回完整回复——调用日志、思考中被新输入取消、首段输出占位。
+- 请求 `request.go`：发出请求并收回完整回复——思考中被新输入取消、首段输出占位。
 - 请求后 `after_request.go`：处理本轮结局——保存回复并执行工具、被新输入取代、临时故障重试、失败收尾；前两个阶段的错误也交给它。
 - 循环主体 `runner.go` 只判断还有没有活（含收尾任务提醒），按顺序调用三个阶段，不放业务逻辑。
 
@@ -62,20 +62,20 @@ go build ./... && go vet ./...
 - 用 `python3 infra/prod/inspect-prod.py logs --since 30m --tail 200` 查两个 Go API 容器的近期日志。用 `--service api-1` 或 `--service api-2` 选单个实例。按绝对时间查询时，给 `--since` 和 `--until` 传带时区的 RFC 3339 时间。
 - 用 `python3 infra/prod/inspect-prod.py sql` 查持久状态。通过 stdin 传入一条返回结果集的 SQL 查询。PostgreSQL 在只读事务中执行，`psql` 输出带表头的 CSV，时间字段按 UTC 显示。按问题选择列和时间窗口，使用 `LIMIT` 控制结果量。
 
-例如，按以下方式查最近的模型调用。
+例如，按以下方式查最近的执行步骤。
 
 ```sh
 python3 infra/prod/inspect-prod.py sql <<'SQL'
-SELECT id, user_id, step_id, requested_model, outcome, http_status,
-       started_at, finished_at, duration_ms, output_tokens
-FROM model_calls
+SELECT id, user_id, subagent_id, model, purpose, input_tokens, output_tokens,
+       error, started_at, finished_at
+FROM steps
 WHERE started_at >= now() - interval '1 hour'
 ORDER BY started_at DESC, id DESC
 LIMIT 30;
 SQL
 ```
 
-在[生产管理看板](https://admin-aether.forkicks.fun)按用户和时间定位调用，用 `model_calls.id` 核对调用详情，再查看请求、响应和关联工具轨迹。到容器日志里找同一次故障时，用该记录的 `user_id` 和调用时间附近的窗口匹配。
+在[生产管理看板](https://admin-aether.forkicks.fun)按用户和时间查看运行过程时间线（输入、推理与工具轨迹）。到容器日志里找同一次故障时，用该记录的 `user_id` 和调用时间附近的窗口匹配。
 
 ## 约定
 

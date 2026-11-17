@@ -10,7 +10,7 @@ flowchart TD
         IMAGES["存储与缓存：私有 OSS 读写签名 · Redis 共享图片缓存"]
         MANAGER["Manager：对等实例双队列调度<br/>Main 与 Subagent 独立槽位池 · 租约续期 · 思考打断与子代理取消 · 5 秒补偿"]
         REDIS[("Redis 8（纯内存无持久化）：Main/Subagent 唤醒队列 · 临时租约 · 思考打断/取消/聊天推送 Pub/Sub · oss:// 图片缓存")]
-        DB[("PostgreSQL：消息历史 · Main/Subagent 栅栏代数 · 后台 Subagent · 主题记忆 · 定时任务 · 工作区绑定 · 步骤与调用日志")]
+        DB[("PostgreSQL：消息历史 · Main/Subagent 栅栏代数 · 后台 Subagent · 主题记忆 · 定时任务 · 工作区绑定 · 执行步骤")]
 
         subgraph MAINBOX["每用户固定一个 Main + 按需并行后台 Subagent"]
             MAIN["Main Runtime：三阶段 Agent Loop · 编排与电脑执行 · 把关与直通转发"]
@@ -69,7 +69,7 @@ flowchart TD
     end
 
     ADMIN["管理看板：admin/ · Main/Subagent 运行过程时间线、全局运行参数与凭证<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
-    ADMIN <-->|"独立密码登录 / Main 与 Subagent 轨迹、调用详情与配置"| API
+    ADMIN <-->|"独立密码登录 / Main 与 Subagent 轨迹与配置"| API
     CLIENT <-->|"Caddy 轮询与健康检查 / WebSocket 登录、历史、收发与推送"| API
     DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API
     API <-->|"被动观察桌面流（不唤醒实例）"| SANDBOX

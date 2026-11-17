@@ -82,34 +82,6 @@ type MessageShareItem struct {
 	MessageID uuid.UUID
 }
 
-type ModelCall struct {
-	ID                     uuid.UUID
-	StepID                 uuid.UUID
-	UserID                 uuid.UUID
-	RequestedModel         string
-	ResponseModel          *string
-	ProviderGenerationID   *string
-	Outcome                string
-	HttpStatus             *int32
-	StartedAt              time.Time
-	FinishedAt             *time.Time
-	DurationMs             *int64
-	InputTokens            *int32
-	OutputTokens           *int32
-	Cost                   *decimal.Decimal
-	ToolNames              []string
-	FailureKind            *string
-	RequestBody            []byte
-	ResponseBody           []byte
-	ResponseTruncated      bool
-	Purpose                string
-	CompactReason          *string
-	ContextTokensBefore    *int32
-	ContextTokensAfter     *int32
-	SummaryThroughSequence *int64
-	SubagentID             *uuid.UUID
-}
-
 type ModelSetting struct {
 	ID                     uuid.UUID
 	Singleton              bool

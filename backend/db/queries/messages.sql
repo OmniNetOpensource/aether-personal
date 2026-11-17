@@ -150,8 +150,8 @@ INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, 
 VALUES ($1, $2, 'user', $3, $4, true, $5);
 
 -- name: GetLastContextUsage :one
-SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
-FROM model_calls WHERE user_id = sqlc.arg(user_id)
+SELECT model AS requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
+FROM steps WHERE user_id = sqlc.arg(user_id)
  AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
- AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL
-ORDER BY started_at DESC LIMIT 1;
+ AND purpose = 'agent' AND finished_at IS NOT NULL AND error IS NULL AND input_tokens IS NOT NULL
+ORDER BY started_at DESC, id DESC LIMIT 1;

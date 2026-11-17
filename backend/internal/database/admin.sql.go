@@ -12,46 +12,14 @@ import (
 	"github.com/google/uuid"
 )
 
-const adminSnapshot = `-- name: AdminSnapshot :one
-
-WITH models AS (
- SELECT c.requested_model AS model
- FROM model_calls c
- WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
-  AND ($3::uuid IS NULL OR c.user_id = $3::uuid)
- GROUP BY c.requested_model
- ORDER BY count(*) DESC, c.requested_model
- LIMIT 100
-)
-SELECT jsonb_build_object(
- 'generated_at', now(),
- 'models', (SELECT coalesce(jsonb_agg(to_jsonb(models)), '[]'::jsonb) FROM models)
-)::jsonb AS payload
-`
-
-type AdminSnapshotParams struct {
-	FromAt time.Time
-	ToAt   time.Time
-	UserID *uuid.UUID
-}
-
-// 本文件是管理看板的查询集合：提供时间线筛选所需的用户、模型候选、Main 与 Subagent 状态，合并指定 Agent 的消息与模型请求时间线，并读取单次调用或单条消息详情（sqlc 据此生成代码）。
-// 返回时间窗口内出现过的模型候选，供时间线筛选输入框提示。
-func (q *Queries) AdminSnapshot(ctx context.Context, arg AdminSnapshotParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, adminSnapshot, arg.FromAt, arg.ToAt, arg.UserID)
-	var payload []byte
-	err := row.Scan(&payload)
-	return payload, err
-}
-
 const getAdminAgentStatus = `-- name: GetAdminAgentStatus :one
 SELECT u.id AS user_id, u.email,
- CASE
-  WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id)
-    OR EXISTS (SELECT 1 FROM subagents sa WHERE sa.user_id = u.id AND sa.status = 'running') THEN 'processing'
-  WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id AND m.subagent_id IS NULL) THEN 'failed'
-  ELSE 'idle'
- END::text AS status
+	CASE
+		WHEN EXISTS (SELECT 1 FROM main_work w WHERE w.user_id = u.id)
+		  OR EXISTS (SELECT 1 FROM subagents sa WHERE sa.user_id = u.id AND sa.status = 'running') THEN 'processing'
+		WHEN u.main_failed_through_sequence >= (SELECT max(m.sequence) FROM messages m WHERE m.user_id = u.id AND m.subagent_id IS NULL) THEN 'failed'
+		ELSE 'idle'
+	END::text AS status
 FROM users u
 WHERE u.id = $1::uuid
 `
@@ -67,23 +35,6 @@ func (q *Queries) GetAdminAgentStatus(ctx context.Context, selectedUserID uuid.U
 	row := q.db.QueryRow(ctx, getAdminAgentStatus, selectedUserID)
 	var i GetAdminAgentStatusRow
 	err := row.Scan(&i.UserID, &i.Email, &i.Status)
-	return i, err
-}
-
-const getAdminCallDetail = `-- name: GetAdminCallDetail :one
-SELECT request_body, response_body, response_truncated FROM model_calls WHERE id = $1
-`
-
-type GetAdminCallDetailRow struct {
-	RequestBody       []byte
-	ResponseBody      []byte
-	ResponseTruncated bool
-}
-
-func (q *Queries) GetAdminCallDetail(ctx context.Context, id uuid.UUID) (GetAdminCallDetailRow, error) {
-	row := q.db.QueryRow(ctx, getAdminCallDetail, id)
-	var i GetAdminCallDetailRow
-	err := row.Scan(&i.RequestBody, &i.ResponseBody, &i.ResponseTruncated)
 	return i, err
 }
 
@@ -148,68 +99,29 @@ func (q *Queries) ListAdminSubagents(ctx context.Context, selectedUserID uuid.UU
 
 const listAdminTimeline = `-- name: ListAdminTimeline :many
 WITH user_messages AS MATERIALIZED (
- SELECT m.id, m.user_id, m.sequence, m.role, m.content, m.sender, m.step_id, m.is_summary, m.created_at, m.client_message_id, m.summary_through_sequence, m.search_text, m.visible, m.generating, m.chat_updated_sequence, m.subagent_id, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
- FROM messages m
- WHERE m.user_id = $5::uuid
-  AND m.subagent_id IS NOT DISTINCT FROM $6::uuid
-  AND NOT m.generating
-), calls AS MATERIALIZED (
- SELECT c.id, c.step_id, c.user_id, c.requested_model, c.response_model, c.provider_generation_id, c.outcome, c.http_status, c.started_at, c.finished_at, c.duration_ms, c.input_tokens, c.output_tokens, c.cost, c.tool_names, c.failure_kind, c.request_body, c.response_body, c.response_truncated, c.purpose, c.compact_reason, c.context_tokens_before, c.context_tokens_after, c.summary_through_sequence, c.subagent_id, jsonb_build_object('id',c.id,'step_id',c.step_id,
-  'requested_model',c.requested_model,'response_model',c.response_model,
-  'outcome',c.outcome,'http_status',c.http_status,'purpose',c.purpose,
-  'compact_reason',c.compact_reason,'context_tokens_before',c.context_tokens_before,
-  'summary_through_sequence',c.summary_through_sequence,
-  'failure_kind',c.failure_kind,'started_at',c.started_at,'finished_at',c.finished_at,'duration_ms',c.duration_ms,
-  'input_tokens',c.input_tokens,'output_tokens',c.output_tokens,'cost',c.cost::text,
-  'tool_names',to_jsonb(c.tool_names)) AS payload
- FROM model_calls c
- WHERE c.user_id = $5::uuid
-  AND c.subagent_id IS NOT DISTINCT FROM $6::uuid
-  AND ($7::text IS NULL OR c.requested_model = $7::text)
-  AND ($8::text IS NULL OR c.outcome = $8::text)
-), nodes AS (
- SELECT m.id, m.sequence::bigint AS sequence, m.created_at AS at, m.order_at,
-  m.role, m.content, m.sender, m.is_summary, 'message'::text AS type, c.payload AS call
- FROM user_messages m LEFT JOIN LATERAL (
-  SELECT mc.payload FROM calls mc WHERE (m.role = 'assistant' OR m.is_summary) AND mc.step_id = m.step_id AND mc.outcome = 'succeeded'
-  ORDER BY mc.started_at DESC, mc.id DESC LIMIT 1
- ) c ON true
- WHERE m.created_at >= $9::timestamptz AND m.created_at < $10::timestamptz
-  AND ($7::text IS NULL AND $8::text IS NULL OR EXISTS (
-   SELECT 1 FROM calls mc WHERE mc.step_id = m.step_id OR (
-    -- 用户输入没有 step_id，关联从收到输入到下一条模型回复所经历的请求尝试。
-    m.step_id IS NULL AND mc.started_at >= m.created_at
-    AND mc.started_at <= coalesce((
-     SELECT coalesce((SELECT max(request.started_at) FROM model_calls request WHERE request.step_id = reply.step_id), reply.created_at)
-     FROM user_messages reply WHERE reply.sequence > m.sequence AND reply.role = 'assistant'
-     ORDER BY reply.sequence LIMIT 1
-    ), 'infinity'::timestamptz)
-   )
-  ))
- UNION ALL
- SELECT c.id, 0::bigint, c.started_at, c.started_at,
-  ''::text, '{}'::jsonb, NULL::text, false, 'call'::text, c.payload
- FROM calls c WHERE c.outcome <> 'succeeded'
-  AND c.started_at >= $9::timestamptz AND c.started_at < $10::timestamptz
+	SELECT m.id, m.user_id, m.sequence, m.role, m.content, m.sender, m.step_id, m.is_summary, m.created_at, m.client_message_id, m.summary_through_sequence, m.search_text, m.visible, m.generating, m.chat_updated_sequence, m.subagent_id, max(m.created_at) OVER (ORDER BY m.sequence) AS order_at
+	FROM messages m
+	WHERE m.user_id = $7::uuid
+		AND m.subagent_id IS NOT DISTINCT FROM $8::uuid
+		AND NOT m.generating
 )
-SELECT id, sequence, at, order_at::timestamptz AS order_at, role, content, sender, is_summary, type, call::jsonb AS call
-FROM nodes
-WHERE $1::timestamptz IS NULL
- OR (order_at, sequence, id) < ($1::timestamptz, $2::bigint, $3::uuid)
-ORDER BY order_at DESC, sequence DESC, id DESC LIMIT $4::integer
+SELECT id, sequence::bigint AS sequence, created_at AS at, order_at::timestamptz AS order_at, role, content, sender, is_summary
+FROM user_messages
+WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+	AND ($3::timestamptz IS NULL
+		OR (order_at, sequence, id) < ($3::timestamptz, $4::bigint, $5::uuid))
+ORDER BY order_at DESC, sequence DESC, id DESC LIMIT $6::integer
 `
 
 type ListAdminTimelineParams struct {
+	FromAt         time.Time
+	ToAt           time.Time
 	CursorAt       *time.Time
 	CursorSequence int64
 	CursorID       *uuid.UUID
 	PageLimit      int32
 	UserID         uuid.UUID
 	SubagentID     *uuid.UUID
-	Model          *string
-	Outcome        *string
-	FromAt         time.Time
-	ToAt           time.Time
 }
 
 type ListAdminTimelineRow struct {
@@ -221,23 +133,19 @@ type ListAdminTimelineRow struct {
 	Content   []byte
 	Sender    *string
 	IsSummary bool
-	Type      string
-	Call      []byte
 }
 
-// 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息与未产出消息的请求，共用同一游标翻页。
+// 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息时间线，使用单调不回退的 order_at 与序号游标翻页。
 func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelineParams) ([]ListAdminTimelineRow, error) {
 	rows, err := q.db.Query(ctx, listAdminTimeline,
+		arg.FromAt,
+		arg.ToAt,
 		arg.CursorAt,
 		arg.CursorSequence,
 		arg.CursorID,
 		arg.PageLimit,
 		arg.UserID,
 		arg.SubagentID,
-		arg.Model,
-		arg.Outcome,
-		arg.FromAt,
-		arg.ToAt,
 	)
 	if err != nil {
 		return nil, err
@@ -255,8 +163,6 @@ func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelinePa
 			&i.Content,
 			&i.Sender,
 			&i.IsSummary,
-			&i.Type,
-			&i.Call,
 		); err != nil {
 			return nil, err
 		}
@@ -269,6 +175,7 @@ func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelinePa
 }
 
 const listAdminUsers = `-- name: ListAdminUsers :many
+
 SELECT u.id, u.email, u.created_at
 FROM users u
 WHERE ($1::uuid IS NULL OR u.id = $1::uuid)
@@ -282,6 +189,7 @@ type ListAdminUsersRow struct {
 	CreatedAt time.Time
 }
 
+// 本文件是管理看板的查询集合：提供时间线筛选所需的用户列表、Main 与 Subagent 状态，按游标读取指定 Agent 的消息时间线，并读取单条消息详情（sqlc 据此生成代码）。
 // 列出用户供看板下拉框选择，按创建时间倒序排列。
 func (q *Queries) ListAdminUsers(ctx context.Context, userID *uuid.UUID) ([]ListAdminUsersRow, error) {
 	rows, err := q.db.Query(ctx, listAdminUsers, userID)

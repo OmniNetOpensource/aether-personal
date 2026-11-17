@@ -70,42 +70,9 @@ export interface SnapshotSubagent {
 
 export interface Snapshot {
   generated_at: string;
-  models: { model: string }[];
   users: { items: SnapshotUser[] };
   agents: { items: SnapshotAgent[] };
   subagents?: { items: SnapshotSubagent[] };
-}
-
-// Call 是单次模型请求尝试的日志行，列表与时间线共用。
-export interface Call {
-  id: string;
-  step_id: string;
-  user_id?: string;
-  email?: string;
-  requested_model: string;
-  response_model: string | null;
-  outcome: string;
-  http_status: number | null;
-  purpose: string;
-  compact_reason?: string | null;
-  context_tokens_before?: number | null;
-  summary_through_sequence?: number | null;
-  failure_kind: string | null;
-  started_at: string;
-  finished_at: string | null;
-  duration_ms: number | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  cost: string | null;
-  tool_names?: string[];
-}
-
-export interface CallDetail {
-  id: string;
-  request: unknown;
-  response: unknown;
-  response_text: string | null;
-  response_truncated: boolean;
 }
 
 export interface TimelineToolCall {
@@ -114,7 +81,7 @@ export interface TimelineToolCall {
   arguments: string;
 }
 
-// TimelineItem 是运行过程的一个节点：message 来自消息表，call 是未产出消息的模型请求。
+// TimelineItem 是运行过程的一个消息节点。
 export interface TimelineItem {
   type: string;
   at: string;
@@ -131,7 +98,6 @@ export interface TimelineItem {
   tool_calls?: TimelineToolCall[];
   tool_call_id?: string;
   truncated?: boolean;
-  call?: Call;
 }
 
 export interface Timeline {
@@ -172,12 +138,6 @@ export interface ServiceItem {
 // ---- 全看板共用的显示格式化 ----
 
 export const outcomeLabels: Record<string, string> = {
-  in_flight: '请求中',
-  succeeded: '成功',
-  http_error: 'HTTP 错误',
-  transport_error: '连接异常',
-  invalid_response: '响应异常',
-  interrupted: '中断 · 结果未知',
   processing: '处理中',
   running: '运行中',
   completed: '已完成',
@@ -201,14 +161,6 @@ export const formatTime = (value: string | null | undefined) =>
         hour12: false,
       })
     : '—';
-export const formatMoney = (value: string | number | null | undefined) =>
-  value == null
-    ? '未知'
-    : `$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 })}`;
-export const formatDuration = (value: number | null | undefined) =>
-  value == null ? '未知' : value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(2)} s`;
-export const shortModel = (value: string | null | undefined) =>
-  value?.split('/').slice(1).join('/') || value || '未知';
 
 // quotaAmount 按供应商的计价单位格式化一个额度数字，未知时不显示成 0。
 export function quotaAmount(value: number | null, unit: string): string {
@@ -244,9 +196,4 @@ export function quotaNote(item: QuotaItem): string {
   if (item.status === 'ok' && item.limit != null)
     parts.push(`已用 ${quotaAmount(item.used, item.unit)} / 上限 ${quotaAmount(item.limit, item.unit)}`);
   return parts.join(' · ') || '暂无说明';
-}
-
-// callMeta 是时间线模型回复节点上的一行请求摘要。
-export function callMeta(call: Call): string {
-  return `${shortModel(call.response_model || call.requested_model)} · ${call.input_tokens == null ? '未知' : formatNumber(call.input_tokens)} / ${call.output_tokens == null ? '未知' : formatNumber(call.output_tokens)} Token · ${formatMoney(call.cost)} · ${formatDuration(call.duration_ms)}`;
 }

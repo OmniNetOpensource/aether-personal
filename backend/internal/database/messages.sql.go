@@ -101,11 +101,11 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 }
 
 const getLastContextUsage = `-- name: GetLastContextUsage :one
-SELECT requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
-FROM model_calls WHERE user_id = $1
+SELECT model AS requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
+FROM steps WHERE user_id = $1
  AND subagent_id IS NOT DISTINCT FROM $2::uuid
- AND purpose = 'agent' AND outcome = 'succeeded' AND input_tokens IS NOT NULL
-ORDER BY started_at DESC LIMIT 1
+ AND purpose = 'agent' AND finished_at IS NOT NULL AND error IS NULL AND input_tokens IS NOT NULL
+ORDER BY started_at DESC, id DESC LIMIT 1
 `
 
 type GetLastContextUsageParams struct {

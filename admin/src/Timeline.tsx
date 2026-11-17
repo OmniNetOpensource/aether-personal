@@ -1,17 +1,13 @@
-// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 或指定后台 Subagent 的输入、推理、工具调用与失败请求，并支持在两者间一键跳转。
+// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 或指定后台 Subagent 的输入、推理与工具调用，并支持在两者间一键跳转。
 
 import type { ReactNode } from 'react';
 import {
-  callMeta,
-  formatDuration,
   formatTime,
-  shortModel,
-  type Call,
   type Snapshot,
   type Timeline,
   type TimelineItem,
 } from './api.js';
-import { CopyChip, Empty, Foldable, Panel, Pill, RequestIds } from './ui.js';
+import { CopyChip, Empty, Foldable, Panel, Pill } from './ui.js';
 
 // TimelineViewProps 承载时间线渲染所需的外部状态与跳转回调，自动刷新重绘后展开与全文不丢失。
 export interface TimelineViewProps {
@@ -24,7 +20,6 @@ export interface TimelineViewProps {
   onSelectSubagent: (subagentID: string) => void;
   onLoadFull: (id: string, button: HTMLButtonElement) => void;
   onLoadEarlier: (button: HTMLButtonElement) => void;
-  onOpenCall: (call: Call) => void;
   notify: (message: string) => void;
 }
 
@@ -38,7 +33,7 @@ function extractSubagentID(raw: string | undefined): string | null {
   return uuidPattern.test(candidate) ? candidate : null;
 }
 
-// TimelinePage 按时间降序渲染 Main 或指定 Subagent 的时间线：最新在上，工具结果并入对应的工具调用卡片，未产出消息的请求单独显示。
+// TimelinePage 按时间降序渲染 Main 或指定 Subagent 的时间线：最新在上，工具结果并入对应的工具调用卡片。
 export function TimelinePage(props: TimelineViewProps) {
   const { user, subagent, snapshot, timeline } = props;
   if (!user)
@@ -63,7 +58,7 @@ export function TimelinePage(props: TimelineViewProps) {
     : `Main · ${email}`;
   const panelDescription = subagent
     ? `独立后台轨迹（ID: ${subagent}）；最新在上，完成后向 Main 投递 subagent_event。`
-    : '最新在上；按查询条件显示消息与请求，点击 Subagent 相关卡片可深入查看子代理轨迹。';
+    : '最新在上；按时间范围显示消息、推理与工具调用，点击 Subagent 相关卡片可深入查看子代理轨迹。';
 
   return (
     <Panel
@@ -95,15 +90,13 @@ export function TimelinePage(props: TimelineViewProps) {
           </TimelineNode>
         ) : null}
         {[...timeline.items].reverse().map((item, index) => {
-          if (item.type === 'call' && item.call)
-            return <FailedCallNode key={`call-${item.call.id}-${index}`} item={item} email={email} {...props} />;
           if (item.role === 'assistant')
-            return <AssistantNode key={item.id ?? index} item={item} results={results} email={email} {...props} />;
+            return <AssistantNode key={item.id ?? index} item={item} results={results} {...props} />;
           if (item.role === 'tool') {
             if (item.tool_call_id && paired.has(item.tool_call_id)) return null;
             return <ToolResultNode key={item.id ?? index} item={item} {...props} />;
           }
-          return <InputNode key={item.id ?? index} item={item} email={email} {...props} />;
+          return <InputNode key={item.id ?? index} item={item} {...props} />;
         })}
         {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
         {timeline.next_cursor ? (
@@ -189,12 +182,9 @@ const triggerTitles: Record<string, string> = {
 // InputNode 是用户输入、Subagent 指派/回报、定时触发、闲置后台工作与压缩摘要节点的渲染。
 function InputNode({
   item,
-  email,
   ...props
-}: { item: TimelineItem; email: string } & TimelineViewProps) {
+}: { item: TimelineItem } & TimelineViewProps) {
   const view = fullView(item, props.fullItems);
-  const call = item.is_summary ? item.call : undefined;
-  const withEmail = call ? { ...call, email } : null;
   const senders: Record<string, [string, string]> = {
     user: ['input', '用户输入'],
     main: ['input', props.subagent ? '来自 Main 的指派任务' : '来自 Main'],
@@ -215,28 +205,17 @@ function InputNode({
       title={title}
       at={item.at}
       extras={
-        call || linkedSubagentID ? (
-          <>
-            {call ? <span className="timeline-meta">{callMeta(call)}</span> : null}
-            {withEmail ? (
-              <button type="button" className="text-button" onClick={() => props.onOpenCall(withEmail)}>
-                请求详情 →
-              </button>
-            ) : null}
-            {linkedSubagentID ? (
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => props.onSelectSubagent(linkedSubagentID)}
-              >
-                查看 Subagent 轨迹 →
-              </button>
-            ) : null}
-          </>
+        linkedSubagentID ? (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => props.onSelectSubagent(linkedSubagentID)}
+          >
+            查看 Subagent 轨迹 →
+          </button>
         ) : undefined
       }
     >
-      {call ? <RequestIds id={call.id} notify={props.notify} /> : null}
       {item.is_summary || item.name === 'subagent_event' ? (
         <Foldable
           storageKey={`${item.id}:text`}
@@ -257,30 +236,16 @@ function InputNode({
 function AssistantNode({
   item,
   results,
-  email,
   ...props
-}: { item: TimelineItem; results: Map<string | undefined, TimelineItem>; email: string } & TimelineViewProps) {
+}: { item: TimelineItem; results: Map<string | undefined, TimelineItem> } & TimelineViewProps) {
   const view = fullView(item, props.fullItems);
-  const call = item.call;
-  const withEmail = call ? { ...call, email } : null;
   const textLabel = props.subagent ? '正文（最终产出交回 Main）' : '正文（直接发给用户）';
   return (
     <TimelineNode
       kind="assistant"
       title="模型回复"
       at={item.at}
-      extras={
-        <>
-          <span className="timeline-meta">{call ? callMeta(call) : '未关联请求日志'}</span>
-          {withEmail ? (
-            <button type="button" className="text-button" onClick={() => props.onOpenCall(withEmail)}>
-              请求详情 →
-            </button>
-          ) : null}
-        </>
-      }
     >
-      {call ? <RequestIds id={call.id} notify={props.notify} /> : null}
       {view.reasoning?.state === 'text' ? (
         <Foldable
           storageKey={`${item.id}:reasoning`}
@@ -386,35 +351,6 @@ function ToolResultNode({ item, ...props }: { item: TimelineItem } & TimelineVie
       <Foldable storageKey={`${item.id}:text`} label="结果" text={view.text ?? ''} openState={props.openState} />
       <TimelineImages item={view} />
       <LoadFullButton item={item} {...props} />
-    </TimelineNode>
-  );
-}
-
-// FailedCallNode 是没有产出消息的模型请求：失败、中断或仍在进行中。
-function FailedCallNode({
-  item,
-  email,
-  ...props
-}: { item: TimelineItem; email: string } & TimelineViewProps) {
-  const call = item.call!;
-  return (
-    <TimelineNode
-      kind={`call ${call.outcome}`}
-      title={call.purpose === 'compact' ? '上下文压缩请求' : '模型请求'}
-      at={item.at}
-      extras={
-        <>
-          <Pill status={call.outcome} />
-          <button type="button" className="text-button" onClick={() => props.onOpenCall({ ...call, email })}>
-            请求详情 →
-          </button>
-        </>
-      }
-    >
-      <RequestIds id={call.id} notify={props.notify} />
-      <p className="timeline-muted">
-        {`${shortModel(call.requested_model)} · HTTP ${call.http_status ?? '—'} · ${call.failure_kind || '进行中'} · ${formatDuration(call.duration_ms)}`}
-      </p>
     </TimelineNode>
   );
 }

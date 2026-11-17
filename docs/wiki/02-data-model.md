@@ -22,8 +22,6 @@ erDiagram
     users ||--o{ memory_files : "记忆根文档与主题文件"
     users ||--o{ schedules : "定时任务"
     users ||--o{ steps : "产生"
-    steps ||--o{ model_calls : "HTTP 请求尝试"
-    users ||--o{ model_calls : "调用归属"
     steps ||--o{ messages : "step_id：模型输出"
     login_codes
 ```
@@ -41,7 +39,6 @@ erDiagram
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
-| `model_calls` | 每次模型 HTTP 请求尝试、结果与可空用量 | `开发中` |
 | `user_model_settings` | 每个账号的 Main、Subagent 和压缩模型、已知输入容量与保存版本（`00057`） | `已实现` |
 | `model_settings` | 全局压缩阈值与闲置后台反思时长。旧版全局模型列保留供回滚 | `已实现` |
 | `service_settings` | 看板管理的服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
@@ -79,7 +76,7 @@ erDiagram
 | `error` | text | 失败或 15 分钟超时原因 |
 | `started_at`、`finished_at` | timestamptz | 创建启动时间与结束时间 |
 
-`messages`、`steps` 与 `model_calls` 均包含可空外键 `subagent_id`（为空归属 Main，非空归属对应 Subagent）；`messages` 带 `CHECK (subagent_id IS NULL OR NOT visible)` 约束确保子代理内部消息不进入聊天流。
+`messages` 与 `steps` 均包含可空外键 `subagent_id`（为空归属 Main，非空归属对应 Subagent）；`messages` 带 `CHECK (subagent_id IS NULL OR NOT visible)` 约束确保子代理内部消息不进入聊天流。
 
 ### `messages`
 
@@ -129,7 +126,7 @@ erDiagram
 
 ### `steps`
 
-记录逻辑执行步骤的元信息，完成时间包含工具执行。准确请求尝试另记在 `model_calls`（`00006`），统计与恢复口径见 [08](08-admin-observability.md)。不重复保存请求内容：某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
+记录逻辑执行步骤的元信息（含每次模型调用实际使用的模型名与 `input_tokens`、`output_tokens`、`cost`），完成时间包含工具执行。原独立请求日志表 `model_calls`（`00006`、`00010`）因存储全量请求/响应 JSON 导致单表膨胀至数 GB，已于 2026-11-17 由 `00059_drop_model_calls.sql` 移除，自动压缩所需的上次输入 Token 用量改由 `steps` 直接提供。不重复保存请求内容：某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -173,7 +170,7 @@ erDiagram
 
 2026-10-30，用户修正为只保留 token 条件：仍要等上下文达到阈值（看板 `compact_at_tokens`，默认 200,000）才压缩，不再等 6 小时；闲置时长触发取消，只为它服务的看板小时设置、`messages.compact_reply_sequence` 与 `model_settings.compact_after_hours` 由 `00018` 一并删除，历史调用里的 `idle` 原因只作旧记录展示。2026-11-03 起，所有模型共用这一看板阈值：取消 ikun Gemini 固定 400,000 的例外（2026-10-30 曾确认），阈值仍受已知输入容量上限封顶；同日先由 `00029` 增加手动输出额度，随后用户要求取消应用输出限制，`00031` 删除 `main_output_limit`；运行时直接使用已保存的模型最大输出能力，未知时不发送限制参数，不再回退环境变量额度。2026-11-17 改为统一按「最新摘要 ~ 最新一条 `assistant`（含其所属最后一条 `tool` 回执）」切分压缩范围：该边界及之前合并压成新摘要，其后消息保留原文；`compact_reason` 仅记录 `tokens` 或 `capacity`（`00017` 曾扩过的 `user_message` 保留供历史记录展示）；若当前世代尚无新的 `assistant` / `tool` 原文可压，则跳过压缩。理由与实现细节见 [05](05-main-runtime.md#运行循环-已实现)。
 
-容量指下一次模型请求的完整输入占用，包含系统提示词、工具定义、消息、工具结果与图片，不是历次请求用量之和。触发只看官方用量：以上一次同模型、同 Main 的成功请求由供应商返回并记录在 `model_calls` 的 `prompt_tokens` 与配置阈值和容量比较，本地不估算 token；没有上次用量或已切换模型时不因 token 或容量触发。因此触发会慢一拍——上次请求之后新增的内容要等再下一次请求的官方用量才反映出来，2026-10-28 用户经预期核对接受这一取舍。
+容量指下一次模型请求的完整输入占用，包含系统提示词、工具定义、消息、工具结果与图片，不是历次请求用量之和。触发只看官方用量：以上一次同模型、同角色（Main 或 Subagent）成功完成的 `steps` 记录中的 `input_tokens`（2026-11-17 前取自已删除的 `model_calls`）与配置阈值和容量比较，本地不估算 token；没有上次用量或已切换模型时不因 token 或容量触发。因此触发会慢一拍——上次请求之后新增的内容要等再下一次请求的官方用量才反映出来，2026-10-28 用户经预期核对接受这一取舍。
 
 压缩在该用户唯一的 Runner 内进行，在工具调用与结果完整保存后固定摘要覆盖位置。摘要请求不执行工具，单独记录模型调用与费用。摘要与覆盖位置在同一事务提交，提交成功后才切换上下文。失败时保留旧上下文，不记录为压缩成功。容量不足时不能无限重复压缩或继续发送已知超限的请求。
 
@@ -284,6 +281,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00054_drop_workspace_sync_cursor.sql` | 删除 `sandbox_workspaces.synced_through_sequence`，聊天附件改为由 `sandbox_import_file` 按需导入工作区 | `已实现` |
 | `00055_add_subagents.sql` | 放开 `tasks` 单进行中唯一索引；新建 `subagents` 表与栅栏代数；为 `messages`、`steps`、`model_calls` 增加 `subagent_id` 隔离列与索引；为 `model_settings` 增加可选 `subagent_model` | `已实现` |
 | `00058_drop_tasks.sql` | 删除持久化需求队列 `tasks` 表及索引，整体移除任务系统 | `开发中` |
+| `00059_drop_model_calls.sql` | 删除 `model_calls` 表及索引，为 `steps` 补充按 Subagent 查询最近步骤的索引 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

@@ -1,4 +1,4 @@
-// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表、模型候选、Main 与 Subagent 状态以及单次模型调用的请求与响应正文。
+// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表以及选中用户的 Main 与近期 Subagent 状态。
 
 package httpapi
 
@@ -8,21 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 // adminFilters 是快照与运行时间线共用的查询条件。
 type adminFilters struct {
-	From, To       time.Time
-	UserID         *uuid.UUID
-	SubagentID     *uuid.UUID
-	Model, Outcome *string
+	From, To   time.Time
+	UserID     *uuid.UUID
+	SubagentID *uuid.UUID
 }
 
 // adminUser 是快照接口返回给看板下拉框的用户摘要。
@@ -54,7 +50,7 @@ func (s *server) adminMe(w http.ResponseWriter, r *http.Request) {
 	writeAdminJSON(w, map[string]string{"name": "管理员"})
 }
 
-// parseAdminFilters 校验看板提交的时间窗口、用户、Subagent、模型与请求结果筛选参数。
+// parseAdminFilters 校验看板提交的时间窗口、用户与 Subagent 筛选参数。
 func parseAdminFilters(r *http.Request) (adminFilters, error) {
 	values := r.URL.Query()
 	filter := adminFilters{To: time.Now().UTC()}
@@ -90,20 +86,6 @@ func parseAdminFilters(r *http.Request) (adminFilters, error) {
 		}
 		filter.SubagentID = &id
 	}
-	if value := values.Get("model"); value != "" {
-		if !utf8.ValidString(value) || strings.ContainsRune(value, 0) || utf8.RuneCountInString(value) > 160 {
-			return filter, fmt.Errorf("model is too long")
-		}
-		filter.Model = &value
-	}
-	if value := values.Get("outcome"); value != "" {
-		switch value {
-		case "in_flight", "succeeded", "http_error", "transport_error", "invalid_response", "interrupted":
-			filter.Outcome = &value
-		default:
-			return filter, fmt.Errorf("invalid outcome")
-		}
-	}
 	return filter, nil
 }
 
@@ -127,7 +109,7 @@ func writeAdminJSON(w http.ResponseWriter, value any) {
 	json.NewEncoder(w).Encode(value)
 }
 
-// adminSnapshot 返回看板筛选栏所需的用户、模型候选，以及当前选中用户的 Main 与近期 Subagent 状态。
+// adminSnapshot 返回看板筛选栏所需的用户列表，以及当前选中用户的 Main 与近期 Subagent 状态。
 func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseAdminFilters(r)
 	if err != nil {
@@ -143,13 +125,6 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	queries := s.queries.WithTx(tx)
-	payload, err := queries.AdminSnapshot(ctx, database.AdminSnapshotParams{
-		FromAt: filter.From, ToAt: filter.To, UserID: filter.UserID,
-	})
-	if err != nil {
-		internalError(w, "read admin snapshot failed", err)
-		return
-	}
 	userRows, err := queries.ListAdminUsers(ctx, filter.UserID)
 	if err != nil {
 		internalError(w, "read admin users failed", err)
@@ -189,45 +164,10 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "commit admin snapshot failed", err)
 		return
 	}
-	var snapshot map[string]any
-	if err := json.Unmarshal(payload, &snapshot); err != nil {
-		internalError(w, "decode admin snapshot failed", err)
-		return
-	}
-	snapshot["users"] = map[string]any{"items": users}
-	snapshot["agents"] = map[string]any{"items": agents}
-	snapshot["subagents"] = map[string]any{"items": subagents}
-	writeAdminJSON(w, snapshot)
-}
-
-// adminCallDetail 按调用 ID 返回单次模型请求的实际请求与响应 JSON。
-func (s *server) adminCallDetail(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "invalid call ID", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	detail, err := s.queries.GetAdminCallDetail(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		http.Error(w, "call not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		internalError(w, "read model call payloads failed", err)
-		return
-	}
-	var response json.RawMessage
-	var responseText *string
-	if json.Valid(detail.ResponseBody) {
-		response = json.RawMessage(detail.ResponseBody)
-	} else if len(detail.ResponseBody) > 0 {
-		text := string(detail.ResponseBody)
-		responseText = &text
-	}
 	writeAdminJSON(w, map[string]any{
-		"id": id, "request": json.RawMessage(detail.RequestBody), "response": response,
-		"response_text": responseText, "response_truncated": detail.ResponseTruncated,
+		"generated_at": time.Now().UTC(),
+		"users":        map[string]any{"items": users},
+		"agents":       map[string]any{"items": agents},
+		"subagents":    map[string]any{"items": subagents},
 	})
 }

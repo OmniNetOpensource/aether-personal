@@ -1,4 +1,4 @@
-// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据（支持切换查看 Main 与后台 Subagent 轨迹），编排自动刷新，并切换运行过程、配置页面与调用详情弹窗。
+// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据（支持切换查看 Main 与后台 Subagent 轨迹），编排自动刷新，并切换运行过程与配置页面。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -7,12 +7,10 @@ import {
   formatTime,
   outcomeLabels,
   setAdminToken,
-  type Call,
   type Snapshot,
   type Timeline,
   type TimelineItem,
 } from './api.js';
-import { CallDetailDialog } from './CallDetail.js';
 import { RuntimeSettingsPage } from './RuntimeSettings.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
 import { TimelinePage } from './Timeline.js';
@@ -25,10 +23,8 @@ interface TimelineFilters {
   hours: number;
   user: string;
   subagent: string;
-  model: string;
-  outcome: string;
 }
-const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '', model: '', outcome: '' };
+const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '' };
 
 const tabs: Record<Tab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
@@ -51,7 +47,6 @@ export function AdminApp() {
   const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [browsingPages, setBrowsingPages] = useState(false);
-  const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [toast, setToast] = useState('');
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
@@ -95,7 +90,6 @@ export function AdminApp() {
     windowRef.current = null;
     setUpdatedText('尚未刷新');
     setBrowsingPages(false);
-    setSelectedCall(null);
   }, []);
 
   // accessLost 处理令牌或权限失效：401 回登录页，403 显示无权页。
@@ -120,8 +114,6 @@ export function AdminApp() {
     const params = new URLSearchParams(windowRef.current ?? {});
     if (current.user) params.set('user_id', current.user);
     if (current.subagent) params.set('subagent_id', current.subagent);
-    if (current.model) params.set('model', current.model);
-    if (current.outcome) params.set('outcome', current.outcome);
     for (const [key, value] of Object.entries(extra)) if (value != null) params.set(key, value);
     return params.toString();
   }, []);
@@ -209,7 +201,7 @@ export function AdminApp() {
     void refresh();
   }, [me, tab, query, refresh]);
 
-  // 每 15 秒自动刷新；翻页浏览、弹窗打开、设置页与输入聚焦时暂停，页面切回前台时补一次。
+  // 每 15 秒自动刷新；翻页浏览、设置页与输入聚焦时暂停，页面切回前台时补一次。
   useEffect(() => {
     if (!me) return;
     const timer = setInterval(() => {
@@ -217,14 +209,13 @@ export function AdminApp() {
         document.hidden ||
         tabRef.current === 'settings' ||
         browsingRef.current ||
-        selectedCall ||
         document.querySelector('input:focus')
       )
         return;
       void refresh();
     }, 15000);
     const visibility = () => {
-      if (!document.hidden && tabRef.current === 'timeline' && !browsingRef.current && !selectedCall)
+      if (!document.hidden && tabRef.current === 'timeline' && !browsingRef.current)
         void refresh();
     };
     document.addEventListener('visibilitychange', visibility);
@@ -232,7 +223,7 @@ export function AdminApp() {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', visibility);
     };
-  }, [me, refresh, selectedCall]);
+  }, [me, refresh]);
 
   // loadTimelineMessage 按条读取时间线全文与截图，存入保留 Map 后重绘。
   async function loadTimelineMessage(id: string, button: HTMLButtonElement) {
@@ -364,7 +355,7 @@ export function AdminApp() {
           ))}
         </nav>
         <div className="sidebar-note">
-          <span className="live-dot" /> 管理员工作空间<p>调用观测与配置</p>
+          <span className="live-dot" /> 管理员工作空间<p>运行过程与配置</p>
         </div>
         <div className="account">
           <div className="avatar">{me.name.charAt(0).toUpperCase()}</div>
@@ -407,7 +398,7 @@ export function AdminApp() {
               aria-label="运行过程查询"
               onSubmit={(event) => {
                 event.preventDefault();
-                setQuery({ ...filters, model: filters.model.trim() });
+                setQuery({ ...filters });
               }}
             >
               <label>
@@ -451,36 +442,6 @@ export function AdminApp() {
                   <option value={24}>最近 24 小时</option>
                   <option value={168}>最近 7 天</option>
                   <option value={720}>最近 30 天</option>
-                </select>
-              </label>
-              <label>
-                模型
-                <input
-                  list="model-options"
-                  placeholder="全部模型"
-                  maxLength={160}
-                  value={filters.model}
-                  onChange={(event) => setFilters({ ...filters, model: event.target.value })}
-                />
-                <datalist id="model-options">
-                  {(snapshot?.models ?? []).map((item) => (
-                    <option key={item.model} value={item.model} />
-                  ))}
-                </datalist>
-              </label>
-              <label>
-                请求结果
-                <select
-                  value={filters.outcome}
-                  onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}
-                >
-                  <option value="">全部结果</option>
-                  <option value="succeeded">成功</option>
-                  <option value="in_flight">请求中</option>
-                  <option value="http_error">HTTP 错误</option>
-                  <option value="transport_error">连接异常</option>
-                  <option value="invalid_response">响应异常</option>
-                  <option value="interrupted">中断</option>
                 </select>
               </label>
               <button className="button primary" type="submit" disabled={pageBusy}>
@@ -540,7 +501,6 @@ export function AdminApp() {
                 onSelectSubagent={selectSubagent}
                 onLoadFull={(id, button) => void loadTimelineMessage(id, button)}
                 onLoadEarlier={(button) => void loadEarlierTimeline(button)}
-                onOpenCall={setSelectedCall}
                 notify={notify}
               />
             )}
@@ -549,7 +509,7 @@ export function AdminApp() {
             <span>
               {settingsPage
                 ? '配置应用于所有用户 · 已发出的请求继续完成'
-                : '最新在上 · 按查询条件显示输入、模型回复、工具与请求结果'}
+                : '最新在上 · 按查询条件显示输入、模型回复与工具调用'}
             </span>
             <span>
               {settingsPage
@@ -561,14 +521,6 @@ export function AdminApp() {
           </footer>
         </section>
       </main>
-      {selectedCall ? (
-        <CallDetailDialog
-          call={selectedCall}
-          onClose={() => setSelectedCall(null)}
-          onAccessLost={accessLost}
-          notify={notify}
-        />
-      ) : null}
       <div id="toast" role="status" aria-live="polite" className={toast ? 'show' : ''}>
         {toast}
       </div>
@@ -616,14 +568,14 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
         <div className="login-story-body">
           <div className="eyebrow">aether</div>
           <h1>
-            每一次调用，
+            每一次运行，
             <br />
             清晰可见。
           </h1>
           <p>
             为用户与 Agent 的工作提供一扇窗口。
             <br />
-            从运行过程，深入到每一个请求。
+            从输入、推理到工具调用。
           </p>
           <div className="orbit">
             <span />
@@ -633,7 +585,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
           </div>
         </div>
         <div className="login-foot">
-          ADMIN CONSOLE <span>调用观测 · 配置</span>
+          ADMIN CONSOLE <span>运行过程 · 配置</span>
         </div>
       </div>
       <div className="login-form-wrap">
@@ -660,7 +612,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
           <button className="button primary" type="submit" disabled={submitting}>
             进入看板 <span>→</span>
           </button>
-          <p className="login-note">查看模型调用、请求与响应 JSON，并管理模型与服务配置。</p>
+          <p className="login-note">查看 Agent 运行过程，并管理全局参数与服务配置。</p>
         </form>
       </div>
     </main>

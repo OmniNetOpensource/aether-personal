@@ -21,15 +21,12 @@ import (
 // through 随本轮实际读到的消息更新，失败时由请求后阶段据此停住；准备失败时已开的步骤交给失败收尾结束。
 func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (modelRequest, uuid.UUID, error) {
 	queries := database.New(r.databasePool)
-	// 在校验本轮租约代数的短事务内收拾上次中断留下的记录，防止已失去租约的旧实例误清接管实例正在运行的调用与步骤；
+	// 在校验本轮租约代数的短事务内收拾上次中断留下的记录，防止已失去租约的旧实例误清接管实例正在运行的步骤；
 	// 必须排在开新步骤之前，否则新步骤也会被标成中断。
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
 		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
 			return err
-		}
-		if err := txQueries.InterruptModelCalls(ctx, database.InterruptModelCallsParams{UserID: r.userID, SubagentID: r.subagentID}); err != nil {
-			return fmt.Errorf("recover model call journal: %w", err)
 		}
 		if err := txQueries.DiscardGeneratingReply(ctx, database.DiscardGeneratingReplyParams{UserID: r.userID, SubagentID: r.subagentID}); err != nil {
 			return fmt.Errorf("recover incomplete reply: %w", err)
@@ -189,14 +186,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		failure := "compaction did not commit; original context preserved"
 		_ = queries.FinishStep(cleanup, database.FinishStepParams{ID: compactStepID, Error: &failure})
 	}()
-	beforeValue := int32(min(before, math.MaxInt32))
-	result, _, err := r.sendModelRequest(ctx, summaryRequest, database.StartModelCallParams{
-		StepID:                 compactStepID,
-		Purpose:                "compact",
-		CompactReason:          &reason,
-		ContextTokensBefore:    &beforeValue,
-		SummaryThroughSequence: &through,
-	}, nil)
+	result, _, err := r.sendModelRequest(ctx, summaryRequest, "compact", nil)
 	if err != nil {
 		return modelRequest{}, fmt.Errorf("compact context: %w", err)
 	}

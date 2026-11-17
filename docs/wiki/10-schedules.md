@@ -35,7 +35,7 @@
 ### 闲置后台反思
 
 - 2026-11-08 最初接入单一 `reflection`（`00046`），2026-11-09 曾由 `00047_split_idle_work_minutes` 拆成按前置链依次运行的三种后台工作。2026-11-11 改为持续按间隔触发时，前置链在用户中途插话或不同档时长悬殊时会跳过或互相推迟，因此由迁移 `00053_merge_idle_work_minutes` 合并回单一的 `reflection`（`model_settings.reflection_idle_minutes`，默认 120 分钟），并将三条提示词融合为一条两步指引。
-- 到期条件（查询 `ListReflectionDue`，2026-11-11 起，2026-11-16 补充空触发去重）：该用户发过本人消息、Main 当前没有活也没有进行中的模型请求、`GREATEST(最近一次已结束的 model_calls.finished_at, 最新一条 messages.created_at)` 距今已满 `reflection_idle_minutes`，且最近一条主对话输入（`subagent_id IS NULL AND role = 'user' AND NOT is_summary` 且非 `memory_context`）不能是一次空的 proactive（`reflection` 或历史同类触发且其后没有任何 `visible = true` 的消息）。若上一轮 proactive 发出了可见消息，则仍可按周期再次触发；若上一轮沉默结束，则暂停继续触发，直到出现新的用户消息、`schedule_event` 或 `subagent_event`。停机期间错过的周期不补跑多次，恢复后只投一次。
+- 到期条件（查询 `ListReflectionDue`，2026-11-11 起，2026-11-16 补充空触发去重，2026-11-17 随 `model_calls` 删除改为直接由 `messages` 表判断）：该用户发过本人消息、Main 与后台 Subagent 当前都没有活（`main_work` 与 `subagents`），Main 最新一条 `messages.created_at` 距今已满 `reflection_idle_minutes`，且最近一条主对话输入（`subagent_id IS NULL AND role = 'user' AND NOT is_summary` 且非 `memory_context`）不能是一次空的 proactive（`reflection` 或历史同类触发且其后没有任何 `visible = true` 的消息）。若上一轮 proactive 发出了可见消息，则仍可按周期再次触发；若上一轮沉默结束，则暂停继续触发，直到出现新的用户消息、`schedule_event` 或 `subagent_event`。停机期间错过的周期不补跑多次，恢复后只投一次。
 - 投递事务在用户消息锁内按同样条件复查，扫描之后又收到新消息、开始了新请求或已被其他实例抢先投递的用户不再重复投递。时长每次扫描现读，看板修改后下一次扫描生效，由 Main 模型执行。
 - 提示词（`ReflectionPrompt`，2026-11-14 起为两步）：阅读近期对话（需要核对被压缩的细节时用 `search_message` 与 `read_message`），1. 检查是否有用户潜在需要但未意识到的内容，有则直接告诉用户，不说其他内容、不提及后台检查、不续做旧任务，没有则沉默；2. 检查 `/memories/memory.md` 与相关主题文件是否有必要更新，有则更新，否则保持原样。投递由独立的 `backend/internal/proactive/proactive.go` 负责。看板运行过程时间线显示为「闲置后台反思」（旧历史中的三种消息名仍保留各自的中文标题）。
 
