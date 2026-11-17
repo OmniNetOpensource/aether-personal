@@ -6,7 +6,7 @@
 
 - **计算实例可丢弃，工作区持久保留**：每位开通电脑的用户在 `sandbox_workspaces` 表（`00049`）中绑定独立的 AgenticFS Access Point（`server_addr`）与最小权限 RAM 角色（`role_arn`），由维护者通过 `go run ./cmd/init-workspace` 显式绑定。FC 计算实例将 Access Point 以 UID/GID `1000` 挂载到 `/mnt/workspace`。实例空闲超时自动 `pause`（关闭公网流量与自动唤醒），若控制面已释放实例（404），下次调用工具时自动新建实例并重新挂回同一 `/mnt/workspace`，文件、HOME 目录与浏览器 Profile 原样保留。
 - **凭证与配置分层**：VPC、交换机、安全组、模板与空闲超时（`SANDBOX_*`）属于部署基础设施环境变量；FC API Key 保存在管理看板「服务配置」的 `aliyun_fc` 加密记录中；每个运行实例的 AIO 令牌与流量访问令牌（`00050`）用部署主密钥 AES-GCM 加密保存在 `sandbox_workspaces`。未配置沙箱或未绑定工作区不会阻止后端或看板启动。
-- **有序执行与截图回执**：沙箱内部运行固定版本的 AIO MCP 服务（`sandbox_execute_bash`、`sandbox_execute_code`、`sandbox_file_operations`、`sandbox_str_replace_editor`、`browser_*` 等，定义见 `sandbox_tools.json`）。所有电脑工具在 `tools.Tool` 上标记 `Ordered: true`，同一轮模型回复中的多个电脑调用在同一协程内严格按模型列出的顺序串行执行，避免并发争抢桌面或终端状态；MCP 返回的截图自动存入该用户的私有 OSS，消息表只留 `oss://` 引用。
+- **有序执行与截图回执**：沙箱内部运行固定版本的 AIO MCP 服务（`sandbox_execute_bash`、`sandbox_execute_code`、`sandbox_file_operations`、`sandbox_str_replace_editor`、`browser_*` 等，定义见 `sandbox_tools.json`）。所有电脑工具在 `tools.Tool` 上标记 `Ordered: true`，同一轮模型回复中的多个电脑调用在同一协程内严格按模型列出的顺序串行执行，避免并发争抢桌面或终端状态；MCP 返回的截图自动存入该用户的私有 OSS，消息表只留 `oss://` 引用。2026-11-16 新增 `sandbox_read_image`（仅用于模型视觉自检 `/mnt/workspace` 中 `<= 4 MiB` 的 PNG/JPEG/GIF/WebP 图片并写入 OSS，不发送到聊天），同时在 `infra/sandbox/build.sh` 中预装 `poppler-utils`、`python3-pil`、补充中英文字体、`playwright-core`（复用系统 Chrome）与 `echarts`，并在 `/opt/aether/skills/slides/` 内置基于 Chromium 导出矢量 PDF 的幻灯片规范、DOM 越界检测脚本与缩略图拼图脚本。
 
 ## 只读实时桌面（noVNC / RFB）
 

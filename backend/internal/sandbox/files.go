@@ -178,3 +178,65 @@ func (s *Store) SendFile(ctx context.Context, userID uuid.UUID, rawPath string) 
 	}
 	return fmt.Sprintf("Sent file %s (%d bytes) from %s to the user in chat.", storedFile.Name, storedFile.Size, targetPath), partsJSON, nil
 }
+
+// ReadImage 从 /mnt/workspace 读取单张图片写入私有 OSS，返回文本摘要与 oss:// 多模态引用供模型自身视觉检查（不发送给用户）。
+func (s *Store) ReadImage(ctx context.Context, userID uuid.UUID, rawPath string) (output string, err error) {
+	targetPath, err := cleanWorkspacePath(rawPath)
+	if err != nil {
+		return "Error: " + err.Error(), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	instance, _, err := s.ensure(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer stop()
+		if timeoutErr := instance.SetTimeout(cleanup, int(s.config.Timeout.Seconds())); timeoutErr != nil {
+			err = errors.Join(err, fmt.Errorf("update sandbox idle timeout after reading image: %w", timeoutErr))
+		}
+	}()
+	info, err := instance.Files.GetInfo(ctx, targetPath, e2b.WithFileUser("user"), e2b.WithFileRequestTimeout(30*time.Second))
+	if err != nil {
+		return fmt.Sprintf("Error: cannot inspect %s: %v", targetPath, err), nil
+	}
+	if info.Mode&0o040000 != 0 {
+		return fmt.Sprintf("Error: %s is a directory", targetPath), nil
+	}
+	if info.Size <= 0 {
+		return fmt.Sprintf("Error: %s is empty", targetPath), nil
+	}
+	if info.Size > images.MaxImageBytes {
+		return fmt.Sprintf("Error: %s is %d bytes, exceeding the 4 MiB image limit", targetPath, info.Size), nil
+	}
+
+	stream, err := instance.Files.ReadStream(ctx, targetPath,
+		e2b.WithFileUser("user"),
+		e2b.WithFileRequestTimeout(4*time.Minute),
+		e2b.WithFileStreamIdleTimeout(60*time.Second),
+	)
+	if err != nil {
+		return "", fmt.Errorf("read %s from workspace: %w", targetPath, err)
+	}
+	defer stream.Close()
+
+	data, readErr := io.ReadAll(io.LimitReader(stream, images.MaxImageBytes+1))
+	if readErr != nil {
+		return "", fmt.Errorf("read %s bytes: %w", targetPath, readErr)
+	}
+	if int64(len(data)) > images.MaxImageBytes {
+		return fmt.Sprintf("Error: %s exceeds the 4 MiB image limit", targetPath), nil
+	}
+	fileName := images.CleanFileName(path.Base(targetPath))
+	storedImage, putErr := s.images.Put(ctx, userID, fileName, data)
+	if putErr != nil {
+		return "", putErr
+	}
+	encoded, marshalErr := json.Marshal([]any{
+		map[string]string{"type": "text", "text": fmt.Sprintf("Image %s from %s. MIME %s, %d bytes.", storedImage.Name, targetPath, storedImage.MIMEType, storedImage.Size)},
+		map[string]any{"type": "image_url", "image_url": map[string]string{"url": storedImage.StorageURL}},
+	})
+	return string(encoded), marshalErr
+}

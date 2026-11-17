@@ -38,6 +38,27 @@ var sandboxImportFileTool = Tool{
 	},
 }
 
+// sandboxReadImageTool 把 /mnt/workspace 中的图片存入私有 OSS 并返回多模态内容数组，供模型自己视觉检查（不发送给用户）。
+var sandboxReadImageTool = Tool{
+	Name:               "sandbox_read_image",
+	Definition:         json.RawMessage(`{"type":"function","function":{"name":"sandbox_read_image","description":"Inspect an image file inside /mnt/workspace visually (PNG, JPEG, GIF, or WebP up to 4 MiB), returning the image itself to your vision context without sending it to chat. Runs in order with other sandbox_* and browser_* calls.","parameters":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","description":"Absolute path of an existing image file inside /mnt/workspace, for example /mnt/workspace/deck/thumbnails.png"}},"required":["path"]}}}`),
+	OutsideTransaction: true,
+	Ordered:            true,
+	ContentArray:       true,
+	Execute: func(ctx context.Context, deps Dependencies, _ *database.Queries, userID uuid.UUID, arguments string) (string, error) {
+		var parsed struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &parsed); err != nil {
+			return "Error: arguments must be JSON", nil
+		}
+		if strings.TrimSpace(parsed.Path) == "" {
+			return "Error: path is required", nil
+		}
+		return deps.Sandbox.ReadImage(ctx, userID, parsed.Path)
+	},
+}
+
 // sandboxSendFileTool 把 /mnt/workspace 中的最终文件作为独立聊天气泡发送给用户，与电脑命令共用有序队列。
 var sandboxSendFileTool = Tool{
 	Name:               "sandbox_send_file",
@@ -74,7 +95,7 @@ func sandboxTools() []Tool {
 	if err := json.Unmarshal(sandboxCatalog, &catalog); err != nil {
 		panic(err)
 	}
-	registered := make([]Tool, 0, len(catalog)+2)
+	registered := make([]Tool, 0, len(catalog)+3)
 	for _, entry := range catalog {
 		definition, err := json.Marshal(map[string]any{"type": "function", "function": map[string]any{"name": entry.Name, "description": entry.Description, "parameters": entry.InputSchema}})
 		if err != nil {
@@ -88,6 +109,6 @@ func sandboxTools() []Tool {
 				return deps.Sandbox.Call(ctx, userID, entry.Name, arguments)
 			}})
 	}
-	registered = append(registered, sandboxImportFileTool, sandboxSendFileTool)
+	registered = append(registered, sandboxImportFileTool, sandboxReadImageTool, sandboxSendFileTool)
 	return registered
 }
