@@ -32,6 +32,10 @@ func (s *server) sandboxDesktop(w http.ResponseWriter, r *http.Request) {
 	connection.SetReadLimit(8 << 10)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
+	if s.wsCtx != nil {
+		stopWS := context.AfterFunc(s.wsCtx, cancel)
+		defer stopWS()
+	}
 	var hello struct {
 		Type  string `json:"type"`
 		Token string `json:"token"`

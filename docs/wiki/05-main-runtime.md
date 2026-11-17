@@ -176,8 +176,12 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 2. **PostgreSQL 栅栏代数（Fencing Token）与三阶段边界**
    - 仅靠 Redis 临时锁不足以防范极端 GC/IO 停顿后的脑裂覆盖。迁移 `00052_add_user_lease_epoch` 在 `users` 表新增单调递增的 `main_lease_epoch`：容器抢到 Redis 租约后，在 `LockUserMessages` 锁内确认待办并原子 `+1` 取得本轮代数。
    - 遵循三阶段规定并经用户确认修改 `runner.go`：`Runner` 持有本轮 `leaseEpoch` 并提供固定锁序的 `lockAndVerifyLease`（永远先拿 `LockUserMessages` 再核对 `main_lease_epoch`，消除死锁可能）；请求前阶段（清理上次中断残留、开步骤、开压缩步骤与保存摘要）、请求阶段（首段输出占位 `reserve`）和请求后阶段（放弃尝试、保存回复、保存工具回执与失败收尾）的所有写库事务均核对该代数，步骤结束查询同步限定 `finished_at IS NULL`。一旦发现代数已被新实例推进，旧 Runner 立即返回 `errLostLease` 静默退出，不覆盖新实例数据，也不写入 `main_failed_through_sequence`。
-3. **滚动停机秒级交接**
-   - 容器收到 `SIGINT` / `SIGTERM` 后：HTTP 最多等 5 秒关闭；Manager 立即取消本地正在运行的 Runner（延续 2026-11-09 确认的「信号一到立即取消、接受重复请求与重复执行成本」原则），协程退出后主动删除自己持有的 Redis 租约，并复查 `HasMainWork` 将未完用户推回 `agent:wake_queue`，另一个存活容器在毫秒级内接手从数据库断点继续。
+3. **滚动停机单步优雅交棒（2026-11-16 更新）**
+   - 2026-11-16，用户确认将「信号一到立即取消」升级为**单步边界优雅排空（Cooperative Drain）**，避免发版重启打断正在进行的模型流式请求或工具执行（尤其是长耗时工具与沙盒操作）。
+   - 容器收到首次 `SIGINT` / `SIGTERM` 后：
+     - `drainCtx` 取消，`/healthz` 立刻返回 `503 draining`；生产环境等待 `8s`（覆盖 Caddy 的 `5s` 探活间隔与 `3s` 超时）让网关摘除本实例，随后发送 `1001 Going Away` 断开已建 WebSocket（触发前端立即重连至存活实例并按游标补齐）并调用 `http.Server.Shutdown`（最多等 5 秒关闭普通 HTTP 请求）；调度器与闲置反思扫描随 `drainCtx` 停止。
+     - `Manager` 停止从 `agent:wake_queue` / `agent:subagent_wake_queue` 拉取新任务与周期补偿（若恰好在信号瞬间出队尚未抢锁，立即放回队列）；已在运行的 Main 与 Subagent `Runner` 继续持有 `runCtx`（最长兜底 `11m`，略小于生产 Compose `stop_grace_period: 12m`），租约续期与跨实例打断/取消信号保持有效，直到当前这一轮（`beforeRequest -> sendRequest -> afterRequest`）完整跑完并落库。
+     - 本轮结束进入下一轮前（或在重试退避等待中）检测到 `drainCtx` 已取消时，`Runner` 静默返回，随后 `Manager` 主动删除 Redis 租约并复查 `HasMainWork` / `HasSubagentWork` 将剩余待办推回唤醒队列，由存活容器接力跑下一轮；若超出 `11m` 硬排空上限或收到第二次信号，再取消 `runCtx` 并靠断点机制兜底恢复。
 
 ### 停机与开机（2026-11-09，单进程阶段历史记录）
 

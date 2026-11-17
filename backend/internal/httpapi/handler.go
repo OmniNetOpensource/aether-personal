@@ -22,6 +22,8 @@ import (
 
 // server 共享请求处理所需的连接池、Redis 客户端、服务配置与图片存储，图片入口经 Redis 跨实例共享缓存。
 type server struct {
+	wsCtx        context.Context
+	drainCtx     context.Context
 	databasePool *pgxpool.Pool
 	redisClient  *redis.Client
 	queries      *database.Queries
@@ -34,9 +36,11 @@ type server struct {
 	sandbox      *sandbox.Store
 }
 
-// NewHandler 装配聊天与管理接口；聊天输入落库后经 Redis 跨实例唤醒 Agent 与聊天推送，订阅随进程 ctx 退出。
-func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *redis.Client, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
+// NewHandler 装配聊天与管理接口；聊天输入落库后经 Redis 跨实例唤醒 Agent 与聊天推送，排空时摘流并在关闭 HTTP 时断开 WebSocket。
+func NewHandler(wsCtx, drainCtx context.Context, databasePool *pgxpool.Pool, redisClient *redis.Client, appConfig config.Config, serviceSettings *services.Store, agents *agent.Manager, imageStore *images.Store) http.Handler {
 	s := &server{
+		wsCtx:        wsCtx,
+		drainCtx:     drainCtx,
 		databasePool: databasePool,
 		redisClient:  redisClient,
 		queries:      database.New(databasePool),
@@ -48,7 +52,7 @@ func NewHandler(ctx context.Context, databasePool *pgxpool.Pool, redisClient *re
 		images:       imageStore,
 		sandbox:      sandbox.New(databasePool, serviceSettings, imageStore, appConfig.Sandbox),
 	}
-	go s.listenForUserMessages(ctx)
+	go s.listenForUserMessages(wsCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -97,8 +101,12 @@ func (s *server) serveFrontendShell(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "index.html", info.ModTime(), file)
 }
 
-// healthz 同时探测 PostgreSQL 与 Redis 连通性，供网关主动健康检查在单实例异常时自动切流。
+// healthz 在排空时提前返回 503 让网关摘流，平时同时探测 PostgreSQL 与 Redis 连通性。
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
+	if s.drainCtx != nil && s.drainCtx.Err() != nil {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
 	if err := s.databasePool.Ping(r.Context()); err != nil {
 		slog.Error("database health check failed", "error", err)
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)

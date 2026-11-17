@@ -1,4 +1,4 @@
-// 本文件是后端进程入口：装配数据库、Redis 客户端、共享图片缓存、Agent 与调度器、HTTP 服务，并随退出信号等待后台任务和请求处理结束。
+// 本文件是后端进程入口：装配数据库、Redis 客户端、共享图片缓存、Agent 与调度器、HTTP 服务，并在停机时先摘流再等待当前步骤安全交棒退出。
 
 package main
 
@@ -23,9 +23,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// hardDrainTimeout 是排空阶段的最长等待时间，略小于生产 Compose 的 stop_grace_period，以便在容器被强杀前主动取消并释放租约。
+const hardDrainTimeout = 11 * time.Minute
+
+// caddyDrainDelay 在生产环境收到停机信号后等待 Caddy 主动健康检查（5s 间隔 + 3s 超时）将本实例摘流，再关闭 HTTP 与 WebSocket。
+const caddyDrainDelay = 8 * time.Second
+
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	drainCtx, stopDrain := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopDrain()
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	wsCtx, cancelWS := context.WithCancel(context.Background())
+	defer cancelWS()
 	appConfig, err := config.Load()
 	if err != nil {
 		slog.Error("load config failed", "error", err)
@@ -74,22 +84,35 @@ func main() {
 	manager := agent.NewManager(databasePool, redisClient, appConfig, serviceSettings, imageStore)
 	managerDone := make(chan error, 1)
 	go func() {
-		err := manager.Start(ctx)
+		err := manager.Start(drainCtx, runCtx)
 		if err != nil {
-			stop()
+			stopDrain()
+			cancelRun()
 		}
 		managerDone <- err
 	}()
-	go scheduler.Run(ctx, databasePool, manager)
-	go proactive.Run(ctx, databasePool, manager)
+	go scheduler.Run(drainCtx, databasePool, manager)
+	go proactive.Run(drainCtx, databasePool, manager)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)
-	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(ctx, databasePool, redisClient, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpapi.NewHandler(wsCtx, drainCtx, databasePool, redisClient, appConfig, serviceSettings, manager, imageStore), ReadHeaderTimeout: 10 * time.Second}
 	httpDone := make(chan struct{})
 	go func() {
 		defer close(httpDone)
-		<-ctx.Done()
+		<-drainCtx.Done()
+		// 收到首次停机信号后恢复默认信号处理，便于紧急情况下发第二次信号立即退出；同时启动兜底强停计时器。
+		stopDrain()
+		hardTimer := time.AfterFunc(hardDrainTimeout, cancelRun)
+		defer hardTimer.Stop()
+		if appConfig.AppEnv == "prod" {
+			slog.Info("draining traffic before shutdown", "wait", caddyDrainDelay)
+			select {
+			case <-time.After(caddyDrainDelay):
+			case <-runCtx.Done():
+			}
+		}
+		cancelWS()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(shutdown)
@@ -98,7 +121,7 @@ func main() {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
-	stop()
+	stopDrain()
 	<-httpDone
 	if err := <-managerDone; err != nil {
 		slog.Error("background workers stopped", "error", err)

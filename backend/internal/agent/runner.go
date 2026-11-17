@@ -138,10 +138,10 @@ const (
 	roundStop
 )
 
-// run 是 agent loop：在独占协程里一轮轮执行三个阶段，直到当前 Agent 没有活。
-// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断后从任何一步都能接着走。
+// run 是 agent loop：在独占协程里一轮轮执行三个阶段，直到当前 Agent 没有活或实例进入排空交棒。
+// 每一步的结果都先落库，下一轮再从数据库读，所以进程中断或排空交棒后从任何一步都能接着走。
 // 启动与结束时的聊天通知由 Manager 调度层在租约生效后与释放后统一触发。
-func (r *Runner) run(parent context.Context) error {
+func (r *Runner) run(parent, drainCtx context.Context) error {
 	hasWork, err := r.hasWork(parent)
 	if err != nil {
 		return fmt.Errorf("check agent work: %w", err)
@@ -164,6 +164,9 @@ func (r *Runner) run(parent context.Context) error {
 		}
 	}()
 	for {
+		if drainCtx.Err() != nil {
+			return nil
+		}
 		if retry.budget == nil {
 			retry.budget, retry.cancel = context.WithDeadlineCause(runCtx, time.Now().Add(modelRequestTimeout), errModelRetryTimeout)
 		}
@@ -174,7 +177,7 @@ func (r *Runner) run(parent context.Context) error {
 		if err == nil {
 			replyID, response, retryable, err = r.sendRequest(runCtx, retry.budget, stepID, request)
 		}
-		end, err := r.afterRequest(runCtx, &retry, through, stepID, replyID, response, retryable, err)
+		end, err := r.afterRequest(runCtx, drainCtx, &retry, through, stepID, replyID, response, retryable, err)
 		if err != nil {
 			return err
 		}
@@ -183,6 +186,9 @@ func (r *Runner) run(parent context.Context) error {
 		}
 		if end == roundRetry {
 			continue
+		}
+		if drainCtx.Err() != nil {
+			return nil
 		}
 		hasWork, err := r.hasWork(runCtx)
 		if err != nil {

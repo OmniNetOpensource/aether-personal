@@ -269,6 +269,9 @@ func (s *server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.wsCtx.Done():
+			connection.Close(websocket.StatusGoingAway, "server shutting down")
+			return
 		case <-wakeSignal:
 			if err := s.pushChatMessages(ctx, relay, userID, &changeCursor); err != nil {
 				return

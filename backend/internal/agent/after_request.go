@@ -21,7 +21,7 @@ import (
 
 // afterRequest 是请求后阶段的入口：err 是本轮在请求前或请求阶段遇到的错误，为空表示拿到了完整回复。
 // 返回值告诉循环主体下一步：本轮完成、原样重来一轮，或结束本次运行；只有失败收尾本身出错才返回错误。
-func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through int64, stepID, replyID uuid.UUID, response chatResponse, retryable bool, err error) (roundEnd, error) {
+func (r *Runner) afterRequest(ctx, drainCtx context.Context, retry *modelRetry, through int64, stepID, replyID uuid.UUID, response chatResponse, retryable bool, err error) (roundEnd, error) {
 	if err == nil {
 		retry.reset()
 		var message assistantMessage
@@ -73,6 +73,8 @@ func (r *Runner) afterRequest(ctx context.Context, retry *modelRetry, through in
 	delay := time.Second << retry.retries
 	retry.retries++
 	select {
+	case <-drainCtx.Done():
+		return roundStop, nil
 	case <-retry.budget.Done():
 		return r.failRun(ctx, through, context.Cause(retry.budget))
 	case <-time.After(delay):
