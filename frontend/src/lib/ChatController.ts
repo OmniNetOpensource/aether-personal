@@ -25,6 +25,9 @@ export interface ChatMessage {
   position: string;
 }
 
+// 位于最新底部时主列表保留的最近消息条数；超出部分的旧历史会从头部回收，再次上翻时按游标向后端重新拉取。
+export const latestMessageWindow = 30;
+
 // chatMessageFromRow 在服务器消息进入界面时统一转换时间和多段内容，正常聊天与历史窗口共用。
 export function chatMessageFromRow(row: ChatPage['messages'][number]): ChatMessage {
   return {
@@ -475,15 +478,33 @@ export class ChatController {
     if (event.type !== 'share_deleted') throw new Error('取消分享返回了错误的事件类型');
   }
 
-  // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻。
+  // trimOlderMessages 在用户回到最新底部时裁掉超出窗口的旧历史，回退翻页游标并重新开放上翻加载。
+  trimOlderMessages(maxCount = latestMessageWindow): number {
+    if (this.loadingHistory || this.messages.length <= maxCount) return 0;
+    const removed = this.messages.length - maxCount;
+    this.messages = this.messages.slice(removed);
+    this.oldestHistoryPosition = this.messages[0]?.position;
+    this.hasMoreHistory = true;
+    this.notify();
+    return removed;
+  }
+
+  // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻；首屏只保留最近窗口。
   private mergeHistory(page: ChatPage) {
+    const initialLoad = !this.historyLoaded;
     const first = page.messages[0]?.position;
     if (first && (!this.oldestHistoryPosition || first < this.oldestHistoryPosition)) {
       this.oldestHistoryPosition = first;
     }
     this.merge(page);
     this.historyLoaded = true;
-    this.hasMoreHistory = page.messages.length > 0;
+    let trimmed = false;
+    if (initialLoad && this.messages.length > latestMessageWindow) {
+      this.messages = this.messages.slice(this.messages.length - latestMessageWindow);
+      this.oldestHistoryPosition = this.messages[0]?.position;
+      trimmed = true;
+    }
+    this.hasMoreHistory = trimmed || page.messages.length > 0;
   }
 
   // merge 把服务器发来的一页消息并入列表：同一 ID 覆盖旧值，再按服务器位置排序。

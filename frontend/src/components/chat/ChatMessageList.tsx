@@ -1,14 +1,16 @@
-// 本文件用 Virtuoso 展示聊天历史，负责翻页、一次性回底、长消息展开、引用回看与分享多选勾选。
+// 本文件用 Virtuoso 展示聊天历史，负责翻页、贴底回收旧历史、一次性回底、长消息展开、引用回看与分享多选勾选。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import type { VirtuosoHandle } from 'react-virtuoso';
+import { latestMessageWindow } from '../../lib/ChatController.js';
 import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 import { AssistantWorkingStatus } from './AssistantWorkingStatus.js';
 import { ChatMessageEntry } from './ChatMessageEntry.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
+import { useVirtuosoFirstItemIndex } from './useVirtuosoFirstItemIndex.js';
 
 // 页头、页尾始终使用相同组件，翻页或思考状态改变时只更新内容。
 type ListContext = { header: ReactNode; footer: ReactNode };
@@ -21,10 +23,7 @@ const components = {
   ),
 };
 
-// Virtuoso 向上翻页需要递减 firstItemIndex；服务端按游标分页，提前留出历史索引空间。
-const initialFirstItemIndex = 1_000_000_000;
-
-// ChatMessageList 把尺寸与可见行交给 Virtuoso，只保存用户的导航和展开状态。
+// ChatMessageList 把尺寸与可见行交给 Virtuoso，只保存用户的导航、贴底回收和展开状态。
 export function ChatMessageList({
   controller,
   onQuote,
@@ -48,24 +47,77 @@ export function ChatMessageList({
   }, []);
   const lastLatestRequest = useRef(latestRequest);
   const browsingHistory = useRef(false);
+  const atBottomRef = useRef(true);
   const navigation = useRef<MessageQuote | null>(null);
   const clearHighlight = useRef<() => void>(() => {});
   const [quoteTarget, setQuoteTarget] = useState<MessageQuote | null>(null);
   const [quoteError, setQuoteError] = useState('');
+  const [navigatingQuote, setNavigatingQuote] = useState(false);
+  const [pinOlderHistory, setPinOlderHistory] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState(() => new Set<string>());
   const [atBottom, setAtBottom] = useState(true);
+  const [isScrolling, setIsScrolling] = useState(false);
 
-  // 控制器就地更新数组。快照让 Virtuoso 收到新数据，首批的锚点区分顶部插入与尾部追加。
+  // 控制器就地更新数组。快照让 Virtuoso 收到新数据，firstItemIndex 兼顾向上翻页与头部裁剪。
   const messages = controller.messages.slice();
-  const initialMessage = useRef(messages[0]?.id);
-  initialMessage.current ??= messages[0]?.id;
-  const prepended = messages.findIndex((message) => message.id === initialMessage.current);
-  const firstItemIndex = initialFirstItemIndex - Math.max(0, prepended);
+  const firstItemIndex = useVirtuosoFirstItemIndex(messages);
+
+  // 离开底部后解除“贴底手动翻页”保护，后续回到底部时即可回收之前翻出的旧历史。
+  const handleAtBottomChange = useCallback((nextAtBottom: boolean) => {
+    atBottomRef.current = nextAtBottom;
+    setAtBottom(nextAtBottom);
+    if (!nextAtBottom) setPinOlderHistory(false);
+  }, []);
+
+  // 屏幕足够高时点击翻页可能仍在底部阈值内，临时锁定避免刚拉回的历史被立即裁掉。
+  function loadOlderHistory() {
+    if (atBottomRef.current) setPinOlderHistory(true);
+    void controller.loadHistory(true);
+  }
+
+  // 停在最新底部且不处于翻页、引用跳转或分享多选时，回收头部超出窗口的旧历史及对应展开记录。
+  useEffect(() => {
+    if (
+      !atBottom ||
+      isScrolling ||
+      selectionMode ||
+      navigatingQuote ||
+      pinOlderHistory ||
+      controller.loadingHistory ||
+      messages.length <= latestMessageWindow
+    ) {
+      return;
+    }
+    const removed = controller.trimOlderMessages(latestMessageWindow);
+    if (removed === 0) return;
+    const keptIDs = new Set(controller.messages.map((message) => message.id));
+    setExpandedMessages((current) => {
+      if (current.size === 0) return current;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of current) {
+        if (keptIDs.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [
+    atBottom,
+    isScrolling,
+    selectionMode,
+    navigatingQuote,
+    pinOlderHistory,
+    controller,
+    controller.loadingHistory,
+    messages.length,
+  ]);
 
   // 回到底部只执行一次，并取消尚在翻页或等待高亮的引用。
   function scrollToBottom() {
     browsingHistory.current = false;
     navigation.current = null;
+    setNavigatingQuote(false);
+    setPinOlderHistory(false);
     setQuoteTarget(null);
     clearHighlight.current();
     if (messages.length === 0) return;
@@ -106,6 +158,7 @@ export function ChatMessageList({
     const target = { ...quote };
     navigation.current = target;
     browsingHistory.current = false;
+    setNavigatingQuote(true);
     clearHighlight.current();
     setQuoteError('');
     while (!controller.messages.some((message) => message.id === quote.message_id)) {
@@ -114,6 +167,7 @@ export function ChatMessageList({
         await controller.loadHistory(true);
       if (navigation.current !== target) return;
       if (controller.messages.length === count) {
+        setNavigatingQuote(false);
         setQuoteError('暂时找不到引用原文，请加载历史后重试');
         return;
       }
@@ -132,6 +186,7 @@ export function ChatMessageList({
       align: 'center',
       done: () => {
         if (navigation.current !== quote) return;
+        setNavigatingQuote(false);
         const element = viewport.current;
         const body = element?.querySelector<HTMLElement>(
           `[data-quote-body][data-message-id="${quote.message_id}"]`,
@@ -193,7 +248,7 @@ export function ChatMessageList({
             type="button"
             className="load-older"
             disabled={controller.loadingHistory}
-            onClick={() => void controller.loadHistory(true)}
+            onClick={loadOlderHistory}
           >
             {controller.loadingHistory ? '正在加载…' : '加载更早的消息'}
           </button>
@@ -224,7 +279,8 @@ export function ChatMessageList({
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={{ index: 'LAST', align: 'end' }}
         atBottomThreshold={160}
-        atBottomStateChange={setAtBottom}
+        atBottomStateChange={handleAtBottomChange}
+        isScrolling={setIsScrolling}
         onWheel={() => {
           browsingHistory.current = true;
         }}
@@ -235,7 +291,7 @@ export function ChatMessageList({
           browsingHistory.current = true;
         }}
         startReached={() => {
-          if (browsingHistory.current) void controller.loadHistory(true);
+          if (browsingHistory.current) loadOlderHistory();
         }}
         itemContent={(itemIndex, message) => {
           const index = itemIndex - firstItemIndex;
@@ -261,10 +317,7 @@ export function ChatMessageList({
               className={`chat-list-row is-selectable${selected ? ' is-selected' : ''}`}
               data-chat-row={message.id}
               onClick={(event) => {
-                if (
-                  event.target instanceof Element &&
-                  event.target.closest('button, a, dialog')
-                ) {
+                if (event.target instanceof Element && event.target.closest('button, a, dialog')) {
                   return;
                 }
                 onToggleSelect?.(message.id, event.shiftKey);
