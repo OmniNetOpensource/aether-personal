@@ -34,10 +34,7 @@ WHERE user_id = sqlc.arg(user_id) AND client_message_id = sqlc.arg(client_messag
 
 -- name: ListMainWork :many
 -- 启动与周期补查只读取 Main 的业务待办，排除 Subagent 自己的内部消息。
-SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
-    WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
-        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context' AND m.content ->> 'name' IS DISTINCT FROM 'compact_reminder'), 0)::bigint AS input_sequence
-FROM main_work AS w ORDER BY w.user_id;
+SELECT user_id FROM main_work ORDER BY user_id;
 
 -- name: InsertAgentMessage :exec
 INSERT INTO messages (user_id, subagent_id, role, content, step_id, sender, visible)
@@ -160,6 +157,30 @@ SELECT s.model FROM messages m JOIN steps s ON s.id = m.step_id
 WHERE m.id = sqlc.arg(reply_id) AND m.id = (
     SELECT tail.id FROM messages tail WHERE tail.user_id = sqlc.arg(user_id) AND tail.subagent_id IS NULL
     ORDER BY tail.sequence DESC LIMIT 1
+);
+
+-- name: HasHotCompactCommitWindow :one
+-- 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
+-- 尚在防抖等待中的新用户消息（未开步）不阻断提交，它们会保留在摘要之后供下一轮直接读取。
+SELECT EXISTS(
+    SELECT 1 FROM messages target
+    WHERE target.id = sqlc.arg(reply_id)
+      AND target.user_id = sqlc.arg(user_id)
+      AND target.subagent_id IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM messages later
+          WHERE later.user_id = target.user_id
+            AND later.subagent_id IS NULL
+            AND later.sequence > target.sequence
+            AND (later.role = 'assistant' OR later.is_summary)
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM steps s
+          WHERE s.user_id = target.user_id
+            AND s.subagent_id IS NULL
+            AND s.purpose = 'agent'
+            AND s.finished_at IS NULL
+      )
 );
 
 -- name: InsertContextSummary :exec

@@ -83,21 +83,22 @@ type MessageShareItem struct {
 }
 
 type ModelSetting struct {
-	ID                     uuid.UUID
-	Singleton              bool
-	MainModel              string
-	Version                int64
-	UpdatedAt              time.Time
-	UpdatedBy              string
-	MainModelMaxTokens     *int32
-	CompactAtTokens        int32
-	MainContextLength      *int64
-	ReflectionIdleMinutes  int32
-	SubagentModel          *string
-	SubagentModelMaxTokens *int32
-	SubagentContextLength  *int64
-	HotCompactDelaySeconds int32
-	HotCompactAtTokens     int32
+	ID                         uuid.UUID
+	Singleton                  bool
+	MainModel                  string
+	Version                    int64
+	UpdatedAt                  time.Time
+	UpdatedBy                  string
+	MainModelMaxTokens         *int32
+	CompactAtTokens            int32
+	MainContextLength          *int64
+	ReflectionIdleMinutes      int32
+	SubagentModel              *string
+	SubagentModelMaxTokens     *int32
+	SubagentContextLength      *int64
+	HotCompactDelaySeconds     int32
+	HotCompactAtTokens         int32
+	UserMessageDebounceSeconds int32
 }
 
 type SandboxWorkspace struct {

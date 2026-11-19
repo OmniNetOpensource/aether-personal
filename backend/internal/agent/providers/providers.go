@@ -53,7 +53,6 @@ type Provider interface {
 	Matches(model string) bool
 	Service() string
 	PrepareRequest(ctx context.Context, credentials services.Settings, request Request) (OutgoingRequest, error)
-	HasOutput(payload []byte) bool
 	DecodeStream(payloads [][]byte, request Request) (response Response, incomplete bool, err error)
 }
 

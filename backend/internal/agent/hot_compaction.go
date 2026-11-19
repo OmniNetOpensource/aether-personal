@@ -20,12 +20,12 @@ type hotCompaction struct {
 	cancel        context.CancelFunc
 }
 
-// scheduleHotCompaction 为本次回答登记可取消的后台任务；进程排空时取消，不占用聊天执行槽位。
+// scheduleHotCompaction 为本次回答登记后台热压缩任务；等待阶段可被新输入或进程排空取消，开始调用模型后不再被新输入打断。
 func (r *Runner) scheduleHotCompaction(drainCtx context.Context, replyID uuid.UUID, through int64, inputTokens int32) {
 	m := r.manager
 	finished := time.Now()
-	ctx, cancel := context.WithCancel(drainCtx)
-	job := &hotCompaction{inputSequence: through, cancel: cancel}
+	waitCtx, cancelWait := context.WithCancel(drainCtx)
+	job := &hotCompaction{inputSequence: through, cancel: cancelWait}
 	m.mutex.Lock()
 	if previous := m.hotCompactions[r.userID]; previous != nil {
 		previous.cancel()
@@ -33,26 +33,31 @@ func (r *Runner) scheduleHotCompaction(drainCtx context.Context, replyID uuid.UU
 	m.hotCompactions[r.userID] = job
 	m.mutex.Unlock()
 
+	stopWaiting := func() {
+		cancelWait()
+		m.mutex.Lock()
+		if m.hotCompactions[r.userID] == job {
+			delete(m.hotCompactions, r.userID)
+		}
+		m.mutex.Unlock()
+	}
+
 	m.running.Go(func() {
-		defer func() {
-			cancel()
-			m.mutex.Lock()
-			if m.hotCompactions[r.userID] == job {
-				delete(m.hotCompactions, r.userID)
-			}
-			m.mutex.Unlock()
-		}()
-		if err := r.runHotCompaction(ctx, replyID, inputTokens, finished); err != nil && ctx.Err() == nil && !errors.Is(err, pgx.ErrNoRows) {
+		defer stopWaiting()
+		if err := r.runHotCompaction(waitCtx, drainCtx, stopWaiting, replyID, inputTokens, finished); err != nil && drainCtx.Err() == nil && !errors.Is(err, pgx.ErrNoRows) {
 			slog.Error("hot compaction failed", "user_id", r.userID, "reply_id", replyID, "error", err)
 		}
 	})
 }
 
-// runHotCompaction 从回答结束计时；只有到点后仍空闲的大上下文才读取历史并发送摘要请求。
-func (r *Runner) runHotCompaction(ctx context.Context, replyID uuid.UUID, inputTokens int32, finished time.Time) error {
+// runHotCompaction 从回答结束计时；等待期遇新输入直接取消，到点开始生成后不再被新输入中断。
+func (r *Runner) runHotCompaction(waitCtx, drainCtx context.Context, stopWaiting func(), replyID uuid.UUID, inputTokens int32, finished time.Time) error {
 	q := database.New(r.databasePool)
-	settings, err := modelsettings.LoadRuntime(ctx, q)
+	settings, err := modelsettings.LoadRuntime(waitCtx, q)
 	if err != nil {
+		if waitCtx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	if inputTokens < settings.HotCompactAtTokens {
@@ -61,22 +66,24 @@ func (r *Runner) runHotCompaction(ctx context.Context, replyID uuid.UUID, inputT
 	timer := time.NewTimer(time.Until(finished.Add(time.Duration(settings.HotCompactDelaySeconds) * time.Second)))
 	defer timer.Stop()
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-waitCtx.Done():
+		return nil
 	case <-timer.C:
 	}
+	// 等待期结束，先注销新输入取消句柄，此后已发出的压缩请求不再因用户新消息中断。
+	stopWaiting()
 
-	// 末尾回复同时确定本轮模型和摘要边界。在生成前和落库时 compactContext 会持锁复查它。
-	model, err := q.GetLatestMainReplyModel(ctx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: replyID})
+	// 末尾回复同时确定本轮模型和摘要边界。compactContext 开步前会持锁复查它仍是末尾。
+	model, err := q.GetLatestMainReplyModel(drainCtx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: replyID})
 	if err != nil {
 		return err
 	}
-	rows, err := q.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID})
+	rows, err := q.ListAgentContextRows(drainCtx, database.ListAgentContextRowsParams{UserID: r.userID})
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 || rows[len(rows)-1].ID != replyID {
 		return nil
 	}
-	return r.compactContext(ctx, rows, rows[len(rows)-1].Sequence, model, compactPrompt, nil, replyID)
+	return r.compactContext(drainCtx, rows, rows[len(rows)-1].Sequence, model, compactPrompt, nil, replyID)
 }

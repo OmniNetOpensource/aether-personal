@@ -164,26 +164,6 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
-// HasOutput 在首段正文或工具调用到达时占位；思考与心跳仍允许新输入取消请求。
-func (claudeProvider) HasOutput(payload []byte) bool {
-	var event struct {
-		Type         string `json:"type"`
-		ContentBlock struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content_block"`
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	}
-	if json.Unmarshal(payload, &event) != nil {
-		return false
-	}
-	return (event.Type == "content_block_start" && (event.ContentBlock.Type == "tool_use" || (event.ContentBlock.Type == "text" && strings.TrimSpace(event.ContentBlock.Text) != ""))) ||
-		(event.Type == "content_block_delta" && event.Delta.Type == "text_delta" && strings.TrimSpace(event.Delta.Text) != "")
-}
-
 // claudeStreamBlock 累积一个内容块；原始字段保留供应商元数据，四个 Builder 分别承接对应的流式增量。
 type claudeStreamBlock struct {
 	fields                           map[string]json.RawMessage

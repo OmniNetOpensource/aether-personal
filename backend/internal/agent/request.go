@@ -1,5 +1,5 @@
-// 本文件是 agent loop 的请求阶段：发出请求前阶段组装好的请求并收回完整回复；
-// 普通与压缩请求共用出站文本过滤；首段输出到达时插入占位，完整回复由请求后阶段保存。
+// 本文件是 agent loop 的请求阶段：先在用户消息锁内核对租约与新输入并插入占位，再发出请求前阶段组装好的请求并收回完整回复；
+// 普通与压缩请求共用出站文本过滤，请求一旦发出不再被新输入打断，完整回复由请求后阶段保存。
 
 package agent
 
@@ -23,85 +23,48 @@ type chatResponse = providers.Response
 // modelRequest 见 chatResponse 的说明。
 type modelRequest = providers.Request
 
-// sendRequest 是请求阶段的入口：Main 在思考阶段可被用户新输入取消，首段输出时校验无新输入后插入占位；
-// Subagent 独立在后台运行，不受用户新消息打断，仅核对自身租约与取消状态后插入占位。
+// sendRequest 是请求阶段的入口：发请求前先校验租约与是否有更新的 Main 输入，随后固定输入边界并插入占位；
+// 请求一旦发出不再因新输入中途取消，期间到达的新消息排在占位之后留给下一轮处理。
 func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, request modelRequest) (uuid.UUID, chatResponse, bool, error) {
-	modelCtx, cancel := context.WithCancelCause(budget)
-	defer cancel(nil)
-	stopListening := func() {}
-	if r.subagentID == nil {
-		r.mutex.Lock()
-		r.thinking = &thinkingRequest{request.InputSequence, cancel}
-		r.mutex.Unlock()
-		stopListening = func() {
-			r.mutex.Lock()
-			r.thinking = nil
-			r.mutex.Unlock()
-		}
-	}
-	defer stopListening()
-
-	input := database.HasNewMainInputParams{UserID: r.userID, Through: request.InputSequence}
 	var replyID uuid.UUID
-	reserve := func() error {
-		stopListening()
-		return pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
-			q := database.New(tx)
-			if err := r.lockAndVerifyLease(ctx, q); err != nil {
-				if errors.Is(err, errLostLease) {
-					cancel(errLostLease)
-				}
-				return err
-			}
-			if r.subagentID == nil {
-				newer, err := q.HasNewMainInput(ctx, input)
-				if err != nil {
-					return err
-				}
-				if newer {
-					cancel(errNewInput)
-					return errNewInput
-				}
-			}
-			// 固定生成这条回复时模型看过的消息边界，崩溃后也能重建 compact 的输入。
-			if err := q.SetStepInputSequence(ctx, database.SetStepInputSequenceParams{ID: stepID, InputSequence: request.InputSequence}); err != nil {
-				return err
-			}
-			var err error
-			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{
-				UserID:     r.userID,
-				SubagentID: r.subagentID,
-				StepID:     &stepID,
-			})
+	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+		q := database.New(tx)
+		if err := r.lockAndVerifyLease(ctx, q); err != nil {
 			return err
+		}
+		if r.subagentID == nil {
+			newer, err := q.HasNewMainInput(ctx, database.HasNewMainInputParams{UserID: r.userID, Through: request.InputSequence})
+			if err != nil {
+				return err
+			}
+			if newer {
+				return errNewInput
+			}
+		}
+		// 固定生成这条回复时模型看过的消息边界，崩溃后也能重建 compact 的输入。
+		if err := q.SetStepInputSequence(ctx, database.SetStepInputSequenceParams{ID: stepID, InputSequence: request.InputSequence}); err != nil {
+			return err
+		}
+		var err error
+		replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{
+			UserID:     r.userID,
+			SubagentID: r.subagentID,
+			StepID:     &stepID,
 		})
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, chatResponse{}, false, err
 	}
-	response, retryable, err := r.sendModelRequest(modelCtx, request, "agent", reserve)
-	if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
-		return uuid.Nil, response, false, errLostLease
-	}
-	if errors.Is(context.Cause(modelCtx), errNewInput) {
-		return uuid.Nil, response, false, errNewInput
-	}
+	response, retryable, err := r.sendModelRequest(budget, request, "agent")
 	if err != nil {
 		return uuid.Nil, response, retryable, err
-	}
-	if replyID == uuid.Nil {
-		if err := reserve(); err != nil {
-			if errors.Is(context.Cause(modelCtx), errLostLease) || errors.Is(err, errLostLease) {
-				return uuid.Nil, response, false, errLostLease
-			}
-			if errors.Is(context.Cause(modelCtx), errNewInput) {
-				return uuid.Nil, response, false, errNewInput
-			}
-			return uuid.Nil, response, false, err
-		}
 	}
 	return replyID, response, false, nil
 }
 
 // sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，返回前清理供应商可能回传的负数用量。
-func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, purpose string, onOutput func() error) (response chatResponse, retryable bool, err error) {
+func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, purpose string) (response chatResponse, retryable bool, err error) {
 	// 先过滤请求中的文本，再展开图片并转换为渠道协议。普通请求与压缩请求共用这条路径。
 	filtered, err := filterModelMessages(prepared.Messages)
 	if err != nil {
@@ -143,19 +106,9 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 		retryable := httpResponse.StatusCode == http.StatusTooManyRequests || httpResponse.StatusCode >= 500
 		return response, retryable, fmt.Errorf("model provider returned %d: %.500s", httpResponse.StatusCode, responseBody)
 	}
-	var outputErr error
-	payloads, _, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body, func(payload []byte) error {
-		if onOutput != nil && provider.HasOutput(payload) {
-			outputErr = onOutput()
-			onOutput = nil
-		}
-		return outputErr
-	})
+	payloads, _, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body)
 	if truncated {
 		return response, false, fmt.Errorf("model response exceeds 8 MiB")
-	}
-	if outputErr != nil {
-		return response, false, outputErr
 	}
 	if readErr != nil {
 		return response, true, readErr

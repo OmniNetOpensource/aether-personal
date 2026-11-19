@@ -1,5 +1,5 @@
 // 本文件是 agent loop 的请求前阶段：按 Main 或 Subagent 隔离收拾上次中断残留、补跑缺回执的工具，
-// 再读对应角色模型设置、必要时压缩上下文，并组装这一次的模型请求。
+// 对新到的真人用户消息等待可配置的静默防抖窗口，再读模型设置、必要时压缩上下文，并组装这一次的模型请求。
 
 package agent
 
@@ -17,9 +17,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// beforeRequest 是请求前阶段的入口：把当前 Agent 的数据库状态整理到可以发请求，开一条步骤，再产出这一次的请求。
-// through 随本轮实际读到的消息更新，失败时由请求后阶段据此停住；准备失败时已开的步骤交给失败收尾结束。
-func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (modelRequest, uuid.UUID, error) {
+// beforeRequest 是请求前阶段的入口：把当前 Agent 的数据库状态整理到可以发请求，按配置等待用户连续输入静默窗口，
+// 开一条步骤，再产出这一次的请求。through 随本轮实际读到的消息更新，失败时由请求后阶段据此停住；准备失败时已开的步骤交给失败收尾结束。
+func (r *Runner) beforeRequest(ctx, drainCtx, budget context.Context, through *int64) (modelRequest, uuid.UUID, error) {
 	queries := database.New(r.databasePool)
 	// 在校验本轮租约代数的短事务内收拾上次中断留下的记录，防止已失去租约的旧实例误清接管实例正在运行的步骤；
 	// 必须排在开新步骤之前，否则新步骤也会被标成中断。
@@ -59,6 +59,10 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (mod
 			return modelRequest{}, uuid.Nil, err
 		}
 	}
+	// 真人发消息后先等配置的静默窗口再开步发请求，合并短时间拆句连发；窗口内滚动停机时直接交棒。
+	if err := r.waitForUserInputDebounce(ctx, drainCtx, through); err != nil {
+		return modelRequest{}, uuid.Nil, err
+	}
 	// 在开步骤前确定本轮模型，同一份选择用于步骤、压缩与普通请求。
 	settings, err := modelsettings.LoadUser(budget, queries, r.userID)
 	if err != nil {
@@ -91,6 +95,64 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (mod
 	}
 	*through = request.InputSequence
 	return request, stepID, nil
+}
+
+// waitForUserInputDebounce 在 Main 收到真人用户消息后按看板配置等待静默窗口；
+// 每次到点重查数据库最新真人消息时间，窗口内只要有新真人消息就顺延，跨容器与重启交棒都能沿用同一份数据库时间。
+func (r *Runner) waitForUserInputDebounce(ctx, drainCtx context.Context, through *int64) error {
+	if r.subagentID != nil {
+		return nil
+	}
+	queries := database.New(r.databasePool)
+	for {
+		settings, err := modelsettings.LoadRuntime(ctx, queries)
+		if err != nil {
+			return err
+		}
+		if settings.UserMessageDebounceSeconds <= 0 {
+			return nil
+		}
+		rows, err := queries.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			*through = max(*through, row.Sequence)
+		}
+		latestUserAt, ok := latestPendingUserMessageTime(rows)
+		if !ok {
+			return nil
+		}
+		remaining := time.Until(latestUserAt.Add(time.Duration(settings.UserMessageDebounceSeconds) * time.Second))
+		if remaining <= 0 {
+			return nil
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-drainCtx.Done():
+			timer.Stop()
+			return drainCtx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// latestPendingUserMessageTime 从上下文尾部往回找最近一条助手消息之后的最新真人用户消息时间；
+// 仅含工具回执或系统触发（schedule / reflection / subagent_event）时返回 false，无需防抖等待。
+func latestPendingUserMessageTime(rows []database.ListAgentContextRowsRow) (time.Time, bool) {
+	for index := len(rows) - 1; index >= 0; index-- {
+		row := rows[index]
+		if parseContextMessage(row.Content).Role == "assistant" {
+			return time.Time{}, false
+		}
+		if row.Sender != nil && *row.Sender == "user" {
+			return row.CreatedAt, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // prepareContext 是每次调用模型前的上下文入口：按 Main 或 Subagent 身份选择模型与上限，读入当前世代的消息，
@@ -167,26 +229,25 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 	queries := database.New(r.databasePool)
 	request := r.buildAgentRequest(rows, model)
 	request.Messages = append(request.Messages, runtimeMessage("compaction", compactInstructions+"\n\n"+prompt))
-	// 普通压缩随 Runner 租约提交；后台热压缩只在用户消息锁内核对目标回复仍是末尾。
+	// 普通压缩随 Runner 租约提交；后台热压缩开步前要求目标回复仍是末尾，提交时允许后到的防抖期用户消息排在摘要之后。
 	purpose := "compact"
 	if idleReplyID != uuid.Nil {
 		purpose = "hot_compact"
 	}
-	lockContext := func(q *database.Queries) error {
-		if idleReplyID == uuid.Nil {
-			return r.lockAndVerifyLease(ctx, q)
-		}
-		if err := q.LockUserMessages(ctx, r.userID); err != nil {
-			return err
-		}
-		_, err := q.GetLatestMainReplyModel(ctx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: idleReplyID})
-		return err
-	}
 	var compactStepID uuid.UUID
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
-		if err := lockContext(txQueries); err != nil {
-			return err
+		if idleReplyID == uuid.Nil {
+			if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+				return err
+			}
+		} else {
+			if err := txQueries.LockUserMessages(ctx, r.userID); err != nil {
+				return err
+			}
+			if _, err := txQueries.GetLatestMainReplyModel(ctx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: idleReplyID}); err != nil {
+				return err
+			}
 		}
 		var err error
 		compactStepID, err = txQueries.StartCompactStep(ctx, database.StartCompactStepParams{
@@ -210,7 +271,7 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 		failure := "compaction did not commit; original context preserved"
 		_ = queries.FinishStep(cleanup, database.FinishStepParams{ID: compactStepID, Error: &failure})
 	}()
-	result, _, err := r.sendModelRequest(ctx, request, "compact", nil)
+	result, _, err := r.sendModelRequest(ctx, request, "compact")
 	if err != nil {
 		return fmt.Errorf("compact context: %w", err)
 	}
@@ -222,8 +283,28 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary})
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
-		if err := lockContext(q); err != nil {
-			return err
+		if idleReplyID == uuid.Nil {
+			if err := r.lockAndVerifyLease(ctx, q); err != nil {
+				return err
+			}
+		} else {
+			if err := q.LockUserMessages(ctx, r.userID); err != nil {
+				return err
+			}
+			allowed, err := q.HasHotCompactCommitWindow(ctx, database.HasHotCompactCommitWindowParams{UserID: r.userID, ReplyID: idleReplyID})
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				skipped := "hot compaction skipped: newer turn already started"
+				return q.FinishStep(ctx, database.FinishStepParams{
+					ID:           compactStepID,
+					InputTokens:  result.Usage.PromptTokens,
+					OutputTokens: result.Usage.CompletionTokens,
+					Cost:         result.Usage.Cost,
+					Error:        &skipped,
+				})
+			}
 		}
 		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{
 			UserID:                 r.userID,

@@ -1,4 +1,4 @@
-// 本文件读取账号模型选择和部署全局的压缩提醒线、热压缩触发线、热压缩等待时间与闲置反思时长，并在首次设置前提供各自的默认值。
+// 本文件读取账号模型选择和部署全局的压缩提醒线、热压缩触发线、热压缩等待时间、用户消息防抖等待时间与闲置反思时长，并在首次设置前提供各自的默认值。
 
 package modelsettings
 
@@ -53,18 +53,19 @@ func LoadUser(ctx context.Context, queries *database.Queries, userID uuid.UUID) 
 
 // RuntimeSettings 是管理看板负责的全局参数，由请求前阶段与调度器各取所需。
 type RuntimeSettings struct {
-	CompactAtTokens        int32 `json:"compact_at_tokens"`
-	HotCompactAtTokens     int32 `json:"hot_compact_at_tokens"`
-	HotCompactDelaySeconds int32 `json:"hot_compact_delay_seconds"`
-	ReflectionIdleMinutes  int32 `json:"reflection_idle_minutes"`
-	Version                int64 `json:"version"`
+	CompactAtTokens            int32 `json:"compact_at_tokens"`
+	HotCompactAtTokens         int32 `json:"hot_compact_at_tokens"`
+	HotCompactDelaySeconds     int32 `json:"hot_compact_delay_seconds"`
+	UserMessageDebounceSeconds int32 `json:"user_message_debounce_seconds"`
+	ReflectionIdleMinutes      int32 `json:"reflection_idle_minutes"`
+	Version                    int64 `json:"version"`
 }
 
 // LoadRuntime 保留原有的部署阈值，并兼容尚未保存配置的实例。
 func LoadRuntime(ctx context.Context, queries *database.Queries) (RuntimeSettings, error) {
 	row, err := queries.GetRuntimeSettings(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return RuntimeSettings{CompactAtTokens: 100000, HotCompactAtTokens: 60000, HotCompactDelaySeconds: 159, ReflectionIdleMinutes: 120}, nil
+		return RuntimeSettings{CompactAtTokens: 100000, HotCompactAtTokens: 60000, HotCompactDelaySeconds: 159, UserMessageDebounceSeconds: 15, ReflectionIdleMinutes: 120}, nil
 	}
 	return RuntimeSettings(row), err
 }

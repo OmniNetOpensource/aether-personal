@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/tools"
@@ -42,8 +41,6 @@ type Runner struct {
 	subagentID   *uuid.UUID
 	startedAt    time.Time
 	leaseEpoch   int64
-	mutex        sync.Mutex
-	thinking     *thinkingRequest
 }
 
 // lockAndVerifyLease 按身份获取对应的事务锁并核对执行代数：Main 锁用户消息并核对 main_lease_epoch，
@@ -93,23 +90,8 @@ func (r *Runner) notifyChat() {
 	}
 }
 
-// thinkingRequest 只在 Main 模型还没有产出正文或工具时登记，序号来自实际发送的上下文。
-type thinkingRequest struct {
-	through int64
-	cancel  context.CancelCauseFunc
-}
-
-// errNewInput 表示请求被更新的输入取代，应重新读上下文。
+// errNewInput 表示发请求前占位时发现更新的输入，应重走防抖与上下文组装。
 var errNewInput = errors.New("superseded by new input")
-
-// newInput 在本用户 Main 的模型请求还没有产出正文或工具时，用更新的输入序号取消它，让 Runner 重新读上下文。
-func (r *Runner) newInput(sequence int64) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-	if r.thinking != nil && sequence > r.thinking.through {
-		r.thinking.cancel(errNewInput)
-	}
-}
 
 // modelRetry 是同一次回复跨轮共享的重试状态：十分钟预算从第一次尝试开始计时，覆盖上下文准备、请求与退避，
 // 共可再试 3 次，其中 ikun Claude 空截断最多补试一次。回复成功或被新输入取代后清零。
@@ -170,7 +152,7 @@ func (r *Runner) run(parent, drainCtx context.Context) error {
 		if retry.budget == nil {
 			retry.budget, retry.cancel = context.WithDeadlineCause(runCtx, time.Now().Add(modelRequestTimeout), errModelRetryTimeout)
 		}
-		request, stepID, err := r.beforeRequest(runCtx, retry.budget, &through)
+		request, stepID, err := r.beforeRequest(runCtx, drainCtx, retry.budget, &through)
 		var replyID uuid.UUID
 		var response chatResponse
 		retryable := false

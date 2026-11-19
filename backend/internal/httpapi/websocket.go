@@ -496,7 +496,7 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在事务里落库，提交后将用户推入 Redis 唤醒队列并广播打断；
+// saveUserMessage 在事务里落库，提交后将用户推入 Redis 唤醒队列并通知取消等待中的热压缩；
 // 随后把这条消息推给本连接并回 delivered 确认，前端清空输入框时消息已经在列表里，Runner 认领后另行通知亮起思考气泡。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {

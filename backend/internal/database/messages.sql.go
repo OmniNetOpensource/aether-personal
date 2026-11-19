@@ -229,6 +229,43 @@ func (q *Queries) GetUserLeaseEpoch(ctx context.Context, userID uuid.UUID) (int6
 	return main_lease_epoch, err
 }
 
+const hasHotCompactCommitWindow = `-- name: HasHotCompactCommitWindow :one
+SELECT EXISTS(
+    SELECT 1 FROM messages target
+    WHERE target.id = $1
+      AND target.user_id = $2
+      AND target.subagent_id IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM messages later
+          WHERE later.user_id = target.user_id
+            AND later.subagent_id IS NULL
+            AND later.sequence > target.sequence
+            AND (later.role = 'assistant' OR later.is_summary)
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM steps s
+          WHERE s.user_id = target.user_id
+            AND s.subagent_id IS NULL
+            AND s.purpose = 'agent'
+            AND s.finished_at IS NULL
+      )
+)
+`
+
+type HasHotCompactCommitWindowParams struct {
+	ReplyID uuid.UUID
+	UserID  uuid.UUID
+}
+
+// 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
+// 尚在防抖等待中的新用户消息（未开步）不阻断提交，它们会保留在摘要之后供下一轮直接读取。
+func (q *Queries) HasHotCompactCommitWindow(ctx context.Context, arg HasHotCompactCommitWindowParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasHotCompactCommitWindow, arg.ReplyID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasMainWork = `-- name: HasMainWork :one
 SELECT EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
 `
@@ -517,31 +554,23 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 }
 
 const listMainWork = `-- name: ListMainWork :many
-SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
-    WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
-        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context' AND m.content ->> 'name' IS DISTINCT FROM 'compact_reminder'), 0)::bigint AS input_sequence
-FROM main_work AS w ORDER BY w.user_id
+SELECT user_id FROM main_work ORDER BY user_id
 `
 
-type ListMainWorkRow struct {
-	UserID        uuid.UUID
-	InputSequence int64
-}
-
 // 启动与周期补查只读取 Main 的业务待办，排除 Subagent 自己的内部消息。
-func (q *Queries) ListMainWork(ctx context.Context) ([]ListMainWorkRow, error) {
+func (q *Queries) ListMainWork(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listMainWork)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListMainWorkRow
+	var items []uuid.UUID
 	for rows.Next() {
-		var i ListMainWorkRow
-		if err := rows.Scan(&i.UserID, &i.InputSequence); err != nil {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, user_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

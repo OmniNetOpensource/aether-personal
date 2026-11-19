@@ -42,29 +42,7 @@ func (geminiProvider) PrepareRequest(ctx context.Context, credentials services.S
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
-// HasOutput 逐事件认出 Gemini 的正文与工具调用，只有 thought 或签名的 part 仍可被新输入打断。
-func (geminiProvider) HasOutput(payload []byte) bool {
-	var chunk struct {
-		Candidates []struct {
-			Content struct {
-				Parts []geminiOutputPart `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-	if json.Unmarshal(payload, &chunk) != nil {
-		return false
-	}
-	for _, candidate := range chunk.Candidates {
-		for _, part := range candidate.Content.Parts {
-			if part.Call != nil || (!part.Thought && strings.TrimSpace(part.Text) != "") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// geminiOutputPart 供流式首段判定和完整回复解析共用，思考片段通过 thought 区分。
+// geminiOutputPart 用于解析 Gemini 流式与完整回复的分片，思考片段通过 thought 区分。
 type geminiOutputPart struct {
 	Text    string              `json:"text"`
 	Thought bool                `json:"thought"`

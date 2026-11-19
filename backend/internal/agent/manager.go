@@ -1,4 +1,4 @@
-// 本文件跨后端实例对等调度 Main 与后台 Subagent：Redis 传递独立唤醒队列、临时租约与打断/取消广播，PostgreSQL 保存全部持久状态。
+// 本文件跨后端实例对等调度 Main 与后台 Subagent：Redis 传递独立唤醒队列、临时租约与新输入/取消广播，PostgreSQL 保存全部持久状态。
 
 package agent
 
@@ -122,7 +122,7 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 	}
 }
 
-// Wake 在新输入或 subagent_event 提交后广播跨实例思考打断信号并将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
+// Wake 在新输入或 subagent_event 提交后广播跨实例新输入信号（取消仍在等待中的热压缩）并将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
 func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
 	m.handleNewInput(userID, sequence)
 
@@ -219,7 +219,7 @@ func (m *Manager) consumeSubagentQueue(drainCtx, runCtx context.Context) {
 	}
 }
 
-// listenInputSignals 订阅跨实例的新输入序号广播；若该用户的 Main Runner 正在本实例思考，立即按本地取消句柄重读上下文。
+// listenInputSignals 订阅跨实例的新输入序号广播，用于及时取消仍在倒计时中的热压缩任务，不打断已发出的模型请求。
 func (m *Manager) listenInputSignals(ctx context.Context) {
 	pubsub := m.redisClient.Subscribe(ctx, agentInputChannel)
 	defer pubsub.Close()
@@ -246,17 +246,13 @@ func (m *Manager) listenInputSignals(ctx context.Context) {
 	}
 }
 
-// handleNewInput 在本机写入与跨实例广播时共用；晚到的旧广播不会取消新回答的热压缩。
+// handleNewInput 在本机写入与跨实例广播时共用：仅取消仍在等待期的旧热压缩任务，不中断任何已发出的请求。
 func (m *Manager) handleNewInput(userID uuid.UUID, sequence int64) {
 	m.mutex.Lock()
-	runner := m.runners[userID]
 	if job := m.hotCompactions[userID]; job != nil && sequence > job.inputSequence {
 		job.cancel()
 	}
 	m.mutex.Unlock()
-	if runner != nil {
-		runner.newInput(sequence)
-	}
 }
 
 // listenSubagentCancelSignals 订阅跨实例的 Subagent 取消广播；若目标 Subagent 正在本实例执行，立即中止其请求与工具。
@@ -326,20 +322,19 @@ func (m *Manager) recoverPending(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, user := range users {
+	for _, userID := range users {
 		m.mutex.Lock()
-		runner := m.runners[user.UserID]
+		runner := m.runners[userID]
 		m.mutex.Unlock()
 		if runner != nil {
-			runner.newInput(user.InputSequence)
 			continue
 		}
-		exists, err := m.redisClient.Exists(ctx, leaseKey(user.UserID)).Result()
+		exists, err := m.redisClient.Exists(ctx, leaseKey(userID)).Result()
 		if err != nil {
 			return err
 		}
 		if exists == 0 {
-			if err := m.enqueueWake(ctx, user.UserID); err != nil {
+			if err := m.enqueueWake(ctx, userID); err != nil {
 				return err
 			}
 		}
