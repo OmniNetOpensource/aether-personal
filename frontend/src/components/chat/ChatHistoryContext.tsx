@@ -1,11 +1,26 @@
-// 本文件展示独立的历史上下文窗口：按消息 ID 定位、展开原文，并向两侧分页而不改动实时聊天。
+// 本文件用 Virtuoso 展示独立的历史上下文窗口：按消息 ID 定位、展开原文、卸载视口外 DOM，并向两侧分页而不改动实时聊天。
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Virtuoso } from 'react-virtuoso';
+import type { ListItem, VirtuosoHandle } from 'react-virtuoso';
 import { chatMessageFromRow } from '../../lib/ChatController.js';
 import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import { ChatMessageEntry } from './ChatMessageEntry.js';
 import { highlightQuote } from './QuoteSelection.js';
+import { useVirtuosoFirstItemIndex } from './useVirtuosoFirstItemIndex.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
+
+// 页头与页尾组件保持稳定引用，避免翻页状态变化导致 Virtuoso 重建头部或尾部容器。
+type ContextListContext = { header: ReactNode; footer: ReactNode };
+const contextComponents = {
+  Header: ({ context }: { context: ContextListContext }) => (
+    <div className="history-context-list-header">{context.header}</div>
+  ),
+  Footer: ({ context }: { context: ContextListContext }) => (
+    <div className="history-context-list-footer">{context.footer}</div>
+  ),
+};
 
 // 已加载的历史与正常聊天分开保存，单侧翻页失败时仍保留当前内容。
 type ContextState =
@@ -20,7 +35,7 @@ type ContextState =
       error: string | null;
     };
 
-// ChatHistoryContext 共用聊天气泡与时间分组，命中的长消息首次显示时就展开。
+// ChatHistoryContext 共用聊天气泡与时间分组，命中的长消息首次显示时就展开，视口外消息由 Virtuoso 卸载。
 export function ChatHistoryContext({
   controller,
   messageID,
@@ -36,28 +51,44 @@ export function ChatHistoryContext({
   onClose: () => void;
   onLatest: () => void;
 }) {
-  const viewport = useRef<HTMLDivElement>(null);
+  const list = useRef<VirtuosoHandle>(null);
+  const viewport = useRef<HTMLDivElement | null>(null);
+  // 稳定的回调让 Virtuoso 只在滚动容器挂载和卸载时绑定监听。
+  const bindViewport = useCallback((element: HTMLElement | Window | null) => {
+    viewport.current = element instanceof HTMLDivElement ? element : null;
+  }, []);
   const back = useRef<HTMLButtonElement>(null);
   const version = useRef(0);
   const paging = useRef(false);
-  const pendingScroll = useRef<
-    { kind: 'anchor' } | { kind: 'prepend'; height: number; top: number } | null
-  >(null);
+  const pendingAnchorScroll = useRef(false);
+  const anchorScrollFrame = useRef(0);
+  const anchorRowRef = useRef<HTMLDivElement | null>(null);
+  const anchorHighlightRange = useRef<Range | null>(null);
+  const clearQuoteHighlight = useRef<() => void>(() => {});
+  const [anchorRow, setAnchorRow] = useState<HTMLDivElement | null>(null);
+  const bindAnchorRow = useCallback((element: HTMLDivElement | null) => {
+    anchorRowRef.current = element;
+    setAnchorRow(element);
+  }, []);
   const [anchor, setAnchor] = useState<{ id: string; quote?: MessageQuote }>({ id: messageID });
   const [state, setState] = useState<ContextState>({ status: 'loading' });
   const [retry, setRetry] = useState(0);
   const [expanded, setExpanded] = useState(() => new Set([messageID]));
 
+  const readyMessages = state.status === 'ready' ? state.messages : [];
+  const firstItemIndex = useVirtuosoFirstItemIndex(readyMessages);
+  const anchorIndex = readyMessages.findIndex((message) => message.id === anchor.id);
+
   // 每个锚点有自己的请求版本；点击引用或退出窗口后，旧回执不再改变当前页面。
   useEffect(() => {
     const requestVersion = ++version.current;
     paging.current = false;
+    pendingAnchorScroll.current = true;
     setState({ status: 'loading' });
     back.current?.focus({ preventScroll: true });
     void controller.loadMessageContext(anchor.id, 'around').then(
       (page) => {
         if (version.current !== requestVersion) return;
-        pendingScroll.current = { kind: 'anchor' };
         setState({
           status: 'ready',
           messages: page.messages.map(chatMessageFromRow),
@@ -77,37 +108,75 @@ export function ChatHistoryContext({
     );
     return () => {
       version.current++;
+      cancelAnimationFrame(anchorScrollFrame.current);
+      clearQuoteHighlight.current();
+      clearQuoteHighlight.current = () => {};
     };
   }, [controller, anchor, retry]);
 
-  // 按锚点定位到首个命中片段；向前翻页时按高度差保住原来的阅读位置。
+  // 锚点行挂载在视口中时维持关键词高亮，随虚拟行卸载清理，滚回后自动恢复。
   useLayoutEffect(() => {
-    const element = viewport.current;
-    if (!element || state.status !== 'ready') return;
-    const target = element.querySelector<HTMLElement>(`[data-history-message="${anchor.id}"]`);
-    const bubble = target?.querySelector<HTMLElement>('.bubble');
-    const highlighted = bubble ? highlightSearchKeyword(bubble, keyword) : null;
-    const scroll = pendingScroll.current;
-    pendingScroll.current = null;
-    let quoteCleanup = () => {};
-    if (scroll?.kind === 'prepend') {
-      element.scrollTop = scroll.top + element.scrollHeight - scroll.height;
-    } else if (scroll?.kind === 'anchor' && target) {
+    const bubble = anchorRow?.querySelector<HTMLElement>('.bubble');
+    if (!bubble) {
+      anchorHighlightRange.current = null;
+      return;
+    }
+    const highlighted = highlightSearchKeyword(bubble, keyword);
+    anchorHighlightRange.current = highlighted?.firstRange ?? null;
+    return () => {
+      anchorHighlightRange.current = null;
+      highlighted?.cleanup();
+    };
+  }, [anchorRow, keyword, expanded]);
+
+  // Virtuoso 完成首次锚点定位后，再微调到首个命中片段或引用原文，避免与 initialTopMostItemIndex 互相覆盖。
+  const handleItemsRendered = (items: ListItem<ChatMessage>[]) => {
+    if (!pendingAnchorScroll.current) return;
+    const renderedAnchor = items.find((item) => item.data?.id === anchor.id && item.size > 0);
+    if (!renderedAnchor) return;
+    pendingAnchorScroll.current = false;
+    const requestVersion = version.current;
+    cancelAnimationFrame(anchorScrollFrame.current);
+    anchorScrollFrame.current = requestAnimationFrame(() => {
+      if (version.current !== requestVersion) return;
+      const element = viewport.current;
+      const target = anchorRowRef.current;
+      const bubble = target?.querySelector<HTMLElement>('.bubble');
+      if (!element || !target) return;
       if (anchor.quote && bubble) {
-        quoteCleanup = highlightQuote(bubble, anchor.quote, element);
-      } else {
-        const rect =
-          highlighted?.firstRange?.getBoundingClientRect() ?? target.getBoundingClientRect();
+        clearQuoteHighlight.current();
+        clearQuoteHighlight.current = highlightQuote(bubble, anchor.quote, element);
+        return;
+      }
+      const range = anchorHighlightRange.current;
+      if (range) {
+        const rect = range.getBoundingClientRect();
         element.scrollTop += rect.top - element.getBoundingClientRect().top - 90;
       }
-    }
-    return () => {
-      highlighted?.cleanup();
-      quoteCleanup();
-    };
-  }, [state, anchor, keyword, expanded]);
+    });
+  };
 
-  // 两侧分页始终从本窗口的边界继续，新增消息去重后按原行位置排序。
+  // 收起长消息时若消息开头已滚出视口顶部，先对齐消息起点，避免收起后阅读位置错位。
+  function changeExpanded(targetID: string, index: number, value: boolean) {
+    const element = viewport.current;
+    const row = element?.querySelector<HTMLElement>(`[data-history-message="${targetID}"]`);
+    if (
+      !value &&
+      element &&
+      row &&
+      row.getBoundingClientRect().top < element.getBoundingClientRect().top
+    ) {
+      list.current?.scrollToIndex({ index, align: 'start' });
+    }
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (value) next.add(targetID);
+      else next.delete(targetID);
+      return next;
+    });
+  }
+
+  // 两侧分页始终从本窗口的边界继续，新增消息去重后按原行位置排序；向上翻页位置由 Virtuoso 保持。
   const loadPage = async (direction: 'older' | 'newer') => {
     if (state.status !== 'ready' || paging.current) return;
     const edge = direction === 'older' ? state.messages[0] : state.messages.at(-1);
@@ -120,14 +189,6 @@ export function ChatHistoryContext({
       if (version.current !== requestVersion) return;
       const messages = new Map(state.messages.map((message) => [message.id, message]));
       for (const row of page.messages) messages.set(row.id, chatMessageFromRow(row));
-      const element = viewport.current;
-      if (direction === 'older' && element) {
-        pendingScroll.current = {
-          kind: 'prepend',
-          height: element.scrollHeight,
-          top: element.scrollTop,
-        };
-      }
       setState({
         ...state,
         messages: [...messages.values()].sort((a, b) => a.position.localeCompare(b.position)),
@@ -148,6 +209,42 @@ export function ChatHistoryContext({
     }
   };
 
+  // 上下翻页按钮和报错挂在 Virtuoso 页头与页尾，不占用真实消息索引。
+  const listContext: ContextListContext =
+    state.status === 'ready'
+      ? {
+          header: state.hasMoreBefore ? (
+            <button
+              type="button"
+              className="history-context-page"
+              disabled={state.loading !== null}
+              onClick={() => void loadPage('older')}
+            >
+              {state.loading === 'older' ? '正在加载…' : '查看更早的消息 ↑'}
+            </button>
+          ) : null,
+          footer: (
+            <>
+              {state.error && (
+                <p className="history-context-error" role="alert">
+                  {state.error}
+                </p>
+              )}
+              {state.hasMoreAfter && (
+                <button
+                  type="button"
+                  className="history-context-page"
+                  disabled={state.loading !== null}
+                  onClick={() => void loadPage('newer')}
+                >
+                  {state.loading === 'newer' ? '正在加载…' : '继续查看后面的消息 ↓'}
+                </button>
+              )}
+            </>
+          ),
+        }
+      : { header: null, footer: null };
+
   return (
     <section className="history-context">
       <header className="history-context-header">
@@ -159,45 +256,54 @@ export function ChatHistoryContext({
           ×
         </button>
       </header>
-      <div
-        ref={viewport}
-        className="history-context-viewport"
-        tabIndex={0}
-        aria-label="历史消息上下文"
-        aria-busy={
-          state.status === 'loading' || (state.status === 'ready' && state.loading !== null)
-        }
-      >
-        {state.status === 'loading' ? (
+      {state.status === 'loading' ? (
+        <div
+          className="history-context-viewport"
+          tabIndex={0}
+          aria-label="历史消息上下文"
+          aria-busy="true"
+        >
           <p className="history-context-status" role="status">
             正在加载上下文…
           </p>
-        ) : state.status === 'error' ? (
+        </div>
+      ) : state.status === 'error' ? (
+        <div className="history-context-viewport" tabIndex={0} aria-label="历史消息上下文">
           <div className="history-context-status" role="alert">
             <p>{state.error}</p>
             <button type="button" onClick={() => setRetry((value) => value + 1)}>
               重试
             </button>
           </div>
-        ) : (
-          <div className="history-context-messages">
-            {state.hasMoreBefore && (
-              <button
-                type="button"
-                className="history-context-page"
-                disabled={state.loading !== null}
-                onClick={() => void loadPage('older')}
-              >
-                {state.loading === 'older' ? '正在加载…' : '查看更早的消息 ↑'}
-              </button>
-            )}
-            {state.messages.map((message, index) => (
+        </div>
+      ) : (
+        <Virtuoso
+          ref={list}
+          className="history-context-viewport"
+          aria-label="历史消息上下文"
+          aria-busy={state.loading !== null}
+          scrollerRef={bindViewport}
+          data={state.messages}
+          components={contextComponents}
+          context={listContext}
+          computeItemKey={(_, message) => message.id}
+          firstItemIndex={firstItemIndex}
+          initialTopMostItemIndex={
+            anchorIndex >= 0 ? { index: anchorIndex, align: 'start', offset: -90 } : 0
+          }
+          itemsRendered={handleItemsRendered}
+          itemContent={(itemIndex, message) => {
+            const index = itemIndex - firstItemIndex;
+            const isAnchor = message.id === anchor.id;
+            return (
               <div
-                key={message.id}
+                ref={isAnchor ? bindAnchorRow : undefined}
                 data-history-message={message.id}
-                className={message.id === anchor.id ? 'history-context-target' : undefined}
+                className={
+                  isAnchor ? 'history-context-row history-context-target' : 'history-context-row'
+                }
               >
-                {message.id === anchor.id && (
+                {isAnchor && (
                   <p className="history-context-match-label">
                     {anchor.quote ? '引用原文' : '找到的消息'} ·{' '}
                     {message.createdAt.toLocaleTimeString('zh-CN', {
@@ -211,39 +317,17 @@ export function ChatHistoryContext({
                   messages={state.messages}
                   index={index}
                   expanded={expanded.has(message.id)}
-                  onExpandedChange={(value) =>
-                    setExpanded((current) => {
-                      const next = new Set(current);
-                      if (value) next.add(message.id);
-                      else next.delete(message.id);
-                      return next;
-                    })
-                  }
+                  onExpandedChange={(value) => changeExpanded(message.id, index, value)}
                   onQuoteNavigate={(quote) => {
                     setExpanded((current) => new Set(current).add(quote.message_id));
                     setAnchor({ id: quote.message_id, quote });
                   }}
                 />
               </div>
-            ))}
-            {state.error && (
-              <p className="history-context-error" role="alert">
-                {state.error}
-              </p>
-            )}
-            {state.hasMoreAfter && (
-              <button
-                type="button"
-                className="history-context-page"
-                disabled={state.loading !== null}
-                onClick={() => void loadPage('newer')}
-              >
-                {state.loading === 'newer' ? '正在加载…' : '继续查看后面的消息 ↓'}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+            );
+          }}
+        />
+      )}
       <button type="button" className="history-context-latest" onClick={onLatest}>
         回到最新聊天 <span aria-hidden="true">↓</span>
       </button>

@@ -358,17 +358,29 @@
 }
 .history-context-viewport {
   flex: 1;
+  width: 100%;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
   outline-offset: -3px;
 }
-.history-context-messages {
+/* 行内收住气泡外边距，使 Virtuoso 量到的行高包含消息间距与目标消息留白。 */
+.history-context-row,
+.history-context-list-header,
+.history-context-list-footer {
+  display: flow-root;
+  width: 100%;
   max-width: 800px;
   margin: 0 auto;
-  padding: 16px 32px calc(100px + env(safe-area-inset-bottom));
+  padding-inline: 32px;
   color: var(--text);
+}
+.history-context-list-header {
+  padding-top: 16px;
+}
+.history-context-list-footer {
+  padding-bottom: calc(100px + env(safe-area-inset-bottom));
 }
 .history-context .date {
   color: var(--on-forest-muted);
@@ -388,7 +400,8 @@
   background: var(--forest-hover);
 }
 .history-context-target {
-  margin: 24px 0 22px;
+  padding-top: 24px;
+  padding-bottom: 22px;
 }
 .history-context-target .bubble {
   outline: 2px solid var(--gold);
@@ -501,7 +514,12 @@
     color: var(--on-forest-muted);
     font-size: 27px;
   }
-  .history-context-messages {
-    padding: 12px 18px calc(100px + env(safe-area-inset-bottom));
+  .history-context-row,
+  .history-context-list-header,
+  .history-context-list-footer {
+    padding-inline: 18px;
+  }
+  .history-context-list-header {
+    padding-top: 12px;
   }
 }
