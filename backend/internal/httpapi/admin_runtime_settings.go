@@ -1,4 +1,4 @@
-// 本文件提供管理看板的全局运行参数接口，管理员可以调整压缩提醒线、热压缩等待时间和闲置反思时长。
+// 本文件提供管理看板的全局运行参数接口，管理员可以调整压缩提醒线、热压缩触发线、热压缩等待时间和闲置反思时长。
 
 package httpapi
 
@@ -35,6 +35,7 @@ func (s *server) updateAdminRuntimeSettings(w http.ResponseWriter, r *http.Reque
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&settings) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
 		settings.Version < 0 || settings.CompactAtTokens < 1000 || settings.CompactAtTokens > 2000000 ||
+		settings.HotCompactAtTokens < 1000 || settings.HotCompactAtTokens > 2000000 ||
 		settings.HotCompactDelaySeconds < 1 || settings.ReflectionIdleMinutes < 10 || settings.ReflectionIdleMinutes > 10080 {
 		http.Error(w, "invalid runtime settings", http.StatusBadRequest)
 		return
@@ -43,6 +44,7 @@ func (s *server) updateAdminRuntimeSettings(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 	version, err := s.queries.SaveRuntimeSettings(ctx, database.SaveRuntimeSettingsParams{
 		CompactAtTokens:        settings.CompactAtTokens,
+		HotCompactAtTokens:     settings.HotCompactAtTokens,
 		HotCompactDelaySeconds: settings.HotCompactDelaySeconds,
 		ReflectionIdleMinutes:  settings.ReflectionIdleMinutes,
 		ExpectedVersion:        settings.Version,

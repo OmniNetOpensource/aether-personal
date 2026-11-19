@@ -121,6 +121,7 @@ export interface QuotaItem {
 // RuntimeSettings 是管理看板编辑的全局阈值；版本用于发现其他页面的保存。
 export interface RuntimeSettings {
   compact_at_tokens: number;
+  hot_compact_at_tokens: number;
   hot_compact_delay_seconds: number;
   reflection_idle_minutes: number;
   version: number;

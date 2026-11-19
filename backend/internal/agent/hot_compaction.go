@@ -55,7 +55,7 @@ func (r *Runner) runHotCompaction(ctx context.Context, replyID uuid.UUID, inputT
 	if err != nil {
 		return err
 	}
-	if inputTokens < settings.CompactAtTokens {
+	if inputTokens < settings.HotCompactAtTokens {
 		return nil
 	}
 	timer := time.NewTimer(time.Until(finished.Add(time.Duration(settings.HotCompactDelaySeconds) * time.Second)))

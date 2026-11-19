@@ -148,4 +148,4 @@ make db-down   # 停止本地容器
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板与聊天端同为 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；「配置」页管理全局压缩提醒线、热压缩等待时间、闲置反思时长、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；「配置」页管理全局压缩提醒线、热压缩触发线、热压缩等待时间、闲置反思时长、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

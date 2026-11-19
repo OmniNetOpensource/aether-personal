@@ -97,6 +97,7 @@ type ModelSetting struct {
 	SubagentModelMaxTokens *int32
 	SubagentContextLength  *int64
 	HotCompactDelaySeconds int32
+	HotCompactAtTokens     int32
 }
 
 type SandboxWorkspace struct {
