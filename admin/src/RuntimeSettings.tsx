@@ -1,4 +1,4 @@
-// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线和闲置后台反思时长。
+// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线、热压缩等待时间和闲置后台反思时长。
 
 import { useEffect, useState } from "react";
 import { api, ApiError, formatTime, type RuntimeSettings } from "./api.js";
@@ -96,6 +96,7 @@ export function RuntimeSettingsPage({
 
   const changed =
     settings.compact_at_tokens !== draft.compact_at_tokens ||
+    settings.hot_compact_delay_seconds !== draft.hot_compact_delay_seconds ||
     settings.reflection_idle_minutes !== draft.reflection_idle_minutes;
 
   return (
@@ -116,6 +117,20 @@ export function RuntimeSettingsPage({
                 ...draft,
                 compact_at_tokens: Number(event.target.value),
               })
+            }
+          />
+        </label>
+        <label className="model-picker">
+          热压缩等待时间（秒）
+          <input
+            type="number"
+            min={1}
+            max={2147483647}
+            required
+            disabled={saving}
+            value={draft.hot_compact_delay_seconds || ""}
+            onChange={(event) =>
+              setDraft({ ...draft, hot_compact_delay_seconds: Number(event.target.value) })
             }
           />
         </label>

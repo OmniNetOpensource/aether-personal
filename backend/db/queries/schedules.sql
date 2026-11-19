@@ -45,6 +45,7 @@ WHERE (sqlc.narg(user_id)::uuid IS NULL OR u.id = sqlc.narg(user_id)::uuid)
     AND (
         SELECT m.created_at FROM messages AS m
         WHERE m.user_id = u.id AND m.subagent_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM steps AS s WHERE m.is_summary AND s.id = m.step_id AND s.purpose = 'hot_compact')
         ORDER BY m.sequence DESC LIMIT 1
     ) <= now() - make_interval(mins => sqlc.arg(idle_minutes)::int)
     AND NOT EXISTS (

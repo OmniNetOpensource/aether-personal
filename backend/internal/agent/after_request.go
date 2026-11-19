@@ -37,6 +37,10 @@ func (r *Runner) afterRequest(ctx, drainCtx context.Context, retry *modelRetry, 
 		if err := r.saveReply(ctx, stepID, replyID, response); err != nil {
 			return r.failRun(ctx, through, err)
 		}
+		// 最终回复已经落库并可见，后台计时独立于这一轮的聊天租约。
+		if r.subagentID == nil && len(message.ToolCalls) == 0 && response.Usage.PromptTokens != nil && AssistantTextToUser(response.Choices[0].Message) != "" {
+			r.scheduleHotCompaction(drainCtx, replyID, through, *response.Usage.PromptTokens)
+		}
 		if err := r.executeToolCalls(ctx, stepID, message.ToolCalls); err != nil {
 			return r.failRun(ctx, through, err)
 		}
@@ -206,7 +210,7 @@ func (r *Runner) executeCompact(ctx context.Context, stepID uuid.UUID, call tool
 	prompt := compactPrompt + "\n\nReason: " + args.Reason + "\nFocus: " + args.Focus
 	return r.compactContext(ctx, rows, input.InputSequence, input.Model, prompt, &database.InsertAgentMessageParams{
 		UserID: r.userID, SubagentID: r.subagentID, Role: "tool", Content: content, StepID: &stepID,
-	})
+	}, uuid.Nil)
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。

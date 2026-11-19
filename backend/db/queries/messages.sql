@@ -152,7 +152,15 @@ WHERE s.id = $1;
 
 -- name: StartCompactStep :one
 INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
-VALUES ($1, $2, $3, now(), 'compact') RETURNING id;
+VALUES ($1, $2, $3, now(), $4) RETURNING id;
+
+-- name: GetLatestMainReplyModel :one
+-- 仅返回对话末尾仍是目标回复时的当轮模型；任何后到的输入、占位或摘要都会使目标失效。
+SELECT s.model FROM messages m JOIN steps s ON s.id = m.step_id
+WHERE m.id = sqlc.arg(reply_id) AND m.id = (
+    SELECT tail.id FROM messages tail WHERE tail.user_id = sqlc.arg(user_id) AND tail.subagent_id IS NULL
+    ORDER BY tail.sequence DESC LIMIT 1
+);
 
 -- name: InsertContextSummary :exec
 INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)

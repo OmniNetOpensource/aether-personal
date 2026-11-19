@@ -128,7 +128,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		if end == 0 {
 			return r.buildAgentRequest(rows, model), nil
 		}
-		if err := r.compactContext(ctx, rows[:end], rows[end-1].Sequence, model, compactPrompt, nil); err != nil {
+		if err := r.compactContext(ctx, rows[:end], rows[end-1].Sequence, model, compactPrompt, nil, uuid.Nil); err != nil {
 			return modelRequest{}, err
 		}
 	case before >= int64(settings.CompactAtTokens):
@@ -163,14 +163,29 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 }
 
 // compactContext 供容量保护和显式工具调用共用；在旧世代生成摘要，成功时连同工具回执原子提交。
-func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentContextRowsRow, through int64, model, prompt string, receipt *database.InsertAgentMessageParams) error {
+func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentContextRowsRow, through int64, model, prompt string, receipt *database.InsertAgentMessageParams, idleReplyID uuid.UUID) error {
 	queries := database.New(r.databasePool)
 	request := r.buildAgentRequest(rows, model)
 	request.Messages = append(request.Messages, runtimeMessage("compaction", compactInstructions+"\n\n"+prompt))
+	// 普通压缩随 Runner 租约提交；后台热压缩只在用户消息锁内核对目标回复仍是末尾。
+	purpose := "compact"
+	if idleReplyID != uuid.Nil {
+		purpose = "hot_compact"
+	}
+	lockContext := func(q *database.Queries) error {
+		if idleReplyID == uuid.Nil {
+			return r.lockAndVerifyLease(ctx, q)
+		}
+		if err := q.LockUserMessages(ctx, r.userID); err != nil {
+			return err
+		}
+		_, err := q.GetLatestMainReplyModel(ctx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: idleReplyID})
+		return err
+	}
 	var compactStepID uuid.UUID
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
-		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+		if err := lockContext(txQueries); err != nil {
 			return err
 		}
 		var err error
@@ -178,6 +193,7 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 			UserID:     r.userID,
 			SubagentID: r.subagentID,
 			Model:      model,
+			Purpose:    purpose,
 		})
 		return err
 	})
@@ -206,7 +222,7 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary})
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
-		if err := r.lockAndVerifyLease(ctx, q); err != nil {
+		if err := lockContext(q); err != nil {
 			return err
 		}
 		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{

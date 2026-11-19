@@ -82,17 +82,18 @@ func (m *Manager) HasActiveLease(ctx context.Context, userID uuid.UUID) bool {
 
 // Manager 在对等实例内分别管理 Main 与 Subagent 的独立并发槽位和活跃 Runner，保证后台 Subagent 不会挤占 Main 响应用户消息的容量。
 type Manager struct {
-	databasePool  *pgxpool.Pool
-	redisClient   *redis.Client
-	modelClient   *http.Client
-	toolDeps      tools.Dependencies
-	services      *services.Store
-	slots         chan struct{}
-	subagentSlots chan struct{}
-	mutex         sync.Mutex
-	runners       map[uuid.UUID]*Runner
-	subagentStops map[uuid.UUID]context.CancelCauseFunc
-	running       sync.WaitGroup
+	databasePool   *pgxpool.Pool
+	redisClient    *redis.Client
+	modelClient    *http.Client
+	toolDeps       tools.Dependencies
+	services       *services.Store
+	slots          chan struct{}
+	subagentSlots  chan struct{}
+	mutex          sync.Mutex
+	runners        map[uuid.UUID]*Runner
+	subagentStops  map[uuid.UUID]context.CancelCauseFunc
+	hotCompactions map[uuid.UUID]*hotCompaction
+	running        sync.WaitGroup
 }
 
 // NewManager 创建对等实例内的调度器；Main 与 Subagent 各自使用独立槽位池，满载时将剩余任务自然留给其他空闲实例。
@@ -113,21 +114,17 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 			HTTPClient:   &http.Client{Timeout: 120 * time.Second},
 			Sandbox:      sandbox.New(pool, serviceSettings, imageStore, settings.Sandbox),
 		},
-		slots:         make(chan struct{}, capacity),
-		subagentSlots: make(chan struct{}, capacity),
-		runners:       map[uuid.UUID]*Runner{},
-		subagentStops: map[uuid.UUID]context.CancelCauseFunc{},
+		slots:          make(chan struct{}, capacity),
+		subagentSlots:  make(chan struct{}, capacity),
+		runners:        map[uuid.UUID]*Runner{},
+		subagentStops:  map[uuid.UUID]context.CancelCauseFunc{},
+		hotCompactions: make(map[uuid.UUID]*hotCompaction),
 	}
 }
 
 // Wake 在新输入或 subagent_event 提交后广播跨实例思考打断信号并将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
 func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
-	m.mutex.Lock()
-	runner := m.runners[userID]
-	m.mutex.Unlock()
-	if runner != nil {
-		runner.newInput(sequence)
-	}
+	m.handleNewInput(userID, sequence)
 
 	wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
@@ -244,13 +241,21 @@ func (m *Manager) listenInputSignals(ctx context.Context) {
 			if userErr != nil || seqErr != nil {
 				continue
 			}
-			m.mutex.Lock()
-			runner := m.runners[userID]
-			m.mutex.Unlock()
-			if runner != nil {
-				runner.newInput(sequence)
-			}
+			m.handleNewInput(userID, sequence)
 		}
+	}
+}
+
+// handleNewInput 在本机写入与跨实例广播时共用；晚到的旧广播不会取消新回答的热压缩。
+func (m *Manager) handleNewInput(userID uuid.UUID, sequence int64) {
+	m.mutex.Lock()
+	runner := m.runners[userID]
+	if job := m.hotCompactions[userID]; job != nil && sequence > job.inputSequence {
+		job.cancel()
+	}
+	m.mutex.Unlock()
+	if runner != nil {
+		runner.newInput(sequence)
 	}
 }
 

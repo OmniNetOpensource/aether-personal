@@ -158,6 +158,27 @@ func (q *Queries) GetLatestChatChange(ctx context.Context, userID uuid.UUID) (in
 	return column_1, err
 }
 
+const getLatestMainReplyModel = `-- name: GetLatestMainReplyModel :one
+SELECT s.model FROM messages m JOIN steps s ON s.id = m.step_id
+WHERE m.id = $1 AND m.id = (
+    SELECT tail.id FROM messages tail WHERE tail.user_id = $2 AND tail.subagent_id IS NULL
+    ORDER BY tail.sequence DESC LIMIT 1
+)
+`
+
+type GetLatestMainReplyModelParams struct {
+	ReplyID uuid.UUID
+	UserID  uuid.UUID
+}
+
+// 仅返回对话末尾仍是目标回复时的当轮模型；任何后到的输入、占位或摘要都会使目标失效。
+func (q *Queries) GetLatestMainReplyModel(ctx context.Context, arg GetLatestMainReplyModelParams) (string, error) {
+	row := q.db.QueryRow(ctx, getLatestMainReplyModel, arg.ReplyID, arg.UserID)
+	var model string
+	err := row.Scan(&model)
+	return model, err
+}
+
 const getLegacyChatCursor = `-- name: GetLegacyChatCursor :one
 SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2
 `
@@ -586,17 +607,23 @@ func (q *Queries) SetStepInputSequence(ctx context.Context, arg SetStepInputSequ
 
 const startCompactStep = `-- name: StartCompactStep :one
 INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
-VALUES ($1, $2, $3, now(), 'compact') RETURNING id
+VALUES ($1, $2, $3, now(), $4) RETURNING id
 `
 
 type StartCompactStepParams struct {
 	UserID     uuid.UUID
 	SubagentID *uuid.UUID
 	Model      string
+	Purpose    string
 }
 
 func (q *Queries) StartCompactStep(ctx context.Context, arg StartCompactStepParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, startCompactStep, arg.UserID, arg.SubagentID, arg.Model)
+	row := q.db.QueryRow(ctx, startCompactStep,
+		arg.UserID,
+		arg.SubagentID,
+		arg.Model,
+		arg.Purpose,
+	)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
