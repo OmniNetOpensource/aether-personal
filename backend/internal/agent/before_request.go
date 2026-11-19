@@ -153,6 +153,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 	}
 	compactMessages := r.buildCompactRequestMessages(rowsToCompact, compactPrompt)
 	summaryRequest := modelRequest{
+		SessionID:  r.requestSessionID(rowsToCompact),
 		Model:      compactModel,
 		Messages:   compactMessages,
 		Tools:      r.toolDefinitions(),
@@ -314,6 +315,19 @@ func (r *Runner) buildRequestMessages(rows []database.ListAgentContextRowsRow) [
 	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, instructions)}, assembleMessages(rows, r.subagentID == nil)...)
 }
 
+// requestSessionID 按 Agent 身份与当前上下文世代生成稳定会话 ID，供 OpenRouter 从首轮启用粘性路由并按世代汇总账单。
+// ListAgentContextRows 将最新摘要排在 rows[0]，取其序号作为世代号（未压缩过为 0），多容器间计算结果完全一致。
+func (r *Runner) requestSessionID(rows []database.ListAgentContextRowsRow) string {
+	var generation int64
+	if len(rows) > 0 && rows[0].IsSummary {
+		generation = rows[0].Sequence
+	}
+	if r.subagentID != nil {
+		return fmt.Sprintf("subagent:%s:%d", r.subagentID.String(), generation)
+	}
+	return fmt.Sprintf("main:%s:%d", r.userID.String(), generation)
+}
+
 // buildAgentRequest 组装固定指令与历史，并附上当前角色允许的工具定义打包成完整请求。
 func (r *Runner) buildAgentRequest(rows []database.ListAgentContextRowsRow, model string) modelRequest {
 	messages := r.buildRequestMessages(rows)
@@ -321,7 +335,13 @@ func (r *Runner) buildAgentRequest(rows []database.ListAgentContextRowsRow, mode
 	for _, row := range rows {
 		inputSequence = max(inputSequence, row.Sequence)
 	}
-	return modelRequest{InputSequence: inputSequence, Model: model, Messages: messages, Tools: r.toolDefinitions()}
+	return modelRequest{
+		InputSequence: inputSequence,
+		SessionID:     r.requestSessionID(rows),
+		Model:         model,
+		Messages:      messages,
+		Tools:         r.toolDefinitions(),
+	}
 }
 
 // buildCompactRequestMessages 复用当前角色的固定指令和历史前缀，只在末尾追加压缩要求。

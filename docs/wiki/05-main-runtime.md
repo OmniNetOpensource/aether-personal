@@ -238,7 +238,7 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 
 2026-10-30，用户要求改为：供应商到后端流式、后端到前端一次性。两个渠道都逐块读 SSE 事件流，在内存里把正文增量与工具调用参数分片拼成一条完整回复，拼完才落库、发 NOTIFY，前端仍整条收到（本节即上文链接目标）：
 
-- OpenRouter 请求带 `stream: true` 与 `stream_options.include_usage`；用量在末尾分片，拿不到就记空、照常继续，不视为失败。
+- OpenRouter 请求带 `stream: true`、`stream_options.include_usage` 与 `session_id`；用量在末尾分片，拿不到就记空、照常继续，不视为失败。2026-11-19 起按「Agent 身份 + 上下文世代（最新摘要 `sequence`，未压缩为 `0`）」在请求前阶段生成 `session_id`（`main:<user_id>:<摘要序号>` / `subagent:<subagent_id>:<摘要序号>`），普通请求与复用旧前缀的压缩请求共用同一世代 ID，压缩产生新摘要后自动切换，使 OpenRouter 从首轮成功请求起启用粘性路由并按世代汇总账单。
 - ikun Gemini 改用 `:streamGenerateContent?alt=sse`，分片合并成与非流式相同的响应形状后走原有解析；流式特有的「只有 thoughtSignature、正文为空」分片并入前一段，不独立存档（详见 [08](08-admin-observability.md#ikun-gemini2026-10-30)）。
 - 失败约定（2026-10-30 用户确认）：流中途断开、或流结束却没有完成标记，按可重试的传输失败处理（沿用最多重试 3 次）；分片不是合法 JSON、工具调用缺名称等拼不出完整消息的情况按无效响应处理，不落库半成品。非 200 错误体仍整段读回取错误信息；分片累计沿用 8 MiB 上限。模型调用日志存档的是实际收到的原始分片。
 

@@ -14,7 +14,9 @@ import (
 // Request 是 Agent 发给任意渠道的统一请求：消息与工具保留原始 JSON，各渠道在自己的文件里翻成自家协议。
 type Request struct {
 	// InputSequence 是本次上下文快照的最大序号，运行时用它识别更新的输入。
-	InputSequence int64             `json:"-"`
+	InputSequence int64 `json:"-"`
+	// SessionID 标识当前 Agent 身份与上下文世代，OpenRouter 直接序列化它以从首轮启用粘性路由，ikun 原生渠道不使用该字段。
+	SessionID     string            `json:"session_id,omitempty"`
 	Reasoning     map[string]any    `json:"reasoning,omitempty"`
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`
