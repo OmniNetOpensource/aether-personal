@@ -50,7 +50,7 @@ func (r *Runner) afterRequest(ctx, drainCtx context.Context, retry *modelRetry, 
 	if r.subagentID != nil && errors.Is(context.Cause(ctx), errSubagentRunTimeout) {
 		return r.failRun(ctx, through, errSubagentRunTimeout)
 	}
-	if ctx.Err() != nil || errors.Is(err, errLostLease) || (stepID == uuid.Nil && drainCtx.Err() != nil) {
+	if ctx.Err() != nil || errors.Is(err, errLostLease) {
 		return roundStop, nil
 	}
 	if errors.Is(err, errNewInput) {

@@ -1,4 +1,4 @@
-// 本文件提供管理看板的全局运行参数接口，管理员可以调整压缩提醒线、热压缩触发线、热压缩等待时间、用户消息防抖等待时间和闲置反思时长。
+// 本文件提供管理看板的全局运行参数接口，管理员可以调整压缩提醒线、热压缩触发线、热压缩等待时间和闲置反思时长。
 
 package httpapi
 
@@ -36,21 +36,18 @@ func (s *server) updateAdminRuntimeSettings(w http.ResponseWriter, r *http.Reque
 	if decoder.Decode(&settings) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
 		settings.Version < 0 || settings.CompactAtTokens < 1000 || settings.CompactAtTokens > 2000000 ||
 		settings.HotCompactAtTokens < 1000 || settings.HotCompactAtTokens > 2000000 ||
-		settings.HotCompactDelaySeconds < 1 ||
-		settings.UserMessageDebounceSeconds < 0 || settings.UserMessageDebounceSeconds > 300 ||
-		settings.ReflectionIdleMinutes < 10 || settings.ReflectionIdleMinutes > 10080 {
+		settings.HotCompactDelaySeconds < 1 || settings.ReflectionIdleMinutes < 10 || settings.ReflectionIdleMinutes > 10080 {
 		http.Error(w, "invalid runtime settings", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	version, err := s.queries.SaveRuntimeSettings(ctx, database.SaveRuntimeSettingsParams{
-		CompactAtTokens:            settings.CompactAtTokens,
-		HotCompactAtTokens:         settings.HotCompactAtTokens,
-		HotCompactDelaySeconds:     settings.HotCompactDelaySeconds,
-		UserMessageDebounceSeconds: settings.UserMessageDebounceSeconds,
-		ReflectionIdleMinutes:      settings.ReflectionIdleMinutes,
-		ExpectedVersion:            settings.Version,
+		CompactAtTokens:        settings.CompactAtTokens,
+		HotCompactAtTokens:     settings.HotCompactAtTokens,
+		HotCompactDelaySeconds: settings.HotCompactDelaySeconds,
+		ReflectionIdleMinutes:  settings.ReflectionIdleMinutes,
+		ExpectedVersion:        settings.Version,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "settings changed; reload before applying", http.StatusConflict)

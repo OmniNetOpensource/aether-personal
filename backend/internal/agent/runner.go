@@ -90,7 +90,7 @@ func (r *Runner) notifyChat() {
 	}
 }
 
-// errNewInput 表示发请求前占位时发现更新的输入，应重走防抖与上下文组装。
+// errNewInput 表示发请求前占位时发现更新的输入，应重新组装上下文。
 var errNewInput = errors.New("superseded by new input")
 
 // modelRetry 是同一次回复跨轮共享的重试状态：十分钟预算从第一次尝试开始计时，覆盖上下文准备、请求与退避，
@@ -152,7 +152,7 @@ func (r *Runner) run(parent, drainCtx context.Context) error {
 		if retry.budget == nil {
 			retry.budget, retry.cancel = context.WithDeadlineCause(runCtx, time.Now().Add(modelRequestTimeout), errModelRetryTimeout)
 		}
-		request, stepID, err := r.beforeRequest(runCtx, drainCtx, retry.budget, &through)
+		request, stepID, err := r.beforeRequest(runCtx, retry.budget, &through)
 		var replyID uuid.UUID
 		var response chatResponse
 		retryable := false

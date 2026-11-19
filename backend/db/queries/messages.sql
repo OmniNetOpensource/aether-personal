@@ -161,7 +161,7 @@ WHERE m.id = sqlc.arg(reply_id) AND m.id = (
 
 -- name: HasHotCompactCommitWindow :one
 -- 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
--- 尚在防抖等待中的新用户消息（未开步）不阻断提交，它们会保留在摘要之后供下一轮直接读取。
+-- 若新用户消息刚入库但下一轮尚未开步，仍可提交摘要并让新消息保留在摘要之后。
 SELECT EXISTS(
     SELECT 1 FROM messages target
     WHERE target.id = sqlc.arg(reply_id)

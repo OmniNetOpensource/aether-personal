@@ -19,19 +19,18 @@ WHERE user_model_settings.version = sqlc.arg(expected_version)
 RETURNING version;
 
 -- name: GetRuntimeSettings :one
-SELECT compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, user_message_debounce_seconds, reflection_idle_minutes, version
+SELECT compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, reflection_idle_minutes, version
 FROM model_settings WHERE singleton = true;
 
 -- name: SaveRuntimeSettings :one
--- 保留旧的全局模型列供旧版回滚，当前运行时只读取阈值、防抖等待与反思时长。
-INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, user_message_debounce_seconds, reflection_idle_minutes, version, updated_by)
-SELECT 'openrouter/free', sqlc.arg(compact_at_tokens), sqlc.arg(hot_compact_at_tokens), sqlc.arg(hot_compact_delay_seconds), sqlc.arg(user_message_debounce_seconds), sqlc.arg(reflection_idle_minutes), 1, '管理员'
+-- 保留旧的全局模型列供旧版回滚，当前运行时只读取阈值和反思时长。
+INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, reflection_idle_minutes, version, updated_by)
+SELECT 'openrouter/free', sqlc.arg(compact_at_tokens), sqlc.arg(hot_compact_at_tokens), sqlc.arg(hot_compact_delay_seconds), sqlc.arg(reflection_idle_minutes), 1, '管理员'
 WHERE sqlc.arg(expected_version)::bigint = 0
    OR EXISTS (SELECT 1 FROM model_settings WHERE singleton = true)
 ON CONFLICT (singleton) DO UPDATE SET compact_at_tokens = EXCLUDED.compact_at_tokens,
     hot_compact_at_tokens = EXCLUDED.hot_compact_at_tokens,
     hot_compact_delay_seconds = EXCLUDED.hot_compact_delay_seconds,
-    user_message_debounce_seconds = EXCLUDED.user_message_debounce_seconds,
     reflection_idle_minutes = EXCLUDED.reflection_idle_minutes,
     version = model_settings.version + 1, updated_at = now(), updated_by = EXCLUDED.updated_by
 WHERE model_settings.version = sqlc.arg(expected_version)

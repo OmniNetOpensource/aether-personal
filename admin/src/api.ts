@@ -123,7 +123,6 @@ export interface RuntimeSettings {
   compact_at_tokens: number;
   hot_compact_at_tokens: number;
   hot_compact_delay_seconds: number;
-  user_message_debounce_seconds: number;
   reflection_idle_minutes: number;
   version: number;
 }

@@ -258,7 +258,7 @@ type HasHotCompactCommitWindowParams struct {
 }
 
 // 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
-// 尚在防抖等待中的新用户消息（未开步）不阻断提交，它们会保留在摘要之后供下一轮直接读取。
+// 若新用户消息刚入库但下一轮尚未开步，仍可提交摘要并让新消息保留在摘要之后。
 func (q *Queries) HasHotCompactCommitWindow(ctx context.Context, arg HasHotCompactCommitWindowParams) (bool, error) {
 	row := q.db.QueryRow(ctx, hasHotCompactCommitWindow, arg.ReplyID, arg.UserID)
 	var exists bool

@@ -1,4 +1,4 @@
-// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线、热压缩触发线、热压缩等待时间、用户消息防抖等待时间和闲置后台反思时长。
+// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线、热压缩触发线、热压缩等待时间和闲置后台反思时长。
 
 import { useEffect, useState } from "react";
 import { api, ApiError, formatTime, type RuntimeSettings } from "./api.js";
@@ -98,7 +98,6 @@ export function RuntimeSettingsPage({
     settings.compact_at_tokens !== draft.compact_at_tokens ||
     settings.hot_compact_at_tokens !== draft.hot_compact_at_tokens ||
     settings.hot_compact_delay_seconds !== draft.hot_compact_delay_seconds ||
-    settings.user_message_debounce_seconds !== draft.user_message_debounce_seconds ||
     settings.reflection_idle_minutes !== draft.reflection_idle_minutes;
 
   return (
@@ -150,28 +149,6 @@ export function RuntimeSettingsPage({
             value={draft.hot_compact_delay_seconds || ""}
             onChange={(event) =>
               setDraft({ ...draft, hot_compact_delay_seconds: Number(event.target.value) })
-            }
-          />
-        </label>
-        <label className="model-picker">
-          用户消息防抖等待（秒，0 为立即）
-          <input
-            type="number"
-            min={0}
-            max={300}
-            required
-            disabled={saving}
-            value={
-              Number.isNaN(draft.user_message_debounce_seconds)
-                ? ""
-                : draft.user_message_debounce_seconds
-            }
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                user_message_debounce_seconds:
-                  event.target.value === "" ? Number.NaN : Number(event.target.value),
-              })
             }
           />
         </label>
