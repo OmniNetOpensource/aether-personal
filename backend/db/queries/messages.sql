@@ -36,7 +36,7 @@ WHERE user_id = sqlc.arg(user_id) AND client_message_id = sqlc.arg(client_messag
 -- 启动与周期补查只读取 Main 的业务待办，排除 Subagent 自己的内部消息。
 SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
     WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
-        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
+        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context' AND m.content ->> 'name' IS DISTINCT FROM 'compact_reminder'), 0)::bigint AS input_sequence
 FROM main_work AS w ORDER BY w.user_id;
 
 -- name: InsertAgentMessage :exec
@@ -46,7 +46,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 -- name: HasNewMainInput :one
 -- 只比较投给 Main 的实际输入，摘要、工具回执与 Subagent 消息不打断 Main 生成。
 SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = sqlc.arg(user_id) AND subagent_id IS NULL
-    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
+    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context' AND content ->> 'name' IS DISTINCT FROM 'compact_reminder'
     AND sequence > sqlc.arg(through)::bigint);
 
 -- name: ReserveMainReply :one
@@ -141,6 +141,15 @@ SELECT coalesce(max(coalesce(chat_updated_sequence, sequence)), 0)::bigint FROM 
 -- 已打开的旧客户端重连时仍提交行 ID；其原始写入序号之后发生的完成事件也需补发。
 SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2;
 
+-- name: SetStepInputSequence :exec
+UPDATE steps SET input_sequence = $2 WHERE id = $1;
+
+-- name: GetCompactToolInput :one
+-- 原始批次大小在中断补跑时仍有效，即使同批其他工具已经写了回执。
+SELECT s.model, s.input_sequence, jsonb_array_length(m.content->'tool_calls')::integer AS call_count
+FROM steps s JOIN messages m ON m.step_id = s.id AND m.role = 'assistant'
+WHERE s.id = $1;
+
 -- name: StartCompactStep :one
 INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
 VALUES ($1, $2, $3, now(), 'compact') RETURNING id;
@@ -153,5 +162,6 @@ VALUES ($1, $2, 'user', $3, $4, true, $5);
 SELECT model AS requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM steps WHERE user_id = sqlc.arg(user_id)
  AND subagent_id IS NOT DISTINCT FROM sqlc.narg(subagent_id)::uuid
+ AND input_sequence >= sqlc.arg(generation)::bigint
  AND purpose = 'agent' AND finished_at IS NOT NULL AND error IS NULL AND input_tokens IS NOT NULL
 ORDER BY started_at DESC, id DESC LIMIT 1;

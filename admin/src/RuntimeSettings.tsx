@@ -1,4 +1,4 @@
-// 本文件是管理看板的全局运行设置，供管理员修改压缩阈值和闲置后台反思时长。
+// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线和闲置后台反思时长。
 
 import { useEffect, useState } from "react";
 import { api, ApiError, formatTime, type RuntimeSettings } from "./api.js";
@@ -103,7 +103,7 @@ export function RuntimeSettingsPage({
       <h3>全局运行参数</h3>
       <div className="model-role-grid">
         <label className="model-picker">
-          上下文压缩阈值（Token）
+          上下文压缩提醒线（Token）
           <input
             type="number"
             min={1000}

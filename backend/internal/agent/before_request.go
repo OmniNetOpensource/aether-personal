@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"slices"
 	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
@@ -85,7 +85,7 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (mod
 	if err != nil {
 		return modelRequest{}, uuid.Nil, err
 	}
-	request, err := r.prepareContext(budget, model, capacity, settings.CompactModel)
+	request, err := r.prepareContext(budget, model, capacity)
 	if err != nil {
 		return modelRequest{}, stepID, err
 	}
@@ -95,7 +95,7 @@ func (r *Runner) beforeRequest(ctx, budget context.Context, through *int64) (mod
 
 // prepareContext 是每次调用模型前的上下文入口：按 Main 或 Subagent 身份选择模型与上限，读入当前世代的消息，
 // 判断要不要压缩，需要时先完成压缩，再按组装规则返回最终请求。
-func (r *Runner) prepareContext(ctx context.Context, model string, capacity int64, compactModel string) (modelRequest, error) {
+func (r *Runner) prepareContext(ctx context.Context, model string, capacity int64) (modelRequest, error) {
 	queries := database.New(r.databasePool)
 	settings, err := modelsettings.LoadRuntime(ctx, queries)
 	if err != nil {
@@ -107,61 +107,68 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 	}
 	// 触发只看当前 Agent 上一次同模型成功请求的官方 prompt_tokens；没有上次用量或已换模型时按 0 处理。
 	var before int64
-	usage, err := queries.GetLastContextUsage(ctx, database.GetLastContextUsageParams{UserID: r.userID, SubagentID: r.subagentID})
+	usage, err := queries.GetLastContextUsage(ctx, database.GetLastContextUsageParams{UserID: r.userID, SubagentID: r.subagentID, Generation: contextGeneration(rows)})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return modelRequest{}, err
 	}
 	if err == nil && usage.RequestedModel == model {
 		before = int64(usage.InputTokens)
 	}
-	inputLimit := int64(math.MaxInt32)
-	if capacity > 0 {
-		inputLimit = capacity - max(1024, capacity/20)
-	}
-	threshold := min(int64(settings.CompactAtTokens), inputLimit)
-	reason := ""
-	if before >= threshold {
-		reason = "tokens"
-	}
-	if before >= inputLimit {
-		reason = "capacity"
-	}
-	if reason == "" {
+	// 容量保护优先。保留最后一条完整工具链之后的输入，沿用现有容量余量。
+	switch {
+	case capacity > 0 && before > 0 && before >= capacity-max(1024, capacity/20):
+		end := len(rows)
+		for end > 0 {
+			role := parseContextMessage(rows[end-1].Content).Role
+			if role == "assistant" || role == "tool" {
+				break
+			}
+			end--
+		}
+		if end == 0 {
+			return r.buildAgentRequest(rows, model), nil
+		}
+		if err := r.compactContext(ctx, rows[:end], rows[end-1].Sequence, model, compactPrompt, nil); err != nil {
+			return modelRequest{}, err
+		}
+	case before >= int64(settings.CompactAtTokens):
+		// 当前世代只插入一次；后续请求与压缩重放同一条不可见消息。
+		if slices.ContainsFunc(rows, func(row database.ListAgentContextRowsRow) bool {
+			return parseContextMessage(row.Content).Name == "compact_reminder"
+		}) {
+			return r.buildAgentRequest(rows, model), nil
+		}
+		err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+			q := database.New(tx)
+			if err := r.lockAndVerifyLease(ctx, q); err != nil {
+				return err
+			}
+			return q.InsertAgentMessage(ctx, database.InsertAgentMessageParams{
+				UserID: r.userID, SubagentID: r.subagentID, Role: "user",
+				Content: runtimeMessage("compact_reminder", "当前上下文已达到压缩提醒线，请尽量在下一个适合的任务节点调用 compact(reason, focus)。"),
+			})
+		})
+		if err != nil {
+			return modelRequest{}, err
+		}
+	default:
 		return r.buildAgentRequest(rows, model), nil
 	}
-	// 待压缩范围：从最新一条摘要（若有）压到最新一条 assistant；若该 assistant 带工具调用，则延展到它最后的 tool 回执，避免拆散工具链，其后消息保留原文。
-	keepFrom := 0
-	for index := len(rows) - 1; index >= 0; index-- {
-		role := parseContextMessage(rows[index].Content).Role
-		if role == "assistant" || role == "tool" {
-			keepFrom = index + 1
-			break
-		}
+	// 重新读取事务期间到达的新消息，保留它们的原文与序号。
+	rows, err = queries.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID, SubagentID: r.subagentID})
+	if err != nil {
+		return modelRequest{}, err
 	}
-	rowsToCompact := rows[:keepFrom]
-	var through int64
-	for _, row := range rowsToCompact {
-		if !row.IsSummary {
-			through = max(through, row.Sequence)
-		}
-	}
-	if through == 0 {
-		return r.buildAgentRequest(rows, model), nil
-	}
-	if compactModel == "" {
-		compactModel = model
-	}
-	compactMessages := r.buildCompactRequestMessages(rowsToCompact, compactPrompt)
-	summaryRequest := modelRequest{
-		SessionID:  r.requestSessionID(rowsToCompact),
-		Model:      compactModel,
-		Messages:   compactMessages,
-		Tools:      r.toolDefinitions(),
-		ToolChoice: json.RawMessage(`"none"`),
-		Reasoning:  map[string]any{"effort": "low", "exclude": true},
-	}
+	return r.buildAgentRequest(rows, model), nil
+}
+
+// compactContext 供容量保护和显式工具调用共用；在旧世代生成摘要，成功时连同工具回执原子提交。
+func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentContextRowsRow, through int64, model, prompt string, receipt *database.InsertAgentMessageParams) error {
+	queries := database.New(r.databasePool)
+	request := r.buildAgentRequest(rows, model)
+	request.Messages = append(request.Messages, runtimeMessage("compaction", compactInstructions+"\n\n"+prompt))
 	var compactStepID uuid.UUID
-	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
 		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
 			return err
@@ -170,12 +177,12 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		compactStepID, err = txQueries.StartCompactStep(ctx, database.StartCompactStepParams{
 			UserID:     r.userID,
 			SubagentID: r.subagentID,
-			Model:      compactModel,
+			Model:      model,
 		})
 		return err
 	})
 	if err != nil {
-		return modelRequest{}, err
+		return err
 	}
 	committed := false
 	defer func() {
@@ -187,15 +194,16 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		failure := "compaction did not commit; original context preserved"
 		_ = queries.FinishStep(cleanup, database.FinishStepParams{ID: compactStepID, Error: &failure})
 	}()
-	result, _, err := r.sendModelRequest(ctx, summaryRequest, "compact", nil)
+	result, _, err := r.sendModelRequest(ctx, request, "compact", nil)
 	if err != nil {
-		return modelRequest{}, fmt.Errorf("compact context: %w", err)
+		return fmt.Errorf("compact context: %w", err)
 	}
-	var summary struct {
-		Content string `json:"content"`
+	message := result.Choices[0].Message
+	summary := AssistantTextToUser(message)
+	if summary == "" || len(parseContextMessage(message).ToolCalls) > 0 {
+		return errors.New("compact response must contain summary text without tool calls")
 	}
-	_ = json.Unmarshal(result.Choices[0].Message, &summary)
-	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary.Content})
+	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary})
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
 		if err := r.lockAndVerifyLease(ctx, q); err != nil {
@@ -210,17 +218,18 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		}); err != nil {
 			return err
 		}
+		if receipt != nil {
+			if err := q.InsertAgentMessage(ctx, *receipt); err != nil {
+				return err
+			}
+		}
 		return q.FinishStep(ctx, database.FinishStepParams{ID: compactStepID, InputTokens: result.Usage.PromptTokens, OutputTokens: result.Usage.CompletionTokens, Cost: result.Usage.Cost})
 	})
 	if err != nil {
-		return modelRequest{}, err
+		return err
 	}
 	committed = true
-	rows, err = queries.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID, SubagentID: r.subagentID})
-	if err != nil {
-		return modelRequest{}, err
-	}
-	return r.buildAgentRequest(rows, model), nil
+	return nil
 }
 
 // silentToolRoundsBeforeReminder 是从最近一条用户消息或 Main 的可见正文算起，连续多少轮只调工具后插入一次进度提醒。
@@ -228,6 +237,7 @@ const silentToolRoundsBeforeReminder = 4
 
 // parsedContextMessage 是组装上下文时从一条已存消息里读出的共用字段。
 type parsedContextMessage struct {
+	Name       string          `json:"name"`
 	Role       string          `json:"role"`
 	Content    json.RawMessage `json:"content"`
 	ToolCalls  []toolCall      `json:"tool_calls"`
@@ -315,13 +325,17 @@ func (r *Runner) buildRequestMessages(rows []database.ListAgentContextRowsRow) [
 	return append([]json.RawMessage{runtimeMessage(instructionsMessageName, instructions)}, assembleMessages(rows, r.subagentID == nil)...)
 }
 
-// requestSessionID 按 Agent 身份与当前上下文世代生成稳定会话 ID，供 OpenRouter 从首轮启用粘性路由并按世代汇总账单。
-// ListAgentContextRows 将最新摘要排在 rows[0]，取其序号作为世代号（未压缩过为 0），多容器间计算结果完全一致。
-func (r *Runner) requestSessionID(rows []database.ListAgentContextRowsRow) string {
-	var generation int64
+// contextGeneration 以最新摘要序号标识世代，首次压缩前使用 0。
+func contextGeneration(rows []database.ListAgentContextRowsRow) int64 {
 	if len(rows) > 0 && rows[0].IsSummary {
-		generation = rows[0].Sequence
+		return rows[0].Sequence
 	}
+	return 0
+}
+
+// requestSessionID 按 Agent 身份与上下文世代生成稳定的 OpenRouter 会话 ID。
+func (r *Runner) requestSessionID(rows []database.ListAgentContextRowsRow) string {
+	generation := contextGeneration(rows)
 	if r.subagentID != nil {
 		return fmt.Sprintf("subagent:%s:%d", r.subagentID.String(), generation)
 	}
@@ -342,11 +356,6 @@ func (r *Runner) buildAgentRequest(rows []database.ListAgentContextRowsRow, mode
 		Messages:      messages,
 		Tools:         r.toolDefinitions(),
 	}
-}
-
-// buildCompactRequestMessages 复用当前角色的固定指令和历史前缀，只在末尾追加压缩要求。
-func (r *Runner) buildCompactRequestMessages(rows []database.ListAgentContextRowsRow, summaryPrompt string) []json.RawMessage {
-	return append(r.buildRequestMessages(rows), runtimeMessage("compaction", compactInstructions+"\n\n"+summaryPrompt))
 }
 
 // pendingToolCalls 从消息尾部找出最后一条 assistant 里还没有回执的工具调用，连同产生它的步骤一起返回。

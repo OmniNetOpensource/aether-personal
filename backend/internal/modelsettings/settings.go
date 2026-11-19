@@ -1,4 +1,4 @@
-// 本文件读取账号模型选择和部署全局的压缩阈值、闲置反思时长，并在首次设置前提供各自的默认值。
+// 本文件读取账号模型选择和部署全局的压缩提醒线、闲置反思时长，并在首次设置前提供各自的默认值。
 
 package modelsettings
 
@@ -14,11 +14,10 @@ import (
 // DefaultModel 由 OpenRouter 按请求能力从免费模型中路由。
 const DefaultModel = "openrouter/free"
 
-// Selection 是账号选择的模型 ID 和写入版本。Subagent 留空跟随 Main，压缩留空跟随当前 Agent。
+// Selection 是账号选择的模型 ID 和写入版本。Subagent 留空跟随 Main。
 type Selection struct {
 	MainModel     string `json:"main_model"`
 	SubagentModel string `json:"subagent_model"`
-	CompactModel  string `json:"compact_model"`
 	Version       int64  `json:"version"`
 }
 
@@ -48,9 +47,6 @@ func LoadUser(ctx context.Context, queries *database.Queries, userID uuid.UUID) 
 	}
 	if row.SubagentContextLength != nil {
 		settings.SubagentContextLength = *row.SubagentContextLength
-	}
-	if row.CompactModel != nil {
-		settings.CompactModel = *row.CompactModel
 	}
 	return settings, nil
 }

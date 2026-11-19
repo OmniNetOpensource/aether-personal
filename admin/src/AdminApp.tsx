@@ -28,7 +28,7 @@ const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '' };
 
 const tabs: Record<Tab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
-  settings: ['配置', '管理全局压缩阈值、闲置反思时长和服务凭证。'],
+  settings: ['配置', '管理全局压缩提醒线、闲置反思时长和服务凭证。'],
 };
 const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
 

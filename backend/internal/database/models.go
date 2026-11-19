@@ -92,9 +92,6 @@ type ModelSetting struct {
 	MainModelMaxTokens     *int32
 	CompactAtTokens        int32
 	MainContextLength      *int64
-	CompactModel           *string
-	CompactModelMaxTokens  *int32
-	CompactContextLength   *int64
 	ReflectionIdleMinutes  int32
 	SubagentModel          *string
 	SubagentModelMaxTokens *int32
@@ -143,17 +140,18 @@ type Session struct {
 }
 
 type Step struct {
-	ID           uuid.UUID
-	UserID       uuid.UUID
-	Model        string
-	InputTokens  *int32
-	OutputTokens *int32
-	Cost         *decimal.Decimal
-	Error        *string
-	StartedAt    time.Time
-	FinishedAt   *time.Time
-	Purpose      string
-	SubagentID   *uuid.UUID
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	Model         string
+	InputTokens   *int32
+	OutputTokens  *int32
+	Cost          *decimal.Decimal
+	Error         *string
+	StartedAt     time.Time
+	FinishedAt    *time.Time
+	Purpose       string
+	SubagentID    *uuid.UUID
+	InputSequence int64
 }
 
 type Subagent struct {
@@ -182,6 +180,5 @@ type UserModelSetting struct {
 	MainContextLength     *int64
 	SubagentModel         *string
 	SubagentContextLength *int64
-	CompactModel          *string
 	Version               int64
 }

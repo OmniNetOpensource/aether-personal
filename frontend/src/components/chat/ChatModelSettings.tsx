@@ -1,4 +1,4 @@
-// 本文件提供聊天内的个人模型设置浮层，支持搜索各渠道模型并保存 Main、Subagent 和压缩各自的选择。
+// 本文件提供聊天内的个人模型设置浮层，支持搜索各渠道模型并保存 Main 与 Subagent 各自的选择。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -6,11 +6,10 @@ import type { ChatController } from '../../lib/ChatController.js';
 import type { ModelSelection, ModelSettings } from '../../lib/modelSettings.js';
 import './chatModels.css';
 
-// modelRoles 定义三个选择器的顺序与各角色的跟随规则。
+// modelRoles 定义两个选择器的顺序与各角色的跟随规则。
 const modelRoles = [
   { field: 'main_model', label: 'Main', inherited: '' },
   { field: 'subagent_model', label: 'Subagent', inherited: '跟随 Main' },
-  { field: 'compact_model', label: '上下文压缩', inherited: '跟随当前 Agent' },
 ] as const;
 
 // ChatModelSettings 打开时读取当前配置，成功保存后返回聊天。

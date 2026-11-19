@@ -100,10 +100,31 @@ func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 	return err
 }
 
+const getCompactToolInput = `-- name: GetCompactToolInput :one
+SELECT s.model, s.input_sequence, jsonb_array_length(m.content->'tool_calls')::integer AS call_count
+FROM steps s JOIN messages m ON m.step_id = s.id AND m.role = 'assistant'
+WHERE s.id = $1
+`
+
+type GetCompactToolInputRow struct {
+	Model         string
+	InputSequence int64
+	CallCount     int32
+}
+
+// 原始批次大小在中断补跑时仍有效，即使同批其他工具已经写了回执。
+func (q *Queries) GetCompactToolInput(ctx context.Context, id uuid.UUID) (GetCompactToolInputRow, error) {
+	row := q.db.QueryRow(ctx, getCompactToolInput, id)
+	var i GetCompactToolInputRow
+	err := row.Scan(&i.Model, &i.InputSequence, &i.CallCount)
+	return i, err
+}
+
 const getLastContextUsage = `-- name: GetLastContextUsage :one
 SELECT model AS requested_model, coalesce(input_tokens, 0)::integer AS input_tokens
 FROM steps WHERE user_id = $1
  AND subagent_id IS NOT DISTINCT FROM $2::uuid
+ AND input_sequence >= $3::bigint
  AND purpose = 'agent' AND finished_at IS NOT NULL AND error IS NULL AND input_tokens IS NOT NULL
 ORDER BY started_at DESC, id DESC LIMIT 1
 `
@@ -111,6 +132,7 @@ ORDER BY started_at DESC, id DESC LIMIT 1
 type GetLastContextUsageParams struct {
 	UserID     uuid.UUID
 	SubagentID *uuid.UUID
+	Generation int64
 }
 
 type GetLastContextUsageRow struct {
@@ -119,7 +141,7 @@ type GetLastContextUsageRow struct {
 }
 
 func (q *Queries) GetLastContextUsage(ctx context.Context, arg GetLastContextUsageParams) (GetLastContextUsageRow, error) {
-	row := q.db.QueryRow(ctx, getLastContextUsage, arg.UserID, arg.SubagentID)
+	row := q.db.QueryRow(ctx, getLastContextUsage, arg.UserID, arg.SubagentID, arg.Generation)
 	var i GetLastContextUsageRow
 	err := row.Scan(&i.RequestedModel, &i.InputTokens)
 	return i, err
@@ -200,7 +222,7 @@ func (q *Queries) HasMainWork(ctx context.Context, userID uuid.UUID) (bool, erro
 
 const hasNewMainInput = `-- name: HasNewMainInput :one
 SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = $1 AND subagent_id IS NULL
-    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context'
+    AND role = 'user' AND NOT is_summary AND content ->> 'name' IS DISTINCT FROM 'memory_context' AND content ->> 'name' IS DISTINCT FROM 'compact_reminder'
     AND sequence > $2::bigint)
 `
 
@@ -476,7 +498,7 @@ func (q *Queries) ListChatRowsBefore(ctx context.Context, arg ListChatRowsBefore
 const listMainWork = `-- name: ListMainWork :many
 SELECT w.user_id, coalesce((SELECT max(m.sequence) FROM messages AS m
     WHERE m.user_id = w.user_id AND m.subagent_id IS NULL AND m.role = 'user' AND NOT m.is_summary
-        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'), 0)::bigint AS input_sequence
+        AND m.content ->> 'name' IS DISTINCT FROM 'memory_context' AND m.content ->> 'name' IS DISTINCT FROM 'compact_reminder'), 0)::bigint AS input_sequence
 FROM main_work AS w ORDER BY w.user_id
 `
 
@@ -546,6 +568,20 @@ func (q *Queries) ReserveMainReply(ctx context.Context, arg ReserveMainReplyPara
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const setStepInputSequence = `-- name: SetStepInputSequence :exec
+UPDATE steps SET input_sequence = $2 WHERE id = $1
+`
+
+type SetStepInputSequenceParams struct {
+	ID            uuid.UUID
+	InputSequence int64
+}
+
+func (q *Queries) SetStepInputSequence(ctx context.Context, arg SetStepInputSequenceParams) error {
+	_, err := q.db.Exec(ctx, setStepInputSequence, arg.ID, arg.InputSequence)
+	return err
 }
 
 const startCompactStep = `-- name: StartCompactStep :one

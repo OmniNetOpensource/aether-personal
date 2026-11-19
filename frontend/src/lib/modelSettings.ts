@@ -6,7 +6,6 @@ import { z } from 'zod';
 export const modelSelectionSchema = z.object({
   main_model: z.string().min(1),
   subagent_model: z.string(),
-  compact_model: z.string(),
   version: z.number().int().nonnegative(),
 });
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;

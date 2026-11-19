@@ -56,7 +56,7 @@ WHERE (sqlc.narg(user_id)::uuid IS NULL OR u.id = sqlc.narg(user_id)::uuid)
                 AND m.subagent_id IS NULL
                 AND m.role = 'user'
                 AND NOT m.is_summary
-                AND m.content ->> 'name' IS DISTINCT FROM 'memory_context'
+                AND m.content ->> 'name' IS DISTINCT FROM 'memory_context' AND m.content ->> 'name' IS DISTINCT FROM 'compact_reminder'
             ORDER BY m.sequence DESC
             LIMIT 1
         ) AS last_input

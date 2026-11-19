@@ -1,19 +1,19 @@
 -- 本文件读取和保存账号模型选择及全局运行参数；版本校验在写入语句内完成，避免覆盖其他设备的保存。
 
 -- name: GetUserModelSettings :one
-SELECT main_model, main_context_length, subagent_model, subagent_context_length, compact_model, version
+SELECT main_model, main_context_length, subagent_model, subagent_context_length, version
 FROM user_model_settings WHERE user_id = $1;
 
 -- name: SaveUserModelSettings :one
 INSERT INTO user_model_settings (user_id, main_model, main_context_length,
-    subagent_model, subagent_context_length, compact_model, version)
+    subagent_model, subagent_context_length, version)
 SELECT sqlc.arg(user_id), sqlc.arg(main_model), sqlc.narg(main_context_length),
-    NULLIF(sqlc.arg(subagent_model)::text, ''), sqlc.narg(subagent_context_length), NULLIF(sqlc.arg(compact_model)::text, ''), 1
+    NULLIF(sqlc.arg(subagent_model)::text, ''), sqlc.narg(subagent_context_length), 1
 WHERE sqlc.arg(expected_version)::bigint = 0
    OR EXISTS (SELECT 1 FROM user_model_settings WHERE user_id = sqlc.arg(user_id))
 ON CONFLICT (user_id) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_context_length = EXCLUDED.main_context_length, subagent_model = EXCLUDED.subagent_model,
-    subagent_context_length = EXCLUDED.subagent_context_length, compact_model = EXCLUDED.compact_model,
+    subagent_context_length = EXCLUDED.subagent_context_length,
     version = user_model_settings.version + 1
 WHERE user_model_settings.version = sqlc.arg(expected_version)
 RETURNING version;

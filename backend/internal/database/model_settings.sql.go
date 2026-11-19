@@ -31,7 +31,7 @@ func (q *Queries) GetRuntimeSettings(ctx context.Context) (GetRuntimeSettingsRow
 
 const getUserModelSettings = `-- name: GetUserModelSettings :one
 
-SELECT main_model, main_context_length, subagent_model, subagent_context_length, compact_model, version
+SELECT main_model, main_context_length, subagent_model, subagent_context_length, version
 FROM user_model_settings WHERE user_id = $1
 `
 
@@ -40,7 +40,6 @@ type GetUserModelSettingsRow struct {
 	MainContextLength     *int64
 	SubagentModel         *string
 	SubagentContextLength *int64
-	CompactModel          *string
 	Version               int64
 }
 
@@ -53,7 +52,6 @@ func (q *Queries) GetUserModelSettings(ctx context.Context, userID uuid.UUID) (G
 		&i.MainContextLength,
 		&i.SubagentModel,
 		&i.SubagentContextLength,
-		&i.CompactModel,
 		&i.Version,
 	)
 	return i, err
@@ -87,16 +85,16 @@ func (q *Queries) SaveRuntimeSettings(ctx context.Context, arg SaveRuntimeSettin
 
 const saveUserModelSettings = `-- name: SaveUserModelSettings :one
 INSERT INTO user_model_settings (user_id, main_model, main_context_length,
-    subagent_model, subagent_context_length, compact_model, version)
+    subagent_model, subagent_context_length, version)
 SELECT $1, $2, $3,
-    NULLIF($4::text, ''), $5, NULLIF($6::text, ''), 1
-WHERE $7::bigint = 0
+    NULLIF($4::text, ''), $5, 1
+WHERE $6::bigint = 0
    OR EXISTS (SELECT 1 FROM user_model_settings WHERE user_id = $1)
 ON CONFLICT (user_id) DO UPDATE SET main_model = EXCLUDED.main_model,
     main_context_length = EXCLUDED.main_context_length, subagent_model = EXCLUDED.subagent_model,
-    subagent_context_length = EXCLUDED.subagent_context_length, compact_model = EXCLUDED.compact_model,
+    subagent_context_length = EXCLUDED.subagent_context_length,
     version = user_model_settings.version + 1
-WHERE user_model_settings.version = $7
+WHERE user_model_settings.version = $6
 RETURNING version
 `
 
@@ -106,7 +104,6 @@ type SaveUserModelSettingsParams struct {
 	MainContextLength     *int64
 	SubagentModel         string
 	SubagentContextLength *int64
-	CompactModel          string
 	ExpectedVersion       int64
 }
 
@@ -117,7 +114,6 @@ func (q *Queries) SaveUserModelSettings(ctx context.Context, arg SaveUserModelSe
 		arg.MainContextLength,
 		arg.SubagentModel,
 		arg.SubagentContextLength,
-		arg.CompactModel,
 		arg.ExpectedVersion,
 	)
 	var version int64

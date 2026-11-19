@@ -63,6 +63,10 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 					return errNewInput
 				}
 			}
+			// 固定生成这条回复时模型看过的消息边界，崩溃后也能重建 compact 的输入。
+			if err := q.SetStepInputSequence(ctx, database.SetStepInputSequenceParams{ID: stepID, InputSequence: request.InputSequence}); err != nil {
+				return err
+			}
 			var err error
 			replyID, err = q.ReserveMainReply(ctx, database.ReserveMainReplyParams{
 				UserID:     r.userID,

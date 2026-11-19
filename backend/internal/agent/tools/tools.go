@@ -39,10 +39,17 @@ type Tool struct {
 	Execute          func(ctx context.Context, deps Dependencies, queries *database.Queries, userID uuid.UUID, arguments string) (string, error)
 }
 
+// compactTool 由 Runner 执行，以便摘要与本次工具回执在同一个事务中提交。
+var compactTool = Tool{
+	Name:       "compact",
+	Definition: json.RawMessage(`{"type":"function","function":{"name":"compact","description":"Summarize this agent's current context at a useful handoff point. Call alone. You may call before the context reminder.","parameters":{"type":"object","additionalProperties":false,"required":["reason","focus"],"properties":{"reason":{"type":"string","description":"Why compact now"},"focus":{"type":"string","description":"Details needed to continue the work"}}}}}`),
+}
+
 // all 是 Main 的完整工具登记表，顺序即发给 Main 模型的顺序（Subagent 编排工具暂时禁用，待恢复时重新登记）。
 var all = append([]Tool{
 	searchMessageTool,
 	readMessageTool,
+	compactTool,
 	memoryTool,
 	scheduleTool,
 	searchTool,
@@ -55,6 +62,7 @@ var all = append([]Tool{
 var subagentAll = []Tool{
 	searchMessageTool,
 	readMessageTool,
+	compactTool,
 	subagentMemoryTool,
 	searchTool,
 	searchTwitterTool,

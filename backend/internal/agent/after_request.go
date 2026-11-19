@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,10 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 	toolErrors := make([]error, len(calls))
 	execute := func(index int) {
 		call := calls[index]
+		if call.Function.Name == "compact" {
+			toolErrors[index] = r.executeCompact(ctx, stepID, call)
+			return
+		}
 		if tool, ok := r.lookupTool(call.Function.Name); ok && tool.OutsideTransaction {
 			result, err := tool.Execute(ctx, r.toolDeps, nil, r.userID, call.Function.Arguments)
 			if err != nil {
@@ -169,6 +174,39 @@ func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls [
 		}
 	}
 	return nil
+}
+
+// executeCompact 重建发起步骤看见的上下文，正常执行和崩溃后的工具补跑使用同一边界。
+func (r *Runner) executeCompact(ctx context.Context, stepID uuid.UUID, call toolCall) error {
+	q := database.New(r.databasePool)
+	input, err := q.GetCompactToolInput(ctx, stepID)
+	if err != nil {
+		return err
+	}
+	if input.CallCount != 1 {
+		return r.saveToolResult(ctx, stepID, call, "Error: call compact alone in a separate turn.")
+	}
+	var args struct {
+		Reason string `json:"reason"`
+		Focus  string `json:"focus"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || strings.TrimSpace(args.Reason) == "" || strings.TrimSpace(args.Focus) == "" {
+		return r.saveToolResult(ctx, stepID, call, "Error: compact requires a non-empty reason and focus.")
+	}
+	// 切在原请求边界，避免把本次工具调用或随后到达的用户消息纳入摘要。
+	rows, err := q.ListAgentContextRows(ctx, database.ListAgentContextRowsParams{UserID: r.userID, SubagentID: r.subagentID})
+	if err != nil {
+		return err
+	}
+	rows = slices.DeleteFunc(rows, func(row database.ListAgentContextRowsRow) bool { return row.Sequence > input.InputSequence })
+	content, _, _, err := r.toolResultContent(call, "Context compacted. Continue from the summary.")
+	if err != nil {
+		return err
+	}
+	prompt := compactPrompt + "\n\nReason: " + args.Reason + "\nFocus: " + args.Focus
+	return r.compactContext(ctx, rows, input.InputSequence, input.Model, prompt, &database.InsertAgentMessageParams{
+		UserID: r.userID, SubagentID: r.subagentID, Role: "tool", Content: content, StepID: &stepID,
+	})
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。

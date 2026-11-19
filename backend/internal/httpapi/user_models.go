@@ -86,7 +86,7 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 	})
 }
 
-// saveUserModels 校验所选渠道的模型目录与客户端版本，一次更新该账号的三种选择。
+// saveUserModels 校验所选渠道的模型目录与客户端版本，一次更新该账号的模型选择。
 func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	var selection modelsettings.Selection
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
@@ -97,7 +97,7 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 	}
 
 	// 默认路由和跟随选项始终可保存。具体型号按实际请求使用的渠道校验。
-	selectedModels := []string{selection.MainModel, selection.SubagentModel, selection.CompactModel}
+	selectedModels := []string{selection.MainModel, selection.SubagentModel}
 	selectedProviders := map[string]bool{}
 	for _, id := range selectedModels {
 		if id == "" || id == modelsettings.DefaultModel {
@@ -138,7 +138,6 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 		MainContextLength:     capacities[selection.MainModel],
 		SubagentModel:         selection.SubagentModel,
 		SubagentContextLength: capacities[selection.SubagentModel],
-		CompactModel:          selection.CompactModel,
 		ExpectedVersion:       selection.Version,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
