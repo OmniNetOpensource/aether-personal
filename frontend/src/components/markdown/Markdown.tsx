@@ -3,7 +3,7 @@
 import { memo, type ComponentProps } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime';
-import type { Element } from 'hast';
+import type { Element, Root } from 'hast';
 import rehypeKatex from 'rehype-katex';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -93,9 +93,30 @@ const markdownComponents = {
   pre: MarkdownPre,
 } satisfies Partial<Components>;
 
+// 缓存最近解析过的 HAST 树，虚拟列表滚动卸载后再挂载时直接跳过 remark 与 KaTeX 同步解析。
+const maxMarkdownCacheSize = 120;
+const markdownTreeCache = new Map<string, Root>();
+
+// parseMarkdownTree 按 LRU 顺序复用已解析的语法树，超出容量时淘汰最久未使用的条目。
+function parseMarkdownTree(text: string): Root {
+  const cached = markdownTreeCache.get(text);
+  if (cached) {
+    markdownTreeCache.delete(text);
+    markdownTreeCache.set(text, cached);
+    return cached;
+  }
+  const tree = markdownProcessor.runSync(markdownProcessor.parse(text));
+  if (markdownTreeCache.size >= maxMarkdownCacheSize) {
+    const oldestKey = markdownTreeCache.keys().next().value;
+    if (oldestKey !== undefined) markdownTreeCache.delete(oldestKey);
+  }
+  markdownTreeCache.set(text, tree);
+  return tree;
+}
+
 // 当前后端整条推送回复，直接使用最终 React 渲染，无需流式 DOM 动画或未闭合语法修补。
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const tree = markdownProcessor.runSync(markdownProcessor.parse(text));
+  const tree = parseMarkdownTree(text);
   return (
     <div className="markdown">
       {toJsxRuntime(tree, { Fragment, jsx, jsxs, components: markdownComponents, passNode: true })}

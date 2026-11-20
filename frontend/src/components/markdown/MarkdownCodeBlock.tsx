@@ -1,4 +1,4 @@
-// 本文件渲染带语言标签、复制反馈、语法高亮和行号的代码块，按需加载语法以保持首屏轻量。
+// 本文件渲染带语言标签、复制反馈、语法高亮和行号的代码块，按需加载语法并缓存高亮结果以避免滚动重挂载跳动。
 
 import { useEffect, useRef, useState } from 'react';
 import type { TokensResult } from '@shikijs/core';
@@ -6,17 +6,49 @@ import type { TokensResult } from '@shikijs/core';
 // 高亮结果携带输入标识，内容更新时先显示新原文，避免短暂显示旧代码。
 type Highlight = { key: string; result: TokensResult };
 
+// 缓存已高亮的 token 结果，虚拟行滚出视口后再次进入时首帧即带高亮，不再重复异步解析。
+const maxTokenCacheSize = 100;
+const tokenCache = new Map<string, TokensResult>();
+
+// readTokenCache 按 LRU 顺序读取缓存的高亮结果。
+function readTokenCache(key: string): TokensResult | undefined {
+  const cached = tokenCache.get(key);
+  if (!cached) return undefined;
+  tokenCache.delete(key);
+  tokenCache.set(key, cached);
+  return cached;
+}
+
+// writeTokenCache 将新生成的高亮结果写入有界缓存，超出上限时淘汰最旧条目。
+function writeTokenCache(key: string, result: TokensResult) {
+  if (tokenCache.has(key)) {
+    tokenCache.delete(key);
+  } else if (tokenCache.size >= maxTokenCacheSize) {
+    const oldestKey = tokenCache.keys().next().value;
+    if (oldestKey !== undefined) tokenCache.delete(oldestKey);
+  }
+  tokenCache.set(key, result);
+}
+
 // 代码复制由浏览器剪贴板完成；失败反馈留在按钮内，允许用户直接重试。
 export function MarkdownCodeBlock({ code, language }: { code: string; language: string }) {
-  const [highlight, setHighlight] = useState<Highlight>();
+  const key = `${language}\0${code}`;
+  const [highlight, setHighlight] = useState<Highlight | undefined>(() => {
+    const cached = readTokenCache(key);
+    return cached ? { key, result: cached } : undefined;
+  });
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const key = `${language}\0${code}`;
-  const result = highlight?.key === key ? highlight.result : undefined;
+  const result = (highlight?.key === key ? highlight.result : undefined) ?? readTokenCache(key);
 
   // 一次生成深浅两套高亮变量，系统切换外观时由 CSS 即时切换，无需重新解析代码。
   // 加载失败或未知语言仍保留可读、可复制的代码原文。
   useEffect(() => {
+    const cached = readTokenCache(key);
+    if (cached) {
+      setHighlight((current) => (current?.key === key ? current : { key, result: cached }));
+      return;
+    }
     let active = true;
     void import('./shiki.js')
       .then(async ({ bundledLanguages, codeToTokens }) => {
@@ -26,6 +58,7 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
           themes: { light: 'github-light', dark: 'github-dark' },
           defaultColor: false,
         });
+        writeTokenCache(key, tokens);
         if (active) setHighlight({ key, result: tokens });
       })
       .catch(() => {
@@ -56,6 +89,7 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
     copyTimer.current = setTimeout(() => setCopyState('idle'), 2000);
   }
 
+  const fallbackLines = result ? undefined : code.split('\n');
   return (
     <section className="markdown-code" data-language={language}>
       <header>
@@ -79,7 +113,11 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
                   {line.length === 0 ? '\n' : null}
                 </span>
               ))
-            : code}
+            : fallbackLines?.map((line, lineIndex) => (
+                <span className="markdown-code-line" key={lineIndex}>
+                  {line || '\n'}
+                </span>
+              ))}
         </code>
       </pre>
     </section>
