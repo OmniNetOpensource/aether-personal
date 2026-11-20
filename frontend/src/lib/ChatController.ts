@@ -273,23 +273,32 @@ export class ChatController {
       case 'share_list':
       case 'share_deleted':
         this.resolvePendingRequest(event.request_id, event);
-        break;
+        return;
       case 'history':
         this.mergeHistory(event);
         this.error = null;
         this.resolvePendingRequest(event.request_id, event);
         break;
-      case 'messages':
+      case 'messages': {
         this.lastChangeCursor = event.change_cursor;
+        const nextThinking = event.main_thinking === true;
+        const nextFailed = event.main_failed === true;
+        const statusChanged =
+          !this.connected ||
+          this.mainThinking !== nextThinking ||
+          this.mainFailed !== nextFailed ||
+          this.error !== null;
         this.connected = true;
-        this.mainThinking = event.main_thinking === true;
-        this.mainFailed = event.main_failed === true;
+        this.mainThinking = nextThinking;
+        this.mainFailed = nextFailed;
         this.error = null;
-        this.merge(event);
+        const messagesChanged = this.merge(event);
+        if (!statusChanged && !messagesChanged) return;
         break;
+      }
       case 'delivered':
         this.resolvePendingRequest(event.client_message_id, event);
-        break;
+        return;
       case 'logged_out':
         this.clearLocalSession();
         this.resolvePendingRequest(event.request_id, event);
@@ -297,9 +306,8 @@ export class ChatController {
       case 'request_failed': {
         const pending = this.takePendingRequest(event.request_id);
         pending?.reject(new RequestError(event.code));
-        if (!pending) {
-          this.error = requestFailedMessage(event.code);
-        }
+        if (pending) return;
+        this.error = requestFailedMessage(event.code);
         break;
       }
     }
@@ -507,15 +515,19 @@ export class ChatController {
     this.hasMoreHistory = trimmed || page.messages.length > 0;
   }
 
-  // merge 把服务器发来的一页消息并入列表：同一 ID 覆盖旧值，再按服务器位置排序。
-  private merge(page: ChatPage) {
+  // merge 把服务器发来的一页消息生成新数组并入列表：同一 ID 覆盖旧值，再按服务器位置排序；无新消息时保持原数组引用稳定。
+  private merge(page: ChatPage): boolean {
+    if (page.messages.length === 0) return false;
+    const next = this.messages.slice();
     for (const row of page.messages) {
       const message = chatMessageFromRow(row);
-      const index = this.messages.findIndex((existing) => existing.id === row.id);
-      if (index < 0) this.messages.push(message);
-      else this.messages[index] = message;
+      const index = next.findIndex((existing) => existing.id === row.id);
+      if (index < 0) next.push(message);
+      else next[index] = message;
     }
-    this.messages.sort((a, b) => a.position.localeCompare(b.position));
+    next.sort((a, b) => a.position.localeCompare(b.position));
+    this.messages = next;
+    return true;
   }
 
   // getModelSettings 读取当前账号的选择和免费目录，关闭浮层时可取消读取。
