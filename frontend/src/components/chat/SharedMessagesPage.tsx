@@ -1,13 +1,13 @@
 // 本文件是免登录的公开对话分享阅读页：通过只读 HTTP 接口拉取选中的消息，复用聊天气泡与 Markdown 组件渲染。
 
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { chatMessageFromRow } from '../../lib/ChatController.js';
 import type { ChatMessage } from '../../lib/ChatController.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 import { publicMessageShareSchema } from '../../lib/serverEvents.js';
 import { LoadingScreen } from '../LoadingScreen.js';
-import { ChatMessageEntry } from './ChatMessageEntry.js';
+import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { highlightQuote } from './QuoteSelection.js';
 import './chatShare.css';
 
@@ -96,6 +96,16 @@ export function SharedMessagesPage({ shareToken }: { shareToken: string }) {
     });
   };
 
+  const handleExpandedChange = useCallback((messageID: string, isExpanded: boolean) => {
+    setExpanded((current) => {
+      if (current.has(messageID) === isExpanded) return current;
+      const next = new Set(current);
+      if (isExpanded) next.add(messageID);
+      else next.delete(messageID);
+      return next;
+    });
+  }, []);
+
   if (state.status === 'loading') {
     return <LoadingScreen />;
   }
@@ -165,24 +175,25 @@ export function SharedMessagesPage({ shareToken }: { shareToken: string }) {
 
       <div ref={viewport} className="shared-viewport" aria-label="分享的对话内容">
         <div className="shared-messages">
-          {state.messages.map((message, index) => (
-            <div key={message.id} data-shared-message={message.id}>
-              <ChatMessageEntry
-                messages={state.messages}
-                index={index}
-                expanded={expanded.has(message.id)}
-                onExpandedChange={(isExpanded) =>
-                  setExpanded((current) => {
-                    const next = new Set(current);
-                    if (isExpanded) next.add(message.id);
-                    else next.delete(message.id);
-                    return next;
-                  })
-                }
-                onQuoteNavigate={navigateQuote}
-              />
-            </div>
-          ))}
+          {state.messages.map((message, index) => {
+            const { showTime, joinedWithPrevious, endsGroup } = getMessageGroupState(
+              state.messages,
+              index,
+            );
+            return (
+              <div key={message.id} data-shared-message={message.id}>
+                <ChatMessageEntry
+                  message={message}
+                  showTime={showTime}
+                  joinedWithPrevious={joinedWithPrevious}
+                  endsGroup={endsGroup}
+                  expanded={expanded.has(message.id)}
+                  onExpandedChange={handleExpandedChange}
+                  onQuoteNavigate={navigateQuote}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 

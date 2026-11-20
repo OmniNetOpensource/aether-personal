@@ -8,18 +8,23 @@ const initialFirstItemIndex = 1_000_000_000;
 
 interface CommittedIndexAnchor {
   firstItemIndex: number;
+  messages: readonly ChatMessage[];
   ids: string[];
 }
 
-// useVirtuosoFirstItemIndex 通过首条重合消息反推新的 firstItemIndex，避免在渲染期间修改 ref，兼容 Strict Mode。
+// useVirtuosoFirstItemIndex 通过首条重合消息反推新的 firstItemIndex，数组引用未变时直接复用上次结果。
 export function useVirtuosoFirstItemIndex(messages: readonly ChatMessage[]): number {
   const committed = useRef<CommittedIndexAnchor>({
     firstItemIndex: initialFirstItemIndex,
+    messages: [],
     ids: [],
   });
-  let firstItemIndex = initialFirstItemIndex;
   const previous = committed.current;
-  if (messages.length > 0 && previous.ids.length > 0) {
+  const sameMessages = messages === previous.messages;
+  let firstItemIndex = sameMessages ? previous.firstItemIndex : initialFirstItemIndex;
+
+  // 数组变更时才查找首条重合消息，保留它原来的虚拟列表索引。
+  if (!sameMessages && messages.length > 0 && previous.ids.length > 0) {
     const previousIndexByID = new Map<string, number>();
     for (let i = 0; i < previous.ids.length; i += 1) {
       previousIndexByID.set(previous.ids[i], i);
@@ -32,9 +37,18 @@ export function useVirtuosoFirstItemIndex(messages: readonly ChatMessage[]): num
       }
     }
   }
+
+  // 每次渲染都调用 Hook，提交新列表后再更新缓存。
   useLayoutEffect(() => {
+    if (
+      committed.current.messages === messages &&
+      committed.current.firstItemIndex === firstItemIndex
+    ) {
+      return;
+    }
     committed.current = {
       firstItemIndex,
+      messages,
       ids: messages.map((message) => message.id),
     };
   }, [firstItemIndex, messages]);

@@ -13,23 +13,27 @@ export function AssistantMessageBubble({
   endsGroup,
   expanded,
   onExpandedChange,
+  onScrollBy,
 }: {
   message: ChatMessage;
   joinedWithPrevious: boolean;
   endsGroup: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  onScrollBy?: (top: number) => void;
 }) {
-  const attachments = message.parts.filter(
-    (part) => part.type === 'image' || part.type === 'file',
-  );
+  const attachments = message.parts.filter((part) => part.type === 'image' || part.type === 'file');
   return (
     <div className={`message-row ${joinedWithPrevious ? 'joined' : ''}`}>
       <article className="message-column assistant-column" aria-label="aether">
         <div
           className={`bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
-          <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
+          <CollapsibleMessage
+            expanded={expanded}
+            onExpandedChange={onExpandedChange}
+            onScrollBy={onScrollBy}
+          >
             {message.text ? (
               <div data-quote-body data-quote-text data-message-id={message.id}>
                 <Markdown text={message.text} />

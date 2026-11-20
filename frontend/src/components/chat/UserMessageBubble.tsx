@@ -14,6 +14,7 @@ export function UserMessageBubble({
   onQuoteNavigate,
   expanded,
   onExpandedChange,
+  onScrollBy,
 }: {
   message: ChatMessage;
   joinedWithPrevious: boolean;
@@ -21,6 +22,7 @@ export function UserMessageBubble({
   onQuoteNavigate: (quote: MessageQuote) => void;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  onScrollBy?: (top: number) => void;
 }) {
   return (
     <div className={`message-row user-row ${joinedWithPrevious ? 'joined' : ''}`}>
@@ -28,7 +30,11 @@ export function UserMessageBubble({
         <div
           className={`bubble user-bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
-          <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
+          <CollapsibleMessage
+            expanded={expanded}
+            onExpandedChange={onExpandedChange}
+            onScrollBy={onScrollBy}
+          >
             <div data-quote-body data-message-id={message.id}>
               {message.parts.map((part, index) =>
                 part.type === 'quote' ? (

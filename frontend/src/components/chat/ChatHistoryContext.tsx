@@ -6,7 +6,7 @@ import { Virtuoso } from 'react-virtuoso';
 import type { ListItem, VirtuosoHandle } from 'react-virtuoso';
 import { chatMessageFromRow } from '../../lib/ChatController.js';
 import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
-import { ChatMessageEntry } from './ChatMessageEntry.js';
+import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { highlightQuote } from './QuoteSelection.js';
 import { useVirtuosoFirstItemIndex } from './useVirtuosoFirstItemIndex.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
@@ -156,25 +156,25 @@ export function ChatHistoryContext({
     });
   };
 
-  // 收起长消息时若消息开头已滚出视口顶部，先对齐消息起点，避免收起后阅读位置错位。
-  function changeExpanded(targetID: string, index: number, value: boolean) {
-    const element = viewport.current;
-    const row = element?.querySelector<HTMLElement>(`[data-history-message="${targetID}"]`);
-    if (
-      !value &&
-      element &&
-      row &&
-      row.getBoundingClientRect().top < element.getBoundingClientRect().top
-    ) {
-      list.current?.scrollToIndex({ index, align: 'start' });
-    }
+  // 展开状态按消息 ID 记录；收起长消息时的滚动位置由 CollapsibleMessage 通过 handleScrollBy 同帧闭环维护。
+  const changeExpanded = useCallback((targetID: string, value: boolean) => {
     setExpanded((current) => {
+      if (current.has(targetID) === value) return current;
       const next = new Set(current);
       if (value) next.add(targetID);
       else next.delete(targetID);
       return next;
     });
-  }
+  }, []);
+
+  const handleScrollBy = useCallback((top: number) => {
+    list.current?.scrollBy({ top });
+  }, []);
+
+  const handleQuoteNavigate = useCallback((quote: MessageQuote) => {
+    setExpanded((current) => new Set(current).add(quote.message_id));
+    setAnchor({ id: quote.message_id, quote });
+  }, []);
 
   // 两侧分页始终从本窗口的边界继续，新增消息去重后按原行位置排序；向上翻页位置由 Virtuoso 保持。
   const loadPage = async (direction: 'older' | 'newer') => {
@@ -288,12 +288,18 @@ export function ChatHistoryContext({
           context={listContext}
           computeItemKey={(_, message) => message.id}
           firstItemIndex={firstItemIndex}
+          defaultItemHeight={120}
+          increaseViewportBy={{ top: 800, bottom: 800 }}
           initialTopMostItemIndex={
             anchorIndex >= 0 ? { index: anchorIndex, align: 'start', offset: -90 } : 0
           }
           itemsRendered={handleItemsRendered}
           itemContent={(itemIndex, message) => {
             const index = itemIndex - firstItemIndex;
+            const { showTime, joinedWithPrevious, endsGroup } = getMessageGroupState(
+              state.messages,
+              index,
+            );
             const isAnchor = message.id === anchor.id;
             return (
               <div
@@ -314,14 +320,14 @@ export function ChatHistoryContext({
                   </p>
                 )}
                 <ChatMessageEntry
-                  messages={state.messages}
-                  index={index}
+                  message={message}
+                  showTime={showTime}
+                  joinedWithPrevious={joinedWithPrevious}
+                  endsGroup={endsGroup}
                   expanded={expanded.has(message.id)}
-                  onExpandedChange={(value) => changeExpanded(message.id, index, value)}
-                  onQuoteNavigate={(quote) => {
-                    setExpanded((current) => new Set(current).add(quote.message_id));
-                    setAnchor({ id: quote.message_id, quote });
-                  }}
+                  onExpandedChange={changeExpanded}
+                  onQuoteNavigate={handleQuoteNavigate}
+                  onScrollBy={handleScrollBy}
                 />
               </div>
             );

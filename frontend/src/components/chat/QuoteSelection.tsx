@@ -94,9 +94,11 @@ export function QuoteSelection({
           : { quote: { text, message_id: messageId, start: from, end: to }, left, top },
       );
     };
-    // 滚动和窗口尺寸变化时重算锚点，按钮跟着选区移动，不因滚动收起。
+    // 滚动和窗口尺寸变化时重算锚点，按钮跟着选区移动；无选区时直接跳过逐帧调度。
     let frame = 0;
     const reposition = () => {
+      const selected = window.getSelection();
+      if (!selected || selected.isCollapsed || selected.rangeCount === 0) return;
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(update);
     };
