@@ -39,6 +39,9 @@ erDiagram
 | `steps` | 逻辑执行步骤，包含模型回复与工具执行 | `已实现` |
 | `login_codes` | 待验证的登录验证码，见 [03 认证](03-auth.md#表结构) | `已实现` |
 | `sessions` | 登录令牌，见 [03 认证](03-auth.md#表结构) | `已实现` |
+| `oauth_clients` | 远程记忆 MCP 动态注册（DCR）的第三方 OAuth 客户端（`00067`），见 [03 认证](03-auth.md#远程记忆-mcp-oauth-212026-11-25) | `已实现` |
+| `oauth_authorization_codes` | 5 分钟有效、单次消费的 PKCE 授权码哈希（`00067`） | `已实现` |
+| `oauth_tokens` | 外部 MCP 客户端访问 `/mcp/memory` 的访问/刷新令牌哈希与最近使用时间（`00067`） | `已实现` |
 | `user_model_settings` | 每个账号的 Main、Subagent 和压缩模型、已知输入容量与保存版本（`00057`） | `已实现` |
 | `model_settings` | 全局压缩阈值与闲置后台反思时长。旧版全局模型列保留供回滚 | `已实现` |
 | `service_settings` | 看板管理的服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
@@ -214,11 +217,11 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 
 默认文件查看超过 16,000 字符时截断并提示按行读取。显式指定行范围时返回所选完整行，避免超长单行永远无法读完。目录和文件由存储清单区分，禁止在文件下面建立子路径。所有路径限制在用户自己的 `/memories` 下，拒绝父目录跳转、反斜杠和编码跳转写法；固定根目录和根文件可以查看、编辑，但不能删除或移动。
 
-每个命令的数据库操作与工具回执仍在 Runner 的同一事务中提交，并复用用户消息写入锁。因此有回执表示该命令已生效，恢复只补无回执调用。跨文件操作不再强制捆绑：Main 新建、移动或删除主题后，自己使用局部编辑维护根中的链接与核心约定。相关操作按依赖顺序执行，先读后改；`str_replace` 未匹配或匹配多处时重读并选择明确的旧文本。后端不解析根索引，也不自动重写链接。
+每个命令的数据库操作在 Main 中与工具回执同事务提交，并在原用户消息锁内叠加按用户维度的记忆咨询锁（`LockUserMemory`）；外部远程 MCP（`/mcp/memory`）在独立事务内同样先取 `LockUserMemory`，单向锁顺序（`messages → memory`）避免死锁并串行化多端并发读改写。因此有回执表示该命令已生效，恢复只补无回执调用。跨文件操作不再强制捆绑：Main 新建、移动或删除主题后，自己使用局部编辑维护根中的链接与核心约定。相关操作按依赖顺序执行，先读后改；`str_replace` 未匹配或匹配多处时重读并选择明确的旧文本。后端不解析根索引，也不自动重写链接。
 
 忘记一项内容时，Main 从主题与根中移除相关文字，或删除整个主题并清理根链接。文件删除不再保留主题墓碑，也不要求 `restore` 参数。Main 被要求不得根据旧历史或摘要重新建立已忘记的内容，除非用户再次明确要求记住；这项判断由模型负责。删除记忆文件不等于清除原聊天、旧工具回执或 compact 摘要。
 
-用户可以直接在聊天中查看、纠正、整理和删除记忆，也可以从账号菜单打开只读路由 `/memories`（左侧可筛选文件列表与右侧 Markdown 预览，通过 `GET /memory-files` 与 `GET /memory-files/content` 按需读取当前用户记忆且不自动创建缺失的根文件）。若需要证明某个时间点用户说过什么，仍通过 `search_message` 和 `read_message` 核对原文。默认自动保存和日常整理的效果由真实使用验收，不另建后台提炼流程。
+用户可以直接在聊天中查看、纠正、整理和删除记忆，也可以从账号菜单打开只读路由 `/memories`（左侧可筛选文件列表与右侧 Markdown 预览，通过 `GET /memory-files` 与 `GET /memory-files/content` 按需读取当前用户记忆且不自动创建缺失的根文件；顶栏「MCP 接入」弹窗提供远程 `/mcp/memory` 地址复制及已授权外部应用查看与一键撤销）。2026-11-25，用户确认将记忆提取为现有后端直接挂载的远程 MCP 插件（`/mcp/memory`，Streamable HTTP + OAuth 2.1），使外部产品（如 ChatGPT Developer Mode、Gemini Apps Developer Mode、Claude、Cursor）与 aether 实时双向共享同一份 `/memories` 数据。若需要证明某个时间点用户说过什么，仍通过 `search_message` 和 `read_message` 核对原文。默认自动保存和日常整理的效果由真实使用验收，不另建后台提炼流程。
 
 
 
@@ -226,7 +229,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 
 ## 外键
 
-所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`memory_files`、`schedules`、`steps`、`sessions`、`subagents`、`sandbox_workspaces`、`user_model_settings` 随之自动删除，不留残余数据。涉及的外键：`schedules → users`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`、`subagents → users`。误删由“仅管理员可删除”与数据库备份防范。
+所有外键使用 `ON DELETE CASCADE`：删除一个用户时，其 `messages`、`memory_files`、`schedules`、`steps`、`sessions`、`oauth_authorization_codes`、`oauth_tokens`、`subagents`、`sandbox_workspaces`、`user_model_settings` 随之自动删除，不留残余数据。涉及的外键：`schedules → users`、`messages → users`、`memory_files → users`、`messages.step_id → steps`、`steps → users`、`sessions → users`、`oauth_authorization_codes → users/oauth_clients`、`oauth_tokens → users/oauth_clients`、`subagents → users`。误删由“仅管理员可删除”与数据库备份防范。
 
 ## 索引
 
@@ -243,6 +246,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `messages` | `(user_id, client_message_id)` 唯一 | 识别重发 |
 | `messages` | `search_text` GIN（pg_trgm） | 关键词子串搜索 |
 | `memory_files` | `(user_id, path)` 唯一 | 按用户列出文件并定位正文 |
+| `oauth_tokens` | `access_token_hash` 唯一、`refresh_token_hash` 唯一、`(user_id)`、`(client_id)` | 按访问/刷新令牌哈希鉴权与轮换；按用户列出或级联删除授权连接 |
+| `oauth_authorization_codes` | `code_hash` 主键、`(user_id)`、`(client_id)` | 授权码单次原子消费；用户或客户端级联删除 |
 
 `steps` 暂不建索引，待费用统计或执行轨迹展示时再加。
 
@@ -284,6 +289,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00058_drop_tasks.sql` | 删除持久化需求队列 `tasks` 表及索引，整体移除任务系统 | `开发中` |
 | `00059_drop_model_calls.sql` | 删除 `model_calls` 表及索引，为 `steps` 补充按 Subagent 查询最近步骤的索引 | `已实现` |
 | `00066_step_cached_input_tokens.sql` | 为 `steps` 增加可空 `cached_input_tokens` 列，记录各渠道返回的缓存命中输入 Token 数 | `已实现` |
+| `00067_add_mcp_oauth.sql` | 新增 `oauth_clients`、`oauth_authorization_codes` 与 `oauth_tokens` 表，支持远程记忆 MCP 的 OAuth 2.1（PKCE + DCR）授权 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

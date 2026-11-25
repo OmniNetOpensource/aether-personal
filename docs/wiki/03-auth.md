@@ -103,6 +103,19 @@ PostgreSQL 共享以下固定窗口，重连或重启不重置。每个窗口自
 - 直接用 `net/http` 调用 Resend 发信接口，不引入官方 SDK：只需“发一封邮件”这一个功能。
 - 验证码邮件为中英双语，写在同一封邮件里，不做多语言切换；自行部署后可自行修改文案。样式沿用 aether-start 的深色验证码邮件。
 
+## 远程记忆 MCP OAuth 2.1（2026-11-25）
+
+2026-11-25，用户确认将记忆提取为现有后端直接挂载的远程 MCP 插件（`/mcp/memory`，无状态 Streamable HTTP），并一步到位实现标准 **MCP OAuth 2.1（PKCE `S256` + 动态客户端注册 DCR）**，以支持 ChatGPT Developer Mode、Gemini Apps Developer Mode、Claude、Cursor 等外部产品与 aether 实时双向共享同一份 `/memories` 数据。选择理由是 ChatGPT 与 Gemini 网页端不支持手动填入静态 Bearer Token，而标准 OAuth 2.1 既满足消费级网页端接入，也兼容全部本地开发工具，且将外部权限严格限定在 `scope=memory`（无法访问聊天记录、模型设置或沙箱电脑）。
+
+- **对外源地址配置**：通过环境变量 `PUBLIC_ORIGIN`（如 `https://aether.forkicks.fun`，dev 默认 `http://localhost:$PORT`）统一生成发现文档与回调元数据，避免生产容器经 Caddy 收到源站域名时拼错地址；prod 未配置时不阻断主服务启动，仅 MCP/OAuth 接口返回 503。
+- **发现与注册**：
+  - `GET /.well-known/oauth-protected-resource` 与 `GET /.well-known/oauth-protected-resource/mcp/memory`（RFC 9728）：声明受保护资源 `<PUBLIC_ORIGIN>/mcp/memory`、授权服务器 `<PUBLIC_ORIGIN>` 与 `memory` 范围；`/mcp/memory` 鉴权失败时在 `401` 响应头携带 `WWW-Authenticate: Bearer resource_metadata="...", scope="memory"`。
+  - `GET /.well-known/oauth-authorization-server`（RFC 8414）：声明授权页、换票、注册与撤销端点，以及 `PKCE S256`、`token_endpoint_auth_methods_supported: ["none"]` 和 `authorization_response_iss_parameter_supported: true`（RFC 9207，使 ChatGPT 稳定使用固定回调地址）。
+  - `POST /oauth/register`（RFC 7591 DCR）：仅允许 `https://` 或本机回环 `http://`（不含 fragment 与内嵌密码）的回调地址；生产环境复用 `login_rate_limits` 按 IP 与全局窗口限流。不启用 CIMD 远端拉取，避免引入 SSRF 攻击面。
+- **SPA 授权确认页（`/oauth/authorize`）**：因系统不使用 Cookie（登录态保存在 `localStorage`）且 Cloudflare Worker 拒绝源站 `3xx` 重定向，`/oauth/authorize` 由前端 SPA 渲染。页面先调用 `GET /oauth/authorize/context` 校验客户端与已注册回调（绝不向未验证回调地址重定向），未登录时就地复用现有 WebSocket 邮箱验证码/开发登录流程，登录后由用户点击“允许/拒绝”调用 `POST /oauth/authorize/decision`（经 `requireChatUser` 鉴权）换取带 `iss` 的回调地址并由浏览器跳转。
+- **授权码与令牌生命周期**：迁移 `00067_add_mcp_oauth.sql` 新增 `oauth_clients`、`oauth_authorization_codes` 与 `oauth_tokens`，授权码与访问/刷新令牌在数据库中一律只存 SHA-256 哈希。授权码有效期 5 分钟并在 `POST /oauth/token` 中单次原子删除消费且以恒定时间比对 PKCE `S256`；访问令牌有效期 1 小时，刷新令牌 90 天滑动有效并在每次刷新时单语句原子轮换。`/mcp/memory` 鉴权通过后以 5 分钟节流更新 `last_used_at`。
+- **撤销与管理**：提供 `POST /oauth/revoke`（RFC 7009）以及经 `requireChatUser` 保护的 `GET /oauth/connections` 与 `DELETE /oauth/connections/{id}`，用户在 `/memories` 页顶栏「MCP 接入」弹窗即可复制接入地址、查看已授权应用并随时一键撤销。
+
 ## 表结构
 
 迁移 `00002_create_auth_tables.sql`：
@@ -110,12 +123,21 @@ PostgreSQL 共享以下固定窗口，重连或重启不重置。每个窗口自
 - `login_codes`：`email` 主键（一个邮箱一行，请求新验证码时覆盖，旧的自然作废）、`code_hash`、`attempts`、`expires_at`、`created_at`（判断 60 秒重发间隔）。不关联 `users`，因为新邮箱验证成功前用户还不存在；验证成功后删除该行。
 - `sessions`：`id`、`user_id`（级联删除，带索引）、`token_hash`（唯一）、`expires_at`、`created_at`。滑动延期不需要额外的列：剩余不足 29 天即说明距上次延期超过一天。
 
+迁移 `00067_add_mcp_oauth.sql`：
+
+- `oauth_clients`：`id`（`client_id`）、`client_name`、`redirect_uris`、`created_at`。
+- `oauth_authorization_codes`：`code_hash` 主键、`client_id`、`user_id`、`redirect_uri`、`code_challenge`、`scope`（`CHECK (scope = 'memory')`）、`resource`、`expires_at`、`created_at`。
+- `oauth_tokens`：`id`、`client_id`、`user_id`、`scope`、`resource`、`access_token_hash`（唯一）、`access_expires_at`、`refresh_token_hash`（唯一）、`refresh_expires_at`、`created_at`、`last_used_at`。
+
 ## 涉及代码
 
-- `backend/internal/httpapi/auth.go`：验证码与会话的核心逻辑。
+- `backend/internal/httpapi/auth.go`：验证码、随机令牌生成与会话的核心逻辑。
+- `backend/internal/httpapi/oauth.go`：MCP OAuth 2.1 发现文档、DCR、授权校验与决策、令牌换取/轮换/撤销与连接管理。
+- `backend/internal/httpapi/mcp_memory.go`：无状态 Streamable HTTP `/mcp/memory` 处理器与 OAuth Bearer 鉴权中间件。
 - `backend/internal/httpapi/websocket.go`：在聊天连接上处理 `hello` 与登录命令；服务器事件定义与写出中转见 `backend/internal/httpapi/events.go`。
 - `backend/internal/httpapi/login_email.go`：调用 Resend 发送验证码邮件。
-- `backend/db/queries/auth.sql`：验证码与会话的查询。
+- `backend/db/queries/auth.sql`、`backend/db/queries/oauth.sql`：验证码、会话与 OAuth 的查询。
+- `frontend/src/components/oauth/OAuthAuthorizePage.tsx`、`frontend/src/lib/oauth.ts`：OAuth 授权确认页与前端请求封装。
 
 ## 尚未包含
 

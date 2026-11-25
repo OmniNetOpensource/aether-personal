@@ -35,7 +35,7 @@
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务（已删除） | 2026-11-13 整体移除：`tasks` 表（`00058`）、三个任务工具、收尾提醒轮以及前端任务进度胶囊与浮层全部删除；理由是每条简单请求先登记再改状态的 2~3 轮工具调用开销过高、影响响应速度与日常体感，多目标并行直接交由上下文与 `spawn_subagent` 处理。此前 2026-11-06 新增、2026-11-07 增设收尾提醒、2026-11-12 新增前端展示及 `00055` 放开并发的历史记录保留供追溯 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
-| 前端框架与平台 | 2026-11-25 简化为纯 Rsbuild + React + TypeScript SPA（取代 2026-11-02 引入的 TanStack Start）；前端仅保留 `/` 与 `/memories` 两个客户端路由，取消路由代码生成与服务端预渲染壳，桌面与移动 PWA 共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
+| 前端框架与平台 | 2026-11-25 简化为纯 Rsbuild + React + TypeScript SPA（取代 2026-11-02 引入的 TanStack Start）；前端保留 `/`、`/memories` 与 `/oauth/authorize`（远程记忆 MCP 授权确认页）三个客户端路由，取消路由代码生成与服务端预渲染壳，桌面与移动 PWA 共用，登录与聊天继续由 Go WebSocket 提供 | [01](wiki/01-overview.md#第一层web-与-pwa-前端)、[03](wiki/03-auth.md#远程记忆-mcp-oauth-212026-11-25) |
 | 移动端交付 | 2026-10-27 改为 PWA；安装到主屏幕、离线应用外壳与显式更新，取代原生宿主；2026-10-28 删除页面安装按钮，使用浏览器自带安装入口；2026-11-11 修复离线冷启动：已缓存登录态离线打开时直接进入聊天页编辑草稿，恢复联网后自动连接补齐历史。2026-11-13，联网导航优先获取新页面，检测到新版后自动切换受控标签页 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 客户端界面与验收 | React Web 保留现有 Poke 式 IM：全屏消息列表与输入框，无联系人栏或顶部栏；右上角悬浮圆形入口依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及 2026-11-11 确认新增的「账号与退出登录」小浮层；2026-11-25 移除未接通的对话分享前端与本地设计画布 `src/design/` | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
 | 消息列表滚动 | 2026-11-03 改为虚拟滚动（现使用 `react-virtuoso`）：只挂载视口附近的消息，贴底、上翻停留、加载历史保持位置和引用回看不变；发送不把正在看更早消息的列表拉回底部。2026-11-19 增加远端消息回收：主列表在首屏和停在最新底部时只保留最近 30 条并回退翻页游标（再次上翻按需重拉）。2026-11-25 简化：长消息折叠改为直接切换高度，主列表回底改用浏览器原生滚动，历史搜索上下文窗口改回普通滚动容器并按高度差保持向上翻页位置 | [01](wiki/01-overview.md#第一层web-与-pwa-前端) |
@@ -74,7 +74,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`memory_files`、`schedules`、`sandbox_workspaces`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions`（`model_calls` 已于 2026-11-17 由 `00059` 移除） | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`oauth_clients`、`oauth_authorization_codes`、`oauth_tokens`、`memory_files`、`schedules`、`sandbox_workspaces`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions`（`model_calls` 已于 2026-11-17 由 `00059` 移除） | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
@@ -82,7 +82,7 @@
 | 自动压缩触发 | 上下文达到 200,000 tokens（看板可改）时，下一次调用模型前检查并压缩；2026-11-03 取消 ikun Gemini 固定 400,000 的例外，所有模型共用看板阈值（仍受已知输入容量封顶）；开发中，本地已验证并启用。2026-10-30 取消闲置 6 小时触发（看板小时设置一并删除）；2026-11-17 改为统一压「最新摘要 ~ 最新 assistant 消息（含其 tool 回执）」，其后消息保留原文 | [02](wiki/02-data-model.md#自动压缩触发2026-10-26开发中) |
 | 请求输出上限 | 2026-11-03 取消手动输出额度：删除看板输入框、`MAX_OUTPUT_TOKENS` 与持久化字段（`00031`）；普通回复与压缩使用目录已知的模型最大输出，未知时省略参数、由供应商决定，不设置应用默认数字 | [08](wiki/08-admin-observability.md#一键切换模型2026-10-23开发中) |
 | 历史检索 | Agent 侧 `search_message` / `read_message` 搜当前用户 `messages` 全表；页面侧新增独立「搜索历史聊天」浮层与前后上下文窗口（`00048`），只搜用户可见消息（含附件文件名，`00051`），不移动实时推送与历史翻页游标 | [02](wiki/02-data-model.md#历史检索-已实现)、[04](wiki/04-messaging.md) |
-| 主题记忆 | 2026-11-04 确认默认自动保存明确的长期偏好与约定；2026-11-06 改为单一 `memory` 工具，以六个文件命令操作 PostgreSQL `memory_files`。取消来源、版本、恢复和根联动参数，选择理由是减少模型参数与重复正文；每个命令复用现有事务和回执恢复，不另建后台提炼、不全量回填历史、不动态改写请求头；2026-11-15 新增面向用户的只读记忆查看页面 `/memories`（账号菜单进入，只读不直接写库，增删改仍交由聊天中的 aether 完成）；2026-11-25 简化为「左侧可筛选文件列表 + 右侧 Markdown 预览与复制」的双栏页面，去掉多标签页、折叠目录树、面包屑与源码视图 | [02](wiki/02-data-model.md#主题记忆)、[05](wiki/05-main-runtime.md#工具) |
+| 主题记忆 | 2026-11-04 确认默认自动保存明确的长期偏好与约定；2026-11-06 改为单一 `memory` 工具，以六个文件命令操作 PostgreSQL `memory_files`。取消来源、版本、恢复和根联动参数，选择理由是减少模型参数与重复正文；每个命令复用现有事务和回执恢复，不另建后台提炼、不全量回填历史、不动态改写请求头；2026-11-15 新增面向用户的只读记忆查看页面 `/memories`（账号菜单进入，只读不直接写库，增删改仍交由聊天中的 aether 完成）；2026-11-25 简化为「左侧可筛选文件列表 + 右侧 Markdown 预览与复制」的双栏页面，去掉多标签页、折叠目录树、面包屑与源码视图；同日确认将记忆作为现有后端的远程 MCP 插件（`/mcp/memory`，无状态 Streamable HTTP + OAuth 2.1）对外暴露，抽离共享 `internal/memory` 并以 `LockUserMemory` 串行化多端并发写入，在 `/memories` 增加「MCP 接入」弹窗管理接入地址与已授权外部应用 | [02](wiki/02-data-model.md#主题记忆)、[03](wiki/03-auth.md#远程记忆-mcp-oauth-212026-11-25)、[05](wiki/05-main-runtime.md#工具) |
 | 记忆根文档 | 2026-11-06 最终确认取消自动注入，根文档 `/memories/memory.md` 只保存核心约定与主题索引，详细内容独立成文件。固定 Main 指令只说明记忆入口与读取时机：需要长期偏好、已确认约定或项目背景时通过 `memory` 先读根、再读相关主题；无关请求不读记忆。请求组装、启动、重启和 compact 后均不自动读取或保存根快照。明确的长期偏好仍默认自动保存；选择理由是按需控制上下文，避免每次请求都携带根正文；本地开发中，未推送 | [02](wiki/02-data-model.md#主题记忆)、[05](wiki/05-main-runtime.md#工具) |
 | 向量检索（已删除） | 2026-11-02 删除：embedding 异步补算与语义搜索效果从未实测、体感收益不明确，整体移除；`00024` 删 `embedding` 列与 pgvector 扩展；镜像待迁移在生产落地后单独换回 `postgres:18`（删 HNSW 索引需 pgvector 库在场，本地已实测） | [02](wiki/02-data-model.md#历史检索-已实现) |
 | 迁移 | goose `v3.29.0`（`go tool`），单独命令执行 | [02](wiki/02-data-model.md#迁移) |
@@ -103,6 +103,7 @@
 | 验证码 | 6 位、10 分钟、60 秒重发间隔、最多 5 次 | [03](wiki/03-auth.md#验证码) |
 | 验证码与登录令牌存储 | 只存哈希；第三方 API Key 使用独立主密钥加密，见服务凭证条目 | [03](wiki/03-auth.md#验证码) |
 | 邮件服务 | Resend，`net/http` 直接调用；dev 打印日志，prod 必须配置 | [03](wiki/03-auth.md#发信) |
+| 远程记忆 MCP 授权 | 2026-11-25 确认在现有后端以标准 OAuth 2.1（PKCE `S256` + DCR + RFC 9728/8414/9207，`00067`）保护 `/mcp/memory`，兼顾 ChatGPT Developer Mode、Gemini Apps Developer Mode 及本地开发工具双向共享记忆；授权页 `/oauth/authorize` 复用 SPA 会话与登录流程，权限严格限定 `scope=memory`，所有授权码与令牌只存 SHA-256 哈希，刷新令牌每次原子轮换，支持在 `/memories` 随时撤销 | [03](wiki/03-auth.md#远程记忆-mcp-oauth-212026-11-25) |
 
 ### 消息与实时通信
 

@@ -226,7 +226,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 | `list_subagents` | 查看当前用户近期的后台 Subagent 状态摘要 | `已暂时禁用` |
 | `read_message` | 按 ID 读取主对话完整消息，受用户权限与消息归属限制（Main 与 Subagent 共用） | `已实现` |
 | `search_message` | 在主对话完整历史中按关键词搜索，参数含 `keyword` 与 `who`（Main 与 Subagent 共用），见 [02 数据模型](02-data-model.md#历史检索-已实现) | `已实现` |
-| `memory` | Main 具备 `view/create/str_replace/insert/delete/rename` 完整能力；Subagent 仅开放只读 `view` 命令，参数与存储见 [02](02-data-model.md#主题记忆) | `开发中` |
+| `memory` | Main 具备 `view/create/str_replace/insert/delete/rename` 完整能力；Subagent 仅开放只读 `view` 命令；核心引擎抽离至 `internal/memory`，并与远程无状态 MCP 端点 `/mcp/memory` 共享同一套实现与用户记忆事务锁 `LockUserMemory`，参数与存储见 [02](02-data-model.md#主题记忆) | `已实现` |
 | `schedule` | 创建、列出、修改、删除一次性或周期定时任务（仅 Main）；到期内容以不可见 `schedule_event` 消息投给 Main，见 [10](10-schedules.md) | `开发中` |
 | `search`、`fetch_url`、`search_twitter` | 联网搜索与网页读取工具（Main 与 Subagent 共用） | `已实现` |
 | `read_image` | 读取一张 JPEG、PNG、GIF 或 WebP 的直接地址；字节写入该用户的 OSS，回执只留 `oss://`，发送前再转 base64（Main 与 Subagent 共用） | `已实现` |
@@ -236,7 +236,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 
 工具参数写在工具描述中。每次请求注入的不可见指令明确 Main 的正文就是给用户的消息、且与工具同批的正文也会展示，要求正文只写用户该读的内容、不暴露内部推理与编排。参数无效时返回工具错误，模型可修正。
 
-2026-11-04，用户确认 Main 默认自动保存明确的长期偏好与约定，不新增后台提炼流程。2026-11-06，确认 `memory.md` 放核心约定和索引、主题放细节，改用 Anthropic 风格的单一 `memory` 文件工具；最终取消自动注入，改为渐进加载。固定指令引导模型在需要记忆时先读根索引、再读相关主题，普通请求、启动、重启与 compact 后均不主动读取或保存根副本。每次工具读取返回当前正文；后端不解析或重写索引，每个文件命令与回执同事务，相关跨文件操作由 Main 顺序完成。已读取的结果保留在普通历史中，compact 不额外删除这些工具回执。管理看板按 `memory` 统计调用，模型请求详情可核对实际读取过的内容。
+2026-11-04，用户确认 Main 默认自动保存明确的长期偏好与约定，不新增后台提炼流程。2026-11-06，确认 `memory.md` 放核心约定和索引、主题放细节，改用 Anthropic 风格的单一 `memory` 文件工具；最终取消自动注入，改为渐进加载。固定指令引导模型在需要记忆时先读根索引、再读相关主题，普通请求、启动、重启与 compact 后均不主动读取或保存根副本。每次工具读取返回当前正文；后端不解析或重写索引，每个文件命令与回执同事务，相关跨文件操作由 Main 顺序完成。已读取的结果保留在普通历史中，compact 不额外删除这些工具回执。管理看板按 `memory` 统计调用，模型请求详情可核对实际读取过的内容。2026-11-25，将 `memory` 核心逻辑抽离为 `backend/internal/memory`，同时以无状态 Streamable HTTP + OAuth 2.1（`/mcp/memory`）对外暴露给 ChatGPT / Gemini / Claude / Cursor 等外部客户端双向读写；Main 在用户消息锁内叠加 `LockUserMemory`，外部 MCP 在独立事务内仅获取 `LockUserMemory`，保持单向锁序并防止跨端读改写覆盖，不改动 Agent loop 三阶段主体。
 
 原 Subagent 交付检查（最后一次工具调用必须是成功投递给 Main 的 `send_message`、未交付时纠正一次）已于 2026-11-02 随 Subagent 一并删除，`delivery.go` 与摘要中的投递状态字段不再存在。
 
