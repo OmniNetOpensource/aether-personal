@@ -7,7 +7,6 @@ import { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FileAttachmentCard } from './FileAttachmentCard.js';
 import { ImagePreview } from './ImagePreview.js';
-import { messagePartSchema } from '../../lib/messageAttachments.js';
 import type { MessagePart } from '../../lib/messageAttachments.js';
 
 // editorDocument 将结构化内容转换为编辑器节点，换行单独保留为 hardBreak。
@@ -44,7 +43,7 @@ function messageParts(json: JSONContent): MessagePart[] {
     for (const node of paragraph.content ?? []) {
       if (node.type === 'text') append(node.text ?? '');
       else if (node.type === 'hardBreak') append('\n');
-      else if (node.type === 'contentChip') parts.push(messagePartSchema.parse(node.attrs?.part));
+      else if (node.type === 'contentChip') parts.push(node.attrs?.part as MessagePart);
     }
   }
   return parts;
@@ -60,7 +59,7 @@ function chipView(props: NodeViewRendererProps) {
   dom.append(chip);
   const root = createRoot(chip);
   const render = () => {
-    const part = messagePartSchema.parse(current.attrs.part);
+    const part = current.attrs.part as MessagePart;
     if (part.type === 'text') return;
     chip.className = `composer-chip composer-chip--${part.type}`;
     root.render(
@@ -150,7 +149,7 @@ const ContentChip = Node.create({
     return ['span', mergeAttributes(HTMLAttributes, { 'data-content-chip': '' })];
   },
   renderText({ node }) {
-    const part = messagePartSchema.parse(node.attrs.part);
+    const part = node.attrs.part as MessagePart;
     return part.type === 'quote'
       ? `引用：${part.quote.text}`
       : part.type === 'image'
@@ -212,7 +211,7 @@ export function RichMessageInput(props: {
       editorProps: {
         attributes: {
           id: 'message-input',
-          class: 'message-input rich-message-input',
+          class: 'rich-message-input',
           role: 'textbox',
           'aria-label': '消息',
           'aria-multiline': 'true',

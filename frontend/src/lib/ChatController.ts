@@ -1,19 +1,10 @@
-// 本文件是聊天业务控制器：管理登录、实时消息、发送、上传与个人模型设置，并通过事件中转提供独立的历史搜索、上下文读取与公开分享管理。
+// 本文件是聊天业务控制器：管理登录、实时消息、发送、历史分页、搜索与上下文读取，全部状态经由事件中转同步。
 
 import { clearSession, readSession, saveSession } from './platform.js';
 import { ServerEventRelay } from './ServerEventRelay.js';
-import { modelSelectionSchema, modelSettingsSchema } from './modelSettings.js';
-import type { ModelSelection } from './modelSettings.js';
 import type { ClientCommand } from './ServerEventRelay.js';
-import type {
-  ChatPage,
-  MessageShareSummary,
-  RequestFailedCode,
-  ServerEvent,
-} from './serverEvents.js';
-
-import { messageFileSchema, messageImageSchema } from './messageAttachments.js';
-import type { MessageFile, MessageImage, MessagePart } from './messageAttachments.js';
+import type { ChatMessageRow, ChatPage, RequestFailedCode, ServerEvent } from './serverEvents.js';
+import type { MessagePart } from './messageAttachments.js';
 
 // ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
 export interface ChatMessage {
@@ -29,7 +20,7 @@ export interface ChatMessage {
 export const latestMessageWindow = 30;
 
 // chatMessageFromRow 在服务器消息进入界面时统一转换时间和多段内容，正常聊天与历史窗口共用。
-export function chatMessageFromRow(row: ChatPage['messages'][number]): ChatMessage {
+export function chatMessageFromRow(row: ChatMessageRow): ChatMessage {
   return {
     id: row.id,
     text: row.text,
@@ -40,6 +31,7 @@ export function chatMessageFromRow(row: ChatPage['messages'][number]): ChatMessa
   };
 }
 
+// RequestError 把服务端返回的请求失败码映射成面向用户的中文提示。
 export class RequestError extends Error {
   constructor(readonly code: RequestFailedCode) {
     super(requestFailedMessage(code));
@@ -70,10 +62,6 @@ function requestFailedMessage(code: RequestFailedCode): string {
       return '请输入 1 至 200 个字符的搜索词';
     case 'not_found':
       return '找不到这条历史消息';
-    case 'invalid_share':
-      return '请选择 1 至 200 条可分享的消息';
-    case 'share_not_found':
-      return '该分享不存在或已被取消';
   }
 }
 
@@ -83,8 +71,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-// ChatController 只维护界面状态：它订阅 ServerEventRelay 中转的服务器事件，
-// 并通过中转发送聊天命令；上传与模型设置使用同源 HTTP。
+// ChatController 维护界面状态：订阅 ServerEventRelay 中转的服务器事件，并通过中转发送聊天与搜索命令。
 export class ChatController {
   messages: ChatMessage[] = [];
   initializing = true;
@@ -122,24 +109,22 @@ export class ChatController {
       this.listeners.delete(listener);
     };
   };
+
   private notify() {
     if (!this.disposed) this.listeners.forEach((listener) => listener());
   }
 
-  async initialize() {
+  // initialize 读取本地登录缓存并在联网时建立 WebSocket 连接，离线冷启动直接开放对应界面。
+  initialize() {
     this.relay.subscribe(
       (event) => this.handleServerEvent(event),
       (reason) => this.handleSocketClosed(reason),
     );
-    try {
-      const session = await readSession();
-      this.baseURL = session.baseURL;
-      this.token = session.token;
-      this.email = session.email;
-      this.iconURL = session.iconURL;
-    } catch (error) {
-      this.error = error instanceof Error ? error.message : '无法读取登录信息，请重新登录';
-    }
+    const session = readSession();
+    this.baseURL = session.baseURL;
+    this.token = session.token;
+    this.email = session.email;
+    this.iconURL = session.iconURL;
     this.notify();
     if (navigator.onLine) {
       this.connect();
@@ -245,33 +230,27 @@ export class ChatController {
       case 'authenticated': {
         this.lastChangeCursor = event.change_cursor;
         const pending = this.takePendingRequest(event.request_id);
-        void saveSession(event.token, event.email)
-          .then(() => {
-            this.token = event.token;
-            this.email = event.email;
-            this.desktopAvailable = event.desktop_available === true;
-            this.connected = true;
-            this.mergeHistory(event.history);
-            this.error = null;
-            this.initializing = false;
-            pending?.resolve(event);
-            this.notify();
-          })
-          .catch((error: unknown) => {
-            pending?.reject(
-              error instanceof Error ? error : new Error('无法保存登录信息，请检查浏览器存储设置'),
-            );
-            this.initializing = false;
-            this.notify();
-          });
-        return;
+        try {
+          saveSession(event.token, event.email);
+          this.token = event.token;
+          this.email = event.email;
+          this.desktopAvailable = event.desktop_available === true;
+          this.connected = true;
+          this.mergeHistory(event.history);
+          this.error = null;
+          this.initializing = false;
+          pending?.resolve(event);
+        } catch (error) {
+          pending?.reject(
+            error instanceof Error ? error : new Error('无法保存登录信息，请检查浏览器存储设置'),
+          );
+          this.initializing = false;
+        }
+        break;
       }
       case 'code_sent':
       case 'search_results':
       case 'message_context':
-      case 'share_created':
-      case 'share_list':
-      case 'share_deleted':
         this.resolvePendingRequest(event.request_id, event);
         return;
       case 'history':
@@ -455,37 +434,6 @@ export class ChatController {
     return event;
   }
 
-  // createShare 将所选消息打包为公开只读分享链接，返回新生成的分享记录摘要。
-  async createShare(messageIDs: string[]): Promise<MessageShareSummary> {
-    const event = await this.sendRequest({
-      type: 'create_share',
-      request_id: crypto.randomUUID(),
-      message_ids: messageIDs,
-    });
-    if (event.type !== 'share_created') throw new Error('创建分享返回了错误的事件类型');
-    return event.share;
-  }
-
-  // listShares 查询当前账号已创建的全部公开分享记录。
-  async listShares(): Promise<MessageShareSummary[]> {
-    const event = await this.sendRequest({
-      type: 'list_shares',
-      request_id: crypto.randomUUID(),
-    });
-    if (event.type !== 'share_list') throw new Error('读取分享列表返回了错误的事件类型');
-    return event.shares;
-  }
-
-  // deleteShare 撤销指定的公开分享链接，使原分享地址立即失效。
-  async deleteShare(shareID: string): Promise<void> {
-    const event = await this.sendRequest({
-      type: 'delete_share',
-      request_id: crypto.randomUUID(),
-      share_id: shareID,
-    });
-    if (event.type !== 'share_deleted') throw new Error('取消分享返回了错误的事件类型');
-  }
-
   // trimOlderMessages 在用户回到最新底部时裁掉超出窗口的旧历史，回退翻页游标并重新开放上翻加载。
   trimOlderMessages(maxCount = latestMessageWindow): number {
     if (this.loadingHistory || this.messages.length <= maxCount) return 0;
@@ -499,8 +447,9 @@ export class ChatController {
 
   // mergeHistory 记住连续翻过的最早位置，即使实时补来更早的一条占位回复也从原来的位置续翻；首屏只保留最近窗口。
   private mergeHistory(page: ChatPage) {
+    const rows = page.messages ?? [];
     const initialLoad = !this.historyLoaded;
-    const first = page.messages[0]?.position;
+    const first = rows[0]?.position;
     if (first && (!this.oldestHistoryPosition || first < this.oldestHistoryPosition)) {
       this.oldestHistoryPosition = first;
     }
@@ -512,14 +461,15 @@ export class ChatController {
       this.oldestHistoryPosition = this.messages[0]?.position;
       trimmed = true;
     }
-    this.hasMoreHistory = trimmed || page.messages.length > 0;
+    this.hasMoreHistory = trimmed || rows.length > 0;
   }
 
   // merge 把服务器发来的一页消息生成新数组并入列表：同一 ID 覆盖旧值，再按服务器位置排序；无新消息时保持原数组引用稳定。
   private merge(page: ChatPage): boolean {
-    if (page.messages.length === 0) return false;
+    const rows = page.messages ?? [];
+    if (rows.length === 0) return false;
     const next = this.messages.slice();
-    for (const row of page.messages) {
+    for (const row of rows) {
       const message = chatMessageFromRow(row);
       const index = next.findIndex((existing) => existing.id === row.id);
       if (index < 0) next.push(message);
@@ -528,71 +478,6 @@ export class ChatController {
     next.sort((a, b) => a.position.localeCompare(b.position));
     this.messages = next;
     return true;
-  }
-
-  // getModelSettings 读取当前账号的选择和免费目录，关闭浮层时可取消读取。
-  async getModelSettings(signal: AbortSignal) {
-    const response = await this.requestModelSettings({ signal });
-    return modelSettingsSchema.parse(await response.json());
-  }
-
-  // saveModelSettings 提交三种模型及已读取的版本，服务器用聊天会话定位账号。
-  async saveModelSettings(selection: ModelSelection) {
-    const response = await this.requestModelSettings({
-      method: 'PUT',
-      body: JSON.stringify(selection),
-    });
-    return modelSelectionSchema.parse(await response.json());
-  }
-
-  // requestModelSettings 统一为模型设置的同源接口提供登录令牌和请求时限。
-  private async requestModelSettings(options: RequestInit) {
-    if (!this.token) throw new Error('请先登录');
-    const timeout = AbortSignal.timeout(15000);
-    const response = await fetch(this.baseURL + '/model-settings', {
-      ...options,
-      headers: {
-        Authorization: 'Bearer ' + this.token,
-        'Content-Type': 'application/json',
-      },
-      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
-    });
-    if (!response.ok) {
-      const message = response.headers.get('content-type')?.startsWith('text/plain')
-        ? (await response.text()).trim()
-        : '';
-      throw new Error(message || '模型设置暂时不可用，请稍后重试');
-    }
-    return response;
-  }
-
-  // uploadImage 以原始字节上传图片；聊天消息只携带服务端生成的 OSS 引用。
-  async uploadImage(file: File): Promise<MessageImage> {
-    if (!this.token) throw new Error('请先登录');
-    const response = await fetch(this.baseURL + '/images?name=' + encodeURIComponent(file.name), {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': file.type },
-      body: file,
-      signal: AbortSignal.timeout(60000),
-    });
-    if (!response.ok) throw new Error((await response.text()).trim() || '图片上传失败');
-    return messageImageSchema.parse(await response.json());
-  }
-
-  // uploadFile 以原始字节流上传工作区文件（上限 50 MB）；消息只携带服务端生成的 OSS 引用，aether 需要时经 sandbox_import_file 导入电脑。
-  async uploadFile(file: File): Promise<MessageFile> {
-    if (!this.token) throw new Error('请先登录');
-    const response = await fetch(this.baseURL + '/files?name=' + encodeURIComponent(file.name), {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + this.token,
-        'Content-Type': file.type || 'application/octet-stream',
-      },
-      body: file,
-      signal: AbortSignal.timeout(300000),
-    });
-    if (!response.ok) throw new Error((await response.text()).trim() || '文件上传失败');
-    return messageFileSchema.parse(await response.json());
   }
 
   // send 发出一条消息并等服务器保存：成功时消息已经推进列表，失败时抛出错误，由输入框展示并保留内容。

@@ -390,10 +390,6 @@ button.link {
 .markdown {
   overflow-wrap: anywhere;
 }
-.user-body {
-  color: var(--text);
-  white-space: pre-wrap;
-}
 /* 完整正文独立测量，只裁切外层；底部渐隐提示后面还有内容，不改变引用文本。 */
 .message-body {
   display: flow-root;
@@ -542,7 +538,7 @@ button.link {
   color: #17251b;
 }
 
-/* 输入框浮在消息列表上。multimodal-composer 与 composer 是同一个元素，后面的方向、内边距和圆角覆盖前面的。 */
+/* 输入框浮在消息列表上，以 4px 为间距单位，统一正文、附件节点和工具栏的对齐与触控空间。 */
 .composer-padding {
   position: absolute;
   bottom: 0;
@@ -564,42 +560,68 @@ button.link {
   }
 }
 .composer {
+  --composer-chip-size: 44px;
+  --composer-item-gap: 4px;
   background: var(--surface);
   display: flex;
-  flex-direction: row;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   pointer-events: auto;
-  padding: 3px 5px 3px 4px;
+  padding: 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 25px;
+  border-radius: 24px;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
-.message-input {
+.composer:focus-within {
+  border-color: var(--forest-border);
+  box-shadow: 0 0 0 3px var(--shadow);
+}
+.composer-error {
+  margin: 0 0 8px;
+  pointer-events: auto;
+}
+.rich-input-host {
+  min-width: 0;
+}
+.rich-message-input {
+  position: relative;
   display: block;
   box-sizing: border-box;
   flex: 1;
   min-width: 0;
   height: auto;
   min-height: 48px;
-  max-height: 160px;
+  max-height: 240px;
   border: 0;
-  outline: 0;
+  outline: none;
   resize: none;
   overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: inherit;
   font-size: 18px;
-  line-height: 28px;
+  line-height: 32px;
   color: var(--text);
-  padding: 10px 14px;
+  padding: 2px 4px 6px;
   background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  transition: opacity 140ms ease;
 }
-.message-input:focus-visible {
+.rich-message-input:focus-visible {
   outline: 0;
 }
+/* 发送中文本框整体变淡，进度只由发送按钮的转圈表达，不再另占一行文字。 */
+.composer.is-sending .rich-message-input {
+  opacity: 0.45;
+}
 .send-button {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
-  margin-bottom: 3px;
   border-radius: 50%;
   background: var(--gold);
   display: flex;
@@ -607,8 +629,8 @@ button.link {
   justify-content: center;
 }
 .send-arrow {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   display: block;
   color: var(--on-gold);
 }
@@ -618,67 +640,6 @@ button.link {
 }
 .send-button:disabled .send-arrow {
   color: var(--text-muted);
-}
-.attach-button {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  margin-bottom: 3px;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-muted);
-}
-.attach-button:hover {
-  background: var(--surface-muted);
-  color: var(--accent-text);
-}
-.attach-button svg {
-  width: 24px;
-  height: 24px;
-}
-.composer-error {
-  margin: 0 0 8px;
-  pointer-events: auto;
-}
-/* 输入框以 4px 为间距单位，统一正文、附件节点和工具栏的对齐与触控空间。 */
-.multimodal-composer {
-  --composer-chip-size: 44px;
-  --composer-item-gap: 4px;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  border-radius: 24px;
-  padding: 12px;
-  transition:
-    border-color 140ms ease,
-    box-shadow 140ms ease;
-}
-.multimodal-composer:focus-within {
-  border-color: var(--forest-border);
-  box-shadow: 0 0 0 3px var(--shadow);
-}
-.rich-input-host {
-  min-width: 0;
-}
-.rich-message-input {
-  position: relative;
-  min-height: 48px;
-  max-height: 240px;
-  overflow-y: auto;
-  outline: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  padding: 2px 4px 6px;
-  line-height: 32px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
-  transition: opacity 140ms ease;
-}
-/* 发送中文本框整体变淡，进度只由发送按钮的转圈表达，不再另占一行文字。 */
-.multimodal-composer.is-sending .rich-message-input {
-  opacity: 0.45;
 }
 .send-button.is-sending:disabled {
   background: var(--gold);
@@ -699,6 +660,24 @@ button.link {
     transform: rotate(360deg);
   }
 }
+.attach-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+}
+.attach-button:hover {
+  background: var(--surface-muted);
+  color: var(--accent-text);
+}
+.attach-button svg {
+  width: 22px;
+  height: 22px;
+}
 .rich-message-input p {
   min-height: 32px;
   margin: 0;
@@ -711,17 +690,6 @@ button.link {
   align-items: center;
   gap: 8px;
   padding: 0 2px;
-}
-.composer-tools .attach-button,
-.composer-tools .send-button {
-  width: 40px;
-  height: 40px;
-  margin: 0;
-}
-.composer-tools .attach-button svg,
-.composer-tools .send-arrow {
-  width: 22px;
-  height: 22px;
 }
 .composer-shortcut {
   display: inline-flex;
@@ -892,7 +860,7 @@ button.link {
 .chat-account-wrap {
   position: relative;
 }
-.chat-account-launch {
+.chat-action-btn {
   display: grid;
   place-items: center;
   width: 44px;
@@ -904,7 +872,7 @@ button.link {
   background: var(--forest-hover);
   box-shadow: 0 3px 12px var(--shadow);
 }
-.chat-account-launch svg {
+.chat-action-btn svg {
   width: 22px;
   height: 22px;
   fill: none;
@@ -1058,15 +1026,7 @@ button.link {
   padding: 0;
 }
 
-/* 新版本下载完成后，在页面上给出显式更新入口。 */
-.app-button {
-  padding: 7px 12px;
-  border-radius: 10px;
-  background: var(--forest-hover);
-  color: var(--on-forest);
-  font-size: 14px;
-  white-space: nowrap;
-}
+/* 离线启动不可用时显示轻量状态提示。 */
 .connection-status {
   font-size: 14px;
   color: var(--on-forest-muted);
@@ -1112,12 +1072,9 @@ button.link {
   background: #ffffff80;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .user-bubble .file-card {
+  .user-bubble .file-card {
     background: #00000033;
   }
-}
-[data-theme='dark'] .user-bubble .file-card {
-  background: #00000033;
 }
 .file-card:hover {
   border-color: var(--line-strong);
@@ -1192,7 +1149,7 @@ button.link {
   .loading-ripple {
     opacity: 0.28;
   }
-  .multimodal-composer,
+  .composer,
   .chip-remove,
   .rich-message-input,
   .scroll-to-bottom,

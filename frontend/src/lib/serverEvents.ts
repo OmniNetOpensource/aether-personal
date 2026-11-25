@@ -1,135 +1,86 @@
-// 本文件集中定义后端 WebSocket 服务器事件的校验结构：与后端 events.go 一一对应，业务代码只处理校验后的事件。
+// 本文件集中定义后端 WebSocket 服务器事件的类型结构，与后端 events.go 一一对应。
 
-import { z } from 'zod';
-import { messagePartSchema } from './messageAttachments.js';
+import type { MessagePart } from './messageAttachments.js';
 
-// 后端通过聊天 WebSocket 发来的全部事件类型集中定义在本文件，与后端 events.go 一一对应。
-// 原始帧只在 ServerEventRelay.ts 中解析，业务代码只处理这里校验后的事件。
+// ChatMessageRow 表示后端返回的一条用户或助手聊天消息行。
+export interface ChatMessageRow {
+  id: string;
+  text: string;
+  parts?: MessagePart[];
+  sender: 'user' | 'main';
+  created_at: string;
+  position: string;
+  client_message_id?: string | null;
+}
 
-export const chatMessageRowSchema = z.object({
-  id: z.string().min(1),
-  text: z.string(),
-  parts: z.array(messagePartSchema).optional(),
-  sender: z.enum(['user', 'main']),
-  created_at: z.iso.datetime({ offset: true }),
-  position: z.uuid(),
-  client_message_id: z.uuid().nullable().optional(),
-});
+// ChatPage 承载一页消息列表，后端空切片可能序列化为 null。
+export interface ChatPage {
+  messages: ChatMessageRow[] | null;
+}
 
-export const chatPageSchema = z.object({
-  messages: z
-    .array(chatMessageRowSchema)
-    .nullable()
-    .transform((value) => value ?? []),
-});
+// RequestFailedCode 对应后端可重试请求返回的错误码。
+export type RequestFailedCode =
+  | 'invalid_email'
+  | 'too_frequent'
+  | 'invalid_code'
+  | 'dev_login_unavailable'
+  | 'unauthorized'
+  | 'already_authenticated'
+  | 'internal'
+  | 'verification_required'
+  | 'login_unavailable'
+  | 'invalid_request'
+  | 'not_found';
 
-export const requestFailedCodeSchema = z.enum([
-  'invalid_email',
-  'too_frequent',
-  'invalid_code',
-  'dev_login_unavailable',
-  'unauthorized',
-  'already_authenticated',
-  'internal',
-  'verification_required',
-  'login_unavailable',
-  'invalid_request',
-  'not_found',
-  'invalid_share',
-  'share_not_found',
-]);
+// ChatSearchHit 表示历史搜索列表中的单条命中摘要。
+export interface ChatSearchHit {
+  id: string;
+  sender: 'user' | 'main';
+  created_at: string;
+  excerpt: string;
+}
 
-// 搜索只携带列表片段；上下文窗口复用完整聊天消息结构。
-export const chatSearchHitSchema = z.object({
-  id: z.uuid(),
-  sender: z.enum(['user', 'main']),
-  created_at: z.iso.datetime({ offset: true }),
-  excerpt: z.string(),
-});
-
-// 分享记录摘要用于创建回执与「已分享列表」展示。
-export const messageShareSummarySchema = z.object({
-  id: z.uuid(),
-  token: z.string().min(22),
-  created_at: z.iso.datetime({ offset: true }),
-  message_count: z.number().int().nonnegative(),
-  preview: z.string(),
-});
-
-// 公开分享载荷供免登录访客在 /s/<token> 页面校验后端 HTTP 响应。
-export const publicMessageShareSchema = z.object({
-  token: z.string().min(22),
-  created_at: z.iso.datetime({ offset: true }),
-  messages: z.array(chatMessageRowSchema),
-});
-
-export const serverEventSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('ready'),
-    change_cursor: z.string().regex(/^\d+$/).optional(),
-    authenticated: z.boolean(),
-    dev_login: z.boolean(),
-    desktop_available: z.boolean().optional(),
-    turnstile_site_key: z.string().optional(),
-    email: z.string().optional(),
-    history: chatPageSchema.optional(),
-  }),
-  z.object({
-    type: z.literal('authenticated'),
-    change_cursor: z.string().regex(/^\d+$/).optional(),
-    request_id: z.uuid(),
-    token: z.string().min(1),
-    email: z.string().min(1),
-    desktop_available: z.boolean().optional(),
-    history: chatPageSchema,
-  }),
-  z.object({ type: z.literal('code_sent'), request_id: z.uuid() }),
-  chatPageSchema.extend({ type: z.literal('history'), request_id: z.uuid() }),
-  z.object({
-    type: z.literal('search_results'),
-    request_id: z.uuid(),
-    results: z.array(chatSearchHitSchema),
-    next_before: z.uuid().optional(),
-  }),
-  chatPageSchema.extend({
-    type: z.literal('message_context'),
-    request_id: z.uuid(),
-    has_more_before: z.boolean(),
-    has_more_after: z.boolean(),
-  }),
-  z.object({
-    type: z.literal('share_created'),
-    request_id: z.uuid(),
-    share: messageShareSummarySchema,
-  }),
-  z.object({
-    type: z.literal('share_list'),
-    request_id: z.uuid(),
-    shares: z.array(messageShareSummarySchema),
-  }),
-  z.object({
-    type: z.literal('share_deleted'),
-    request_id: z.uuid(),
-    share_id: z.uuid(),
-  }),
-  chatPageSchema.extend({
-    type: z.literal('messages'),
-    change_cursor: z.string().regex(/^\d+$/).optional(),
-    main_thinking: z.boolean().optional(),
-    main_failed: z.boolean().optional(),
-  }),
-  z.object({ type: z.literal('delivered'), client_message_id: z.uuid() }),
-  z.object({ type: z.literal('logged_out'), request_id: z.uuid() }),
-  z.object({
-    type: z.literal('request_failed'),
-    request_id: z.uuid(),
-    code: requestFailedCodeSchema,
-  }),
-]);
-
-export type ServerEvent = z.infer<typeof serverEventSchema>;
-export type ChatPage = z.infer<typeof chatPageSchema>;
-export type RequestFailedCode = z.infer<typeof requestFailedCodeSchema>;
-export type ChatSearchHit = z.infer<typeof chatSearchHitSchema>;
-export type MessageShareSummary = z.infer<typeof messageShareSummarySchema>;
-export type PublicMessageShare = z.infer<typeof publicMessageShareSchema>;
+// ServerEvent 联合后端聊天 WebSocket 下发的全部下行事件类型。
+export type ServerEvent =
+  | {
+      type: 'ready';
+      change_cursor?: string;
+      authenticated: boolean;
+      dev_login: boolean;
+      desktop_available?: boolean;
+      turnstile_site_key?: string;
+      email?: string;
+      history?: ChatPage;
+    }
+  | {
+      type: 'authenticated';
+      change_cursor?: string;
+      request_id: string;
+      token: string;
+      email: string;
+      desktop_available?: boolean;
+      history: ChatPage;
+    }
+  | { type: 'code_sent'; request_id: string }
+  | (ChatPage & { type: 'history'; request_id: string })
+  | {
+      type: 'search_results';
+      request_id: string;
+      results: ChatSearchHit[];
+      next_before?: string;
+    }
+  | (ChatPage & {
+      type: 'message_context';
+      request_id: string;
+      has_more_before: boolean;
+      has_more_after: boolean;
+    })
+  | (ChatPage & {
+      type: 'messages';
+      change_cursor?: string;
+      main_thinking?: boolean;
+      main_failed?: boolean;
+    })
+  | { type: 'delivered'; client_message_id: string }
+  | { type: 'logged_out'; request_id: string }
+  | { type: 'request_failed'; request_id: string; code: RequestFailedCode };

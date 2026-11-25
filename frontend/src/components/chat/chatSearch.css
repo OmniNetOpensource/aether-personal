@@ -1,20 +1,5 @@
 /* 本文件定义历史搜索浮层与独立上下文窗口，桌面和手机共用现有配色并适配系统深色外观。 */
-.chat-search-launch {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 10px;
-  border: 1px solid var(--forest-border);
-  border-radius: 50%;
-  color: var(--on-forest);
-  background: var(--forest-hover);
-  box-shadow: 0 3px 12px var(--shadow);
-}
-.chat-search-launch svg,
 .history-search-input svg {
-  width: 22px;
-  height: 22px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -49,8 +34,7 @@
   cursor: wait;
   opacity: 0.65;
 }
-.history-search-dialog button:focus-visible,
-.chat-search-launch:focus-visible {
+.history-search-dialog button:focus-visible {
   outline: 3px solid var(--gold);
   outline-offset: 2px;
 }
@@ -446,10 +430,6 @@
 
 /* 手机使用全屏搜索，键盘打开后跟随 App 维护的可视视口高度；安全区不承载点击目标。 */
 @media (max-width: 600px) {
-  .chat-search-launch {
-    top: max(12px, env(safe-area-inset-top));
-    right: 14px;
-  }
   .history-search-dialog {
     inset: var(--app-top, 0px) 0 auto;
     width: 100%;

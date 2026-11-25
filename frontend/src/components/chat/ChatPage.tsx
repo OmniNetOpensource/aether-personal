@@ -1,8 +1,8 @@
 // 本文件组合聊天列表、输入框、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
 
-import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatController } from '../../lib/ChatController.js';
+import { NavLink } from '../../lib/navigation.js';
 import type { MessageComposerHandle } from './MessageComposer.js';
 import { ChatMessageList } from './ChatMessageList.js';
 import { MessageComposer } from './MessageComposer.js';
@@ -55,7 +55,7 @@ export function ChatPage({ controller }: { controller: ChatController }) {
         {controller.desktopAvailable && (
           <button
             type="button"
-            className="chat-desktop-launch"
+            className="chat-action-btn"
             aria-label="查看电脑"
             title="查看电脑"
             onClick={() => {
@@ -71,7 +71,7 @@ export function ChatPage({ controller }: { controller: ChatController }) {
         )}
         <button
           type="button"
-          className="chat-search-launch"
+          className="chat-action-btn"
           aria-label="搜索历史聊天"
           title="搜索历史聊天"
           onClick={() => {
@@ -79,7 +79,7 @@ export function ChatPage({ controller }: { controller: ChatController }) {
             setSearchOpen(true);
           }}
         >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="10.5" cy="10.5" r="6.5" />
             <path d="m16 16 4 4" />
           </svg>
@@ -87,14 +87,14 @@ export function ChatPage({ controller }: { controller: ChatController }) {
         <div className="chat-account-wrap" ref={accountWrap}>
           <button
             type="button"
-            className="chat-account-launch"
+            className="chat-action-btn"
             ref={accountButton}
             aria-label="账号"
             aria-expanded={accountOpen}
             title="账号"
             onClick={() => setAccountOpen((open) => !open)}
           >
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="12" cy="8.5" r="3.5" />
               <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
             </svg>
@@ -114,13 +114,13 @@ export function ChatPage({ controller }: { controller: ChatController }) {
               >
                 模型设置
               </button>
-              <Link
+              <NavLink
                 to="/memories"
-                className="chat-account-models chat-account-link"
+                className="chat-account-models"
                 onClick={() => setAccountOpen(false)}
               >
                 查看记忆
-              </Link>
+              </NavLink>
               <button
                 type="button"
                 className="chat-account-logout"
@@ -136,12 +136,12 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           )}
         </div>
       </div>
-      {modelsOpen && (
+      {modelsOpen && controller.token && (
         <ChatModelSettings
-          controller={controller}
+          token={controller.token}
           onClose={() => {
             setModelsOpen(false);
-            accountButton.current?.focus({ preventScroll: true });
+            requestAnimationFrame(() => accountButton.current?.focus({ preventScroll: true }));
           }}
         />
       )}

@@ -9,7 +9,6 @@
   "scripts": {
     "build": "rsbuild build --config web.config.ts && npm run check && node scripts/build-pwa.mjs",
     "dev": "rsbuild dev --config web.config.ts",
-    "design": "rsbuild dev --config design.config.ts",
     "check": "tsc --noEmit",
     "format": "prettier --write src scripts *.ts *.json public/manifest.webmanifest"
   },
@@ -19,8 +18,6 @@
     "@shikijs/engine-javascript": "3.23.0",
     "@shikijs/langs": "3.23.0",
     "@shikijs/themes": "3.23.0",
-    "@tanstack/react-router": "1.170.46",
-    "@tanstack/react-start": "1.169.4",
     "@tiptap/core": "3.32.2",
     "@tiptap/pm": "3.32.2",
     "@tiptap/starter-kit": "3.32.2",
@@ -37,8 +34,7 @@
     "remark-math": "6.0.0",
     "remark-parse": "11.0.0",
     "remark-rehype": "11.1.2",
-    "unified": "11.0.5",
-    "zod": "4.6.7"
+    "unified": "11.0.5"
   },
   "devDependencies": {
     "@rsbuild/core": "2.2.14",

@@ -1,25 +1,22 @@
 // 本文件显示当前用户的只读实时桌面；页面隐藏或窗口关闭时释放连接，休眠时仅轮询状态。
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type RFB from '@novnc/novnc';
-import { z } from 'zod';
+import { ModalDialog } from '../ModalDialog.js';
 import './desktopViewer.css';
 
 // 观察状态来自后端边界；运行中的连接在 ready 后切换为二进制 RFB，不与聊天消息混用。
-const desktopStateSchema = z.enum([
-  'unconfigured',
-  'unallocated',
-  'paused',
-  'missing',
-  'needs_update',
-  'killing',
-  'killed',
-]);
-const desktopFrameSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('ready') }),
-  z.object({ type: z.literal('state'), state: desktopStateSchema }),
-]);
-const desktopStateLabels: Record<z.infer<typeof desktopStateSchema>, string> = {
+type DesktopState =
+  | 'unconfigured'
+  | 'unallocated'
+  | 'paused'
+  | 'missing'
+  | 'needs_update'
+  | 'killing'
+  | 'killed';
+type DesktopFrame = { type: 'ready' } | { type: 'state'; state: DesktopState };
+
+const desktopStateLabels: Record<DesktopState, string> = {
   unconfigured: '电脑尚未配置，请联系维护者配置长期工作区。',
   unallocated: 'Agent 还没有使用过电脑，首次使用后即可查看。',
   paused: '电脑已休眠，Agent 下次使用时会自动恢复。',
@@ -28,27 +25,20 @@ const desktopStateLabels: Record<z.infer<typeof desktopStateSchema>, string> = {
   killing: '电脑正在释放，等待 Agent 下次使用。',
   killed: '电脑实例已释放，Agent 下次使用时会重建并接回原文件。',
 };
+
 type ViewerState =
   | { kind: 'connecting' }
   | { kind: 'live' }
   | { kind: 'hidden' }
-  | { kind: 'waiting'; state: z.infer<typeof desktopStateSchema> }
+  | { kind: 'waiting'; state: DesktopState }
   | { kind: 'error'; message: string };
 
 // DesktopViewer 独立持有观察连接；不改变聊天草稿、消息滚动位置或沙箱的空闲计时。
 export function DesktopViewer({ token, onClose }: { token: string; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<ViewerState>({ kind: 'connecting' });
   const [expanded, setExpanded] = useState(false);
   const [attempt, setAttempt] = useState(0);
-
-  // 原生 dialog 约束焦点并支持 Escape；关闭后浏览器把焦点还给“查看电脑”入口。
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
-    return () => element?.close();
-  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -110,12 +100,13 @@ export function DesktopViewer({ token, onClose }: { token: string; onClose: () =
           if (disposed || socket !== channel) return;
           try {
             if (typeof event.data !== 'string') throw new Error('Expected desktop status');
-            const frame = desktopFrameSchema.parse(JSON.parse(event.data));
-            if (frame.type === 'state') {
+            const parsed = JSON.parse(event.data) as Partial<DesktopFrame>;
+            if (parsed.type === 'state' && parsed.state && parsed.state in desktopStateLabels) {
               keepStatus = true;
-              setState({ kind: 'waiting', state: frame.state });
+              setState({ kind: 'waiting', state: parsed.state });
               return;
             }
+            if (parsed.type !== 'ready') throw new Error('Unexpected desktop frame');
             // 后端也过滤 RFB 控制消息；前端只读设置用于避免捕获键盘和触屏输入。
             const remote = new RFB(target, channel, { shared: true });
             viewer = remote;
@@ -172,11 +163,11 @@ export function DesktopViewer({ token, onClose }: { token: string; onClose: () =
   }, [token, attempt]);
 
   return (
-    <dialog
-      ref={dialog}
+    <ModalDialog
+      closeOnBackdrop={false}
       className={`desktop-dialog${expanded ? ' desktop-dialog-expanded' : ''}`}
-      aria-labelledby="desktop-viewer-title"
-      onCancel={onClose}
+      ariaLabelledBy="desktop-viewer-title"
+      onClose={onClose}
     >
       <header className="desktop-viewer-header">
         <div>
@@ -214,6 +205,6 @@ export function DesktopViewer({ token, onClose }: { token: string; onClose: () =
       <footer className="desktop-viewer-footer">
         观看不会唤醒电脑或延长运行时间。后台命令不会自动出现在桌面中。
       </footer>
-    </dialog>
+    </ModalDialog>
   );
 }

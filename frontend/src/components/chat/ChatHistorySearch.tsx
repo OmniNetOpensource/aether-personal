@@ -1,8 +1,9 @@
 // 本文件展示历史聊天搜索浮层：按关键词分页，保留结果位置，并打开独立的原文上下文窗口。
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChatController } from '../../lib/ChatController.js';
 import type { ChatSearchHit } from '../../lib/serverEvents.js';
+import { ModalDialog } from '../ModalDialog.js';
 import { ChatHistoryContext } from './ChatHistoryContext.js';
 import './chatSearch.css';
 
@@ -20,7 +21,7 @@ type SearchState =
       error: string | null;
     };
 
-// ChatHistorySearch 使用原生模态对话框约束键盘焦点；搜索期间正常聊天继续收消息和保存草稿。
+// ChatHistorySearch 使用模态对话框约束键盘焦点；搜索期间正常聊天继续收消息和保存草稿。
 export function ChatHistorySearch({
   controller,
   onClose,
@@ -30,7 +31,6 @@ export function ChatHistorySearch({
   onClose: () => void;
   onLatest: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const resultButton = useRef<HTMLButtonElement | null>(null);
   const version = useRef(0);
@@ -41,12 +41,9 @@ export function ChatHistorySearch({
   const [state, setState] = useState<SearchState>({ status: 'idle' });
   const [selected, setSelected] = useState<{ id: string; keyword: string } | null>(null);
 
-  // 对话框关闭后浏览器会把焦点还给搜索入口；IME 组词期间不发起中间关键词请求。
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
+  // 模态框通过 useLayoutEffect 打开后聚焦搜索框；IME 组词期间不发起中间关键词请求。
+  useEffect(() => {
     input.current?.focus();
-    return () => element?.close();
   }, []);
 
   // 每次词语变更使旧请求失效，迟到的回执不能覆盖较新的结果或追加到另一组分页。
@@ -117,37 +114,10 @@ export function ChatHistorySearch({
   };
 
   return (
-    <dialog
-      ref={dialog}
+    <ModalDialog
       className={`history-search-dialog${selected ? ' is-browsing' : ''}`}
-      aria-label={selected ? '查看历史消息上下文' : '搜索历史聊天'}
-      onKeyDown={(event) => {
-        // 搜索输入框会先消费 Escape；本层显式关闭，但把组词和嵌套图片对话框交给它们自己处理。
-        if (
-          event.key === 'Escape' &&
-          !event.nativeEvent.isComposing &&
-          event.target instanceof Element &&
-          event.target.closest('dialog') === event.currentTarget
-        ) {
-          event.preventDefault();
-          onClose();
-        }
-      }}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      onClick={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (
-          event.clientX < rect.left ||
-          event.clientX > rect.right ||
-          event.clientY < rect.top ||
-          event.clientY > rect.bottom
-        )
-          onClose();
-      }}
+      ariaLabel={selected ? '查看历史消息上下文' : '搜索历史聊天'}
+      onClose={onClose}
     >
       <section className="history-search-panel" hidden={selected !== null}>
         <header className="history-search-header">
@@ -316,7 +286,7 @@ export function ChatHistorySearch({
           onLatest={onLatest}
         />
       )}
-    </dialog>
+    </ModalDialog>
   );
 }
 

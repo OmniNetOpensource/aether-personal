@@ -17,11 +17,9 @@ export interface MessageComposerHandle {
 export function MessageComposer({
   controller,
   composerRef,
-  hidden = false,
 }: {
   controller: ChatController;
   composerRef: RefObject<MessageComposerHandle | null>;
-  hidden?: boolean;
 }) {
   const draftKey = `aether_draft:${controller.email}`;
   const [parts, setParts] = useState<MessagePart[]>(() => {
@@ -43,6 +41,7 @@ export function MessageComposer({
   const sendingRef = useRef(false);
   // 同一份草稿重发时沿用同一个消息 ID：上次其实已保存、只是确认没送达时，服务器按 ID 去重，不会存成两条。
   const clientMessageID = useRef(crypto.randomUUID());
+
   useEffect(() => {
     composerRef.current = {
       insertQuote: (quote) => input.current?.insert([{ type: 'quote', quote }]),
@@ -51,6 +50,7 @@ export function MessageComposer({
       composerRef.current = null;
     };
   }, [composerRef]);
+
   useEffect(() => {
     const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
     try {
@@ -60,31 +60,30 @@ export function MessageComposer({
       /* 禁用存储时草稿仍保留在内存。 */
     }
   }, [parts, draftKey]);
+
   useLayoutEffect(() => {
     const element = composerPadding.current;
-    if (!element || hidden) return;
+    if (!element) return;
     const resize = () => {
-      if (!element.hidden) {
-        element.parentElement?.style.setProperty('--composer-height', `${element.offsetHeight}px`);
-      }
+      element.parentElement?.style.setProperty('--composer-height', `${element.offsetHeight}px`);
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [hidden]);
+  }, []);
+
   // addFiles 统一处理选择、粘贴与拖放的图片和工作区文件，失败保留其余草稿以便继续编辑。
   const addFiles = async (files: File[]) => {
-    if (readingRef.current || files.length === 0) return;
+    if (readingRef.current || files.length === 0 || !controller.token) return;
     readingRef.current = true;
     setReading(true);
     try {
       const uploaded = await uploadAttachments(
+        controller.token,
         files,
         parts,
         controller.desktopAvailable,
-        (file) => controller.uploadImage(file),
-        (file) => controller.uploadFile(file),
       );
       input.current?.insert(uploaded);
       setError('');
@@ -95,6 +94,7 @@ export function MessageComposer({
       setReading(false);
     }
   };
+
   // send 在提交边界检查总长度，禁止图片尚未准备好时发出不完整消息；等服务器保存后才清空，失败时保留内容并显示错误。
   const send = async () => {
     if (
@@ -132,8 +132,9 @@ export function MessageComposer({
       setSending(false);
     }
   };
+
   return (
-    <div className="composer-padding" ref={composerPadding} hidden={hidden}>
+    <div className="composer-padding" ref={composerPadding}>
       {!controller.connected && (
         <p className="composer-connection-hint" role="status">
           {typeof navigator !== 'undefined' && !navigator.onLine
@@ -147,7 +148,7 @@ export function MessageComposer({
         </p>
       )}
       <form
-        className={`composer multimodal-composer${sending ? ' is-sending' : ''}`}
+        className={`composer${sending ? ' is-sending' : ''}`}
         onSubmit={(event) => {
           event.preventDefault();
           void send();

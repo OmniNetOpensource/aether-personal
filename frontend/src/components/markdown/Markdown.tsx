@@ -13,6 +13,7 @@ import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
+import { createLruCache } from './cache.js';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock.js';
 import { safeLink } from '../../lib/platform.js';
 import 'katex/dist/katex.min.css';
@@ -94,22 +95,12 @@ const markdownComponents = {
 } satisfies Partial<Components>;
 
 // 缓存最近解析过的 HAST 树，虚拟列表滚动卸载后再挂载时直接跳过 remark 与 KaTeX 同步解析。
-const maxMarkdownCacheSize = 120;
-const markdownTreeCache = new Map<string, Root>();
+const markdownTreeCache = createLruCache<Root>(120);
 
-// parseMarkdownTree 按 LRU 顺序复用已解析的语法树，超出容量时淘汰最久未使用的条目。
 function parseMarkdownTree(text: string): Root {
   const cached = markdownTreeCache.get(text);
-  if (cached) {
-    markdownTreeCache.delete(text);
-    markdownTreeCache.set(text, cached);
-    return cached;
-  }
+  if (cached) return cached;
   const tree = markdownProcessor.runSync(markdownProcessor.parse(text));
-  if (markdownTreeCache.size >= maxMarkdownCacheSize) {
-    const oldestKey = markdownTreeCache.keys().next().value;
-    if (oldestKey !== undefined) markdownTreeCache.delete(oldestKey);
-  }
   markdownTreeCache.set(text, tree);
   return tree;
 }

@@ -1,7 +1,6 @@
-// 本文件是前端唯一接触聊天 WebSocket 的中转：负责连接与发送命令，把后端原始帧校验成服务器事件后转交订阅者。
+// 本文件是前端唯一接触聊天 WebSocket 的中转：负责连接与发送命令，并解析后端下行事件转交订阅者。
 
 import type { MessagePart } from './messageAttachments.js';
-import { serverEventSchema } from './serverEvents.js';
 import type { ServerEvent } from './serverEvents.js';
 
 // 前端通过聊天 WebSocket 发往后端的全部命令；hello 由中转在连接打开时自动发出。
@@ -17,9 +16,6 @@ export type ClientCommand =
       message_id: string;
       direction: 'around' | 'older' | 'newer';
     }
-  | { type: 'create_share'; request_id: string; message_ids: string[] }
-  | { type: 'list_shares'; request_id: string }
-  | { type: 'delete_share'; request_id: string; share_id: string }
   | { type: 'logout'; request_id: string }
   | {
       type: 'send_message';
@@ -27,9 +23,7 @@ export type ClientCommand =
       parts: MessagePart[];
     };
 
-// ServerEventRelay 是前端唯一接触聊天 WebSocket 的文件：
-// 它负责连接、发送 hello 与命令，并把后端原始帧校验为 serverEvents.ts
-// 定义的事件后中转给订阅者。断线原因原样转交，业务状态由订阅者维护。
+// ServerEventRelay 管理单条 WebSocket 生命周期，解析 JSON 事件帧并转发给订阅者。
 export class ServerEventRelay {
   private channel?: WebSocket;
   private intentionallyClosed = false;
@@ -64,7 +58,15 @@ export class ServerEventRelay {
       if (this.channel !== channel) return;
       try {
         if (typeof message.data !== 'string') throw new Error('Expected a text frame');
-        this.eventListener?.(serverEventSchema.parse(JSON.parse(message.data)));
+        const parsed: unknown = JSON.parse(message.data);
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          typeof (parsed as { type?: unknown }).type !== 'string'
+        ) {
+          throw new Error('Expected event object');
+        }
+        this.eventListener?.(parsed as ServerEvent);
       } catch {
         this.close();
         this.closeListener?.('invalid');

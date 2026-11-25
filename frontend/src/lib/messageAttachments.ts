@@ -1,74 +1,65 @@
-// 本文件定义引用、OSS 图片与工作区文件的通信结构，并负责批量上传前的分类与大小校验。
+// 本文件定义引用、OSS 图片与工作区文件的通信结构，并负责批量上传前的分类、体积校验与文件大小格式化。
 
-import { z } from 'zod';
+import { requestAPI } from './api.js';
 
 const maxImageBytes = 4 * 1024 * 1024;
 const maxMessageImageBytes = 8 * 1024 * 1024;
 const maxFileBytes = 50 * 1024 * 1024;
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
-export const messageQuoteSchema = z.object({
-  text: z.string().min(1),
-  message_id: z.uuid(),
-  start: z.number().int().nonnegative(),
-  end: z.number().int().positive(),
-});
+// MessageQuote 记录选区引用指向的原消息 ID、字符区间与快照文本。
+export interface MessageQuote {
+  text: string;
+  message_id: string;
+  start: number;
+  end: number;
+}
 
-export const messageImageSchema = z.object({
-  name: z.string(),
-  url: z
-    .string()
-    .refine((value) => value === '' || value.startsWith('https://'), '图片预览需使用 HTTPS'),
-  storage_url: z
-    .string()
-    .regex(/^oss:\/\/[a-z0-9-]+\/aether-chat\/[a-f0-9-]+\/[a-f0-9-]+\.(png|jpg|gif|webp)$/),
-  size: z.number().int().positive().max(maxImageBytes),
-  mime_type: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
-});
+// MessageImage 描述上传至私有 OSS 的视觉图片及其签名预览地址。
+export interface MessageImage {
+  name: string;
+  url: string;
+  storage_url: string;
+  size: number;
+  mime_type: string;
+}
 
-export const messageFileSchema = z.object({
-  name: z.string().min(1),
-  url: z
-    .string()
-    .refine((value) => value === '' || value.startsWith('https://'), '文件下载需使用 HTTPS'),
-  storage_url: z
-    .string()
-    .regex(/^oss:\/\/[a-z0-9-]+\/aether-chat\/[a-f0-9-]+\/files\/[a-f0-9-]+$/),
-  size: z.number().int().positive().max(maxFileBytes),
-  mime_type: z.string().min(1),
-});
-
-export type MessageQuote = z.infer<typeof messageQuoteSchema>;
-export type MessageImage = z.infer<typeof messageImageSchema>;
-export type MessageFile = z.infer<typeof messageFileSchema>;
+// MessageFile 描述随消息发送的工作区文件卡片及临时签名下载地址。
+export interface MessageFile {
+  name: string;
+  url: string;
+  storage_url: string;
+  size: number;
+  mime_type: string;
+}
 
 // MessagePart 保留文字、引用、图片与工作区文件在消息中的顺序，发送和历史展示共用同一结构。
-export const messagePartSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('text'), text: z.string() }),
-  z.object({ type: z.literal('quote'), quote: messageQuoteSchema }),
-  z.object({ type: z.literal('image'), image: messageImageSchema }),
-  z.object({ type: z.literal('file'), file: messageFileSchema }),
-]);
-export type MessagePart = z.infer<typeof messagePartSchema>;
+export type MessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'quote'; quote: MessageQuote }
+  | { type: 'image'; image: MessageImage }
+  | { type: 'file'; file: MessageFile };
 
-// formatFileSize 把字节数转为易读的 B / KB / MB 显示文本。
+// formatFileSize 把字节数转为易读的 B / KB / MB 文本，供文件卡片与记忆列表共用。
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// uploadAttachments 在上传前校验数量与体积：4 MB 以内的支持图片且视觉图片未超限时走视觉图片，已开通工作区时其余附件走工作区文件。
+// uploadAttachments 在上传前校验数量与体积并逐个分类：4 MB 以内的支持图片且视觉图片未超限时走视觉图片，已开通工作区时其余附件走工作区文件。
 export async function uploadAttachments(
+  token: string,
   files: File[],
   existing: MessagePart[],
   workspaceEnabled: boolean,
-  uploadImage: (file: File) => Promise<MessageImage>,
-  uploadFile: (file: File) => Promise<MessageFile>,
 ): Promise<MessagePart[]> {
   let imageCount = existing.filter((part) => part.type === 'image').length;
   let fileCount = existing.filter((part) => part.type === 'file').length;
-  let imageBytes = existing.reduce((sum, part) => (part.type === 'image' ? sum + part.image.size : sum), 0);
+  let imageBytes = existing.reduce(
+    (sum, part) => (part.type === 'image' ? sum + part.image.size : sum),
+    0,
+  );
   let totalBytes = existing.reduce(
     (sum, part) =>
       part.type === 'image' ? sum + part.image.size : part.type === 'file' ? sum + part.file.size : sum,
@@ -114,10 +105,25 @@ export async function uploadAttachments(
   }
 
   return Promise.all(
-    files.map(async (file, index): Promise<MessagePart> =>
-      plan[index] === 'image'
-        ? { type: 'image', image: await uploadImage(file) }
-        : { type: 'file', file: await uploadFile(file) },
-    ),
+    files.map(async (file, index): Promise<MessagePart> => {
+      if (plan[index] === 'image') {
+        const response = await requestAPI(`/images?name=${encodeURIComponent(file.name)}`, token, {
+          method: 'POST',
+          headers: { 'Content-Type': file.type },
+          body: file,
+          timeoutMs: 60000,
+          fallbackError: '图片上传失败',
+        });
+        return { type: 'image', image: (await response.json()) as MessageImage };
+      }
+      const response = await requestAPI(`/files?name=${encodeURIComponent(file.name)}`, token, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        timeoutMs: 300000,
+        fallbackError: '文件上传失败',
+      });
+      return { type: 'file', file: (await response.json()) as MessageFile };
+    }),
   );
 }

@@ -1,4 +1,4 @@
-// 本文件用 Virtuoso 展示聊天历史，负责翻页、贴底跟随与回收旧历史、平滑回底、长消息展开、引用回看与分享多选勾选。
+// 本文件用 Virtuoso 展示聊天历史，负责翻页、贴底跟随与回收旧历史、回底、长消息展开和引用回看。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -7,7 +7,6 @@ import type { VirtuosoHandle } from 'react-virtuoso';
 import { latestMessageWindow } from '../../lib/ChatController.js';
 import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
-import { AssistantWorkingStatus } from './AssistantWorkingStatus.js';
 import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
 import { useVirtuosoFirstItemIndex } from './useVirtuosoFirstItemIndex.js';
@@ -34,16 +33,10 @@ export function ChatMessageList({
   controller,
   onQuote,
   latestRequest,
-  selectionMode = false,
-  selectedIDs,
-  onToggleSelect,
 }: {
   controller: ChatController;
   onQuote: (quote: MessageQuote) => void;
   latestRequest: number;
-  selectionMode?: boolean;
-  selectedIDs?: ReadonlySet<string>;
-  onToggleSelect?: (messageID: string, shiftKey: boolean) => void;
 }) {
   const list = useRef<VirtuosoHandle>(null);
   const viewport = useRef<HTMLDivElement | null>(null);
@@ -52,8 +45,6 @@ export function ChatMessageList({
   const browsingHistory = useRef(false);
   const atBottomRef = useRef(true);
   const isScrollingRef = useRef(false);
-  const bottomScrollFrame = useRef(0);
-  const bottomScrollActive = useRef(false);
   const trimTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const scheduleTrimRef = useRef<() => void>(() => {});
   const navigation = useRef<MessageQuote | null>(null);
@@ -104,7 +95,6 @@ export function ChatMessageList({
         (viewportShrank || footerGrew) &&
         atBottomRef.current &&
         !isScrollingRef.current &&
-        !bottomScrollActive.current &&
         !navigation.current
       ) {
         scroller.scrollTop = scroller.scrollHeight;
@@ -116,34 +106,19 @@ export function ChatMessageList({
     viewportObserver.current = observer;
   }, []);
 
-  // 停在最新底部且滚动与回底动画均静止后，延后回收头部超出窗口的旧历史及对应展开记录。
+  // 停在最新底部且滚动静止后，延后回收头部超出窗口的旧历史及对应展开记录。
   const scheduleTrim = useCallback(() => {
     clearTimeout(trimTimer.current);
-    if (
-      !atBottomRef.current ||
-      isScrollingRef.current ||
-      bottomScrollActive.current ||
-      selectionMode ||
-      navigatingQuote ||
-      pinOlderHistory ||
-      controller.loadingHistory ||
-      controller.messages.length <= latestMessageWindow
-    ) {
-      return;
-    }
+    const canTrim = () =>
+      atBottomRef.current &&
+      !isScrollingRef.current &&
+      !navigatingQuote &&
+      !pinOlderHistory &&
+      !controller.loadingHistory &&
+      controller.messages.length > latestMessageWindow;
+    if (!canTrim()) return;
     trimTimer.current = setTimeout(() => {
-      if (
-        !atBottomRef.current ||
-        isScrollingRef.current ||
-        bottomScrollActive.current ||
-        selectionMode ||
-        navigatingQuote ||
-        pinOlderHistory ||
-        controller.loadingHistory ||
-        controller.messages.length <= latestMessageWindow
-      ) {
-        return;
-      }
+      if (!canTrim()) return;
       const removed = controller.trimOlderMessages(latestMessageWindow);
       if (removed === 0) return;
       const keptIDs = new Set(controller.messages.map((message) => message.id));
@@ -158,7 +133,7 @@ export function ChatMessageList({
         return changed ? next : current;
       });
     }, 180);
-  }, [controller, controller.loadingHistory, navigatingQuote, pinOlderHistory, selectionMode]);
+  }, [controller, controller.loadingHistory, navigatingQuote, pinOlderHistory]);
   scheduleTrimRef.current = scheduleTrim;
 
   useEffect(() => {
@@ -168,7 +143,6 @@ export function ChatMessageList({
 
   // 离开底部后解除“贴底手动翻页”保护，后续回到底部时即可回收之前翻出的旧历史。
   const handleAtBottomChange = useCallback((nextAtBottom: boolean) => {
-    if (bottomScrollActive.current && !nextAtBottom) return;
     atBottomRef.current = nextAtBottom;
     setAtBottom(nextAtBottom);
     if (!nextAtBottom) setPinOlderHistory(false);
@@ -181,14 +155,9 @@ export function ChatMessageList({
     if (!scrolling) scheduleTrimRef.current();
   }, []);
 
-  // 用户主动滚轮、触摸或按键时立即接管滚动控制，中止进行中的平滑回底动画。
+  // 用户主动滚轮、触摸或按键时标记正在浏览历史，允许顶部的向上加载触发。
   const handleUserScrollStart = useCallback(() => {
     browsingHistory.current = true;
-    if (bottomScrollFrame.current !== 0) {
-      cancelAnimationFrame(bottomScrollFrame.current);
-      bottomScrollFrame.current = 0;
-      bottomScrollActive.current = false;
-    }
   }, []);
 
   // 屏幕足够高时点击翻页可能仍在底部阈值内，临时锁定避免刚拉回的历史被立即裁掉。
@@ -201,73 +170,23 @@ export function ChatMessageList({
     if (browsingHistory.current) loadOlderHistory();
   }, [loadOlderHistory]);
 
-  // animateToBottom 使用单段 ease-out 动画滑向实时页底：远距离先跳到贴近底部的缓冲区间再平滑落底，避免沿途挂载大量旧消息或两段式停顿。
-  const animateToBottom = useCallback(
-    (allowJumpFromFar: boolean) => {
-      cancelAnimationFrame(bottomScrollFrame.current);
-      bottomScrollFrame.current = 0;
-      if (controller.messages.length === 0) return;
-
-      const element = viewport.current;
-      if (!element || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        bottomScrollActive.current = false;
-        atBottomRef.current = true;
-        setAtBottom(true);
-        list.current?.scrollToIndex(initialBottomLocation);
-        requestAnimationFrame(() => {
-          const scroller = viewport.current;
-          if (scroller && !browsingHistory.current && !navigation.current) {
-            scroller.scrollTop = scroller.scrollHeight;
-          }
-          scheduleTrimRef.current();
-        });
-        return;
-      }
-
-      bottomScrollActive.current = true;
-      atBottomRef.current = true;
-      setAtBottom(true);
-
-      const initialMaxTop = Math.max(0, element.scrollHeight - element.clientHeight);
-      const initialDistance = initialMaxTop - element.scrollTop;
-      if (allowJumpFromFar && initialDistance > element.clientHeight * 1.5) {
-        const glideSpan = Math.min(element.clientHeight * 0.85, 640);
-        element.scrollTop = Math.max(0, initialMaxTop - glideSpan);
-      }
-
-      const startTop = element.scrollTop;
-      const durationMs = allowJumpFromFar ? 260 : 220;
-      const startTime = performance.now();
-
-      const step = (now: number) => {
-        if (!viewport.current || browsingHistory.current || navigation.current) {
-          bottomScrollFrame.current = 0;
-          bottomScrollActive.current = false;
-          scheduleTrimRef.current();
-          return;
-        }
-        const liveTarget = Math.max(0, element.scrollHeight - element.clientHeight);
-        const progress = Math.min(1, (now - startTime) / durationMs);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        element.scrollTop = startTop + (liveTarget - startTop) * eased;
-        if (progress < 1) {
-          bottomScrollFrame.current = requestAnimationFrame(step);
-        } else {
-          bottomScrollFrame.current = requestAnimationFrame(() => {
-            bottomScrollFrame.current = 0;
-            bottomScrollActive.current = false;
-            if (!browsingHistory.current && !navigation.current) {
-              element.scrollTop = element.scrollHeight;
-            }
-            scheduleTrimRef.current();
-          });
-        }
-      };
-
-      bottomScrollFrame.current = requestAnimationFrame(step);
-    },
-    [controller],
-  );
+  // scrollToEnd 用浏览器原生滚动滑向最新消息底部；距底超过两屏时先跳到末尾范围，避免沿途挂载大量旧消息。
+  const scrollToEnd = useCallback(() => {
+    const element = viewport.current;
+    if (!element || controller.messages.length === 0) return;
+    const behavior: ScrollBehavior = matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 'auto'
+      : 'smooth';
+    const distance = element.scrollHeight - element.clientHeight - element.scrollTop;
+    if (distance > element.clientHeight * 2) {
+      list.current?.scrollToIndex(initialBottomLocation);
+      requestAnimationFrame(() => {
+        viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior });
+      });
+    } else {
+      element.scrollTo({ top: element.scrollHeight, behavior });
+    }
+  }, [controller]);
 
   // 回到底部按钮取消尚在翻页或等待高亮的引用，并平滑滑向最新消息底部。
   const scrollToBottom = useCallback(() => {
@@ -277,11 +196,11 @@ export function ChatMessageList({
     setPinOlderHistory(false);
     setQuoteTarget(null);
     clearHighlight.current();
-    animateToBottom(true);
+    scrollToEnd();
     if (document.activeElement?.classList.contains('scroll-to-bottom')) {
       viewport.current?.focus({ preventScroll: true });
     }
-  }, [animateToBottom]);
+  }, [scrollToEnd]);
 
   // 人已经贴在底部时，新消息插入或思考气泡出现自动平滑跟到底部；正在看更早消息时保持原地不动。
   const tailMessageID = messages.at(-1)?.id;
@@ -296,16 +215,11 @@ export function ChatMessageList({
 
     const tailAppended = Boolean(previousTail && tailMessageID && tailMessageID !== previousTail);
     const footerAppeared = footerActive && !previousFooter;
-    if (
-      (tailAppended || footerAppeared) &&
-      atBottomRef.current &&
-      !navigation.current &&
-      !selectionMode
-    ) {
+    if ((tailAppended || footerAppeared) && atBottomRef.current && !navigation.current) {
       browsingHistory.current = false;
-      animateToBottom(false);
+      scrollToEnd();
     }
-  }, [tailMessageID, footerActive, selectionMode, animateToBottom]);
+  }, [tailMessageID, footerActive, scrollToEnd]);
 
   // 从搜索返回最新聊天时，复用回底按钮的行为。
   useEffect(() => {
@@ -320,7 +234,6 @@ export function ChatMessageList({
       navigation.current = null;
       clearHighlight.current();
       clearTimeout(trimTimer.current);
-      cancelAnimationFrame(bottomScrollFrame.current);
       viewportObserver.current?.disconnect();
     },
     [],
@@ -332,9 +245,6 @@ export function ChatMessageList({
       const target = { ...quote };
       navigation.current = target;
       browsingHistory.current = false;
-      cancelAnimationFrame(bottomScrollFrame.current);
-      bottomScrollFrame.current = 0;
-      bottomScrollActive.current = false;
       setNavigatingQuote(true);
       clearHighlight.current();
       setQuoteError('');
@@ -391,7 +301,7 @@ export function ChatMessageList({
     });
   }, [controller, quoteTarget]);
 
-  // 展开状态按消息 ID 记录；收起长消息时的滚动锚定由 CollapsibleMessage 通过 handleScrollBy 同帧闭环完成。
+  // 展开状态按消息 ID 记录；收起长消息时的滚动锚定由 CollapsibleMessage 通过 handleScrollBy 同步完成。
   const handleExpandedChange = useCallback((messageID: string, expanded: boolean) => {
     setExpandedMessages((current) => {
       if (current.has(messageID) === expanded) return current;
@@ -440,7 +350,13 @@ export function ChatMessageList({
       ),
       footer:
         controller.connected && controller.mainThinking ? (
-          <AssistantWorkingStatus />
+          <div className="thinking" role="status" aria-label="aether 正在处理">
+            <div className="thinking-dots" aria-hidden="true">
+              <span className="dot" />
+              <span className="dot dot-two" />
+              <span className="dot dot-three" />
+            </div>
+          </div>
         ) : controller.mainFailed ? (
           <p className="error" role="alert">
             回复失败，请再发一条消息重试。
@@ -465,69 +381,22 @@ export function ChatMessageList({
     (itemIndex: number, message: ChatMessage) => {
       const index = itemIndex - firstItemIndex;
       const { showTime, joinedWithPrevious, endsGroup } = getMessageGroupState(messages, index);
-      const entry = (
-        <ChatMessageEntry
-          message={message}
-          showTime={showTime}
-          joinedWithPrevious={joinedWithPrevious}
-          endsGroup={endsGroup}
-          expanded={expandedMessages.has(message.id)}
-          onExpandedChange={handleExpandedChange}
-          onQuoteNavigate={handleQuoteNavigate}
-          onScrollBy={handleScrollBy}
-        />
-      );
-      if (!selectionMode) {
-        return (
-          <div className="chat-list-row" data-chat-row={message.id}>
-            {entry}
-          </div>
-        );
-      }
-      const selected = selectedIDs?.has(message.id) === true;
       return (
-        <div
-          className={`chat-list-row is-selectable${selected ? ' is-selected' : ''}`}
-          data-chat-row={message.id}
-          onClick={(event) => {
-            if (event.target instanceof Element && event.target.closest('button, a, dialog')) {
-              return;
-            }
-            onToggleSelect?.(message.id, event.shiftKey);
-          }}
-        >
-          <button
-            type="button"
-            className="share-select-check"
-            role="checkbox"
-            aria-checked={selected}
-            aria-label={selected ? '取消选中此消息' : '选中此消息用于分享'}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleSelect?.(message.id, event.shiftKey);
-            }}
-          >
-            {selected && (
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m5 12.5 4.5 4.5L19 7.5" />
-              </svg>
-            )}
-          </button>
-          <div className="chat-row-content">{entry}</div>
+        <div className="chat-list-row" data-chat-row={message.id}>
+          <ChatMessageEntry
+            message={message}
+            showTime={showTime}
+            joinedWithPrevious={joinedWithPrevious}
+            endsGroup={endsGroup}
+            expanded={expandedMessages.has(message.id)}
+            onExpandedChange={handleExpandedChange}
+            onQuoteNavigate={handleQuoteNavigate}
+            onScrollBy={handleScrollBy}
+          />
         </div>
       );
     },
-    [
-      expandedMessages,
-      firstItemIndex,
-      handleExpandedChange,
-      handleQuoteNavigate,
-      handleScrollBy,
-      messages,
-      onToggleSelect,
-      selectedIDs,
-      selectionMode,
-    ],
+    [expandedMessages, firstItemIndex, handleExpandedChange, handleQuoteNavigate, handleScrollBy, messages],
   );
 
   return (
@@ -555,7 +424,7 @@ export function ChatMessageList({
         startReached={handleStartReached}
         itemContent={renderItemContent}
       />
-      {!selectionMode && <QuoteSelection container={viewport} onQuote={onQuote} />}
+      <QuoteSelection container={viewport} onQuote={onQuote} />
       <button
         type="button"
         className={`scroll-to-bottom${atBottom ? ' is-hidden' : ''}`}

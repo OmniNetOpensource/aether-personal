@@ -1,9 +1,10 @@
 // 本文件提供聊天内的个人模型设置浮层，支持搜索各渠道模型并保存 Main 与 Subagent 各自的选择。
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { ChatController } from '../../lib/ChatController.js';
+import { getModelSettings, saveModelSettings } from '../../lib/modelSettings.js';
 import type { ModelSelection, ModelSettings } from '../../lib/modelSettings.js';
+import { ModalDialog } from '../ModalDialog.js';
 import './chatModels.css';
 
 // modelRoles 定义两个选择器的顺序与各角色的跟随规则。
@@ -14,13 +15,12 @@ const modelRoles = [
 
 // ChatModelSettings 打开时读取当前配置，成功保存后返回聊天。
 export function ChatModelSettings({
-  controller,
+  token,
   onClose,
 }: {
-  controller: ChatController;
+  token: string;
   onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [draft, setDraft] = useState<ModelSelection | null>(null);
   const [search, setSearch] = useState('');
@@ -28,18 +28,10 @@ export function ChatModelSettings({
   const [saving, setSaving] = useState(false);
   const [reload, setReload] = useState(0);
 
-  // 原生对话框阻止背景交互，避免设置浮层影响聊天位置与草稿。
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
-    return () => element?.close();
-  }, []);
-
   // 每次打开或手动重载都读取服务端版本；关闭后取消未完成的读取。
   useEffect(() => {
     const request = new AbortController();
-    controller
-      .getModelSettings(request.signal)
+    getModelSettings(token, request.signal)
       .then((loaded) => {
         if (request.signal.aborted) return;
         setSettings(loaded);
@@ -49,7 +41,7 @@ export function ChatModelSettings({
         if (!request.signal.aborted) setError('暂时无法读取模型设置，请重新加载。');
       });
     return () => request.abort();
-  }, [controller, reload]);
+  }, [token, reload]);
 
   // 重新加载替换整份草稿，适用于另一台设备已经保存过新版本的情况。
   function reloadSettings() {
@@ -59,12 +51,6 @@ export function ChatModelSettings({
     setReload((value) => value + 1);
   }
 
-  // 先关闭原生模态，再由聊天页把键盘焦点交还给账号按钮。
-  function close() {
-    dialog.current?.close();
-    onClose();
-  }
-
   // 保存完成后才关闭，失败时保留当前输入供用户调整或重试。
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,8 +58,8 @@ export function ChatModelSettings({
     setSaving(true);
     setError('');
     try {
-      await controller.saveModelSettings(draft);
-      close();
+      await saveModelSettings(token, draft);
+      onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '暂时无法保存，请稍后重试。');
     } finally {
@@ -86,18 +72,16 @@ export function ChatModelSettings({
     settings && draft && modelRoles.some(({ field }) => draft[field] !== settings.selection[field]);
 
   return (
-    <dialog
-      ref={dialog}
+    <ModalDialog
+      canClose={!saving}
+      closeOnBackdrop={false}
       className="chat-model-dialog"
-      aria-labelledby="chat-model-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!saving) close();
-      }}
+      ariaLabelledBy="chat-model-title"
+      onClose={onClose}
     >
       <header className="chat-model-header">
         <h2 id="chat-model-title">模型设置</h2>
-        <button type="button" disabled={saving} onClick={close}>
+        <button type="button" disabled={saving} onClick={onClose}>
           关闭
         </button>
       </header>
@@ -169,6 +153,6 @@ export function ChatModelSettings({
           {error}
         </p>
       )}
-    </dialog>
+    </ModalDialog>
   );
 }
