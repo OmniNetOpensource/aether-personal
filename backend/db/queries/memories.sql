@@ -1,4 +1,8 @@
--- 本文件按用户保存虚拟记忆文件，只有 memory 工具读取和编辑这些正文，请求组装不自动加载记忆。
+-- 本文件按用户保存虚拟记忆文件，供主代理、只读子代理、记忆查看页与远程 MCP 共用，请求组装不自动加载记忆。
+
+-- name: LockUserMemory :exec
+-- 事务内持有，提交时释放：串行化同一用户来自主代理与外部 MCP 的记忆修改，防读改写覆盖。
+SELECT pg_advisory_xact_lock(hashtextextended('memory:' || sqlc.arg(user_id)::uuid::text, 0));
 
 -- name: EnsureMemoryRoot :exec
 INSERT INTO memory_files (user_id, path, content)

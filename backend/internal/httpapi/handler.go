@@ -1,4 +1,4 @@
-// 本文件是 httpapi 包的总入口：创建 server 并注册健康检查、公开消息分享、管理与 WebSocket 等全部 HTTP 路由。
+// 本文件是 httpapi 包的总入口：创建 server 并注册健康检查、公开消息分享、远程记忆 MCP 与 OAuth 2.1、管理与 WebSocket 等全部 HTTP 路由。
 
 package httpapi
 
@@ -68,6 +68,24 @@ func NewHandler(wsCtx, drainCtx context.Context, databasePool *pgxpool.Pool, red
 	mux.HandleFunc("PUT /model-settings", s.requireChatUser(s.saveUserModels))
 	mux.HandleFunc("GET /memory-files", s.requireChatUser(s.listMemoryFiles))
 	mux.HandleFunc("GET /memory-files/content", s.requireChatUser(s.getMemoryFileContent))
+	// 显式声明方法以与下方 GET / 静态资源兜底共存于 Go ServeMux，避免启动期路由冲突。
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.oauthProtectedResourceMetadata)
+	mux.HandleFunc("OPTIONS /.well-known/oauth-protected-resource", s.oauthProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp/memory", s.oauthProtectedResourceMetadata)
+	mux.HandleFunc("OPTIONS /.well-known/oauth-protected-resource/mcp/memory", s.oauthProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.oauthAuthorizationServerMetadata)
+	mux.HandleFunc("OPTIONS /.well-known/oauth-authorization-server", s.oauthAuthorizationServerMetadata)
+	mux.HandleFunc("POST /oauth/register", s.oauthRegisterClient)
+	mux.HandleFunc("GET /oauth/authorize/context", s.oauthAuthorizeContext)
+	mux.HandleFunc("POST /oauth/authorize/decision", s.requireChatUser(s.oauthAuthorizeDecision))
+	mux.HandleFunc("POST /oauth/token", s.oauthToken)
+	mux.HandleFunc("POST /oauth/revoke", s.oauthRevoke)
+	mux.HandleFunc("GET /oauth/connections", s.requireChatUser(s.listOAuthConnections))
+	mux.HandleFunc("DELETE /oauth/connections/{id}", s.requireChatUser(s.deleteOAuthConnection))
+	memoryMCP := s.newMemoryMCPHandler()
+	mux.Handle("GET /mcp/memory", memoryMCP)
+	mux.Handle("POST /mcp/memory", memoryMCP)
+	mux.Handle("DELETE /mcp/memory", memoryMCP)
 	mux.Handle("GET /admin/quotas", s.requireAdmin(http.HandlerFunc(s.adminQuotas)))
 	mux.Handle("GET /admin/services", s.requireAdmin(http.HandlerFunc(s.adminServices)))
 	mux.Handle("PUT /admin/services/{service}", s.requireAdmin(http.HandlerFunc(s.updateAdminService)))
@@ -78,6 +96,7 @@ func NewHandler(wsCtx, drainCtx context.Context, databasePool *pgxpool.Pool, red
 	mux.HandleFunc("POST /files", s.uploadFile)
 	if appConfig.FrontendDir != "" {
 		mux.HandleFunc("GET /memories", s.serveFrontendShell)
+		mux.HandleFunc("GET /oauth/authorize", s.serveFrontendShell)
 		mux.HandleFunc("GET /s/{token}", s.serveFrontendShell)
 		mux.Handle("GET /", http.FileServer(http.Dir(appConfig.FrontendDir)))
 	}

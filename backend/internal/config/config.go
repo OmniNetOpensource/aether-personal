@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ type Config struct {
 	TurnstileSiteKey     string
 	TurnstileSecretKey   string
 	TurnstileHostname    string
+	PublicOrigin         string
 	AppEnv               string
 	Port                 string
 	DatabaseURL          string
@@ -115,6 +117,19 @@ func Load() (Config, error) {
 		port = "8080"
 	}
 
+	// MCP OAuth 发现文档与授权回调地址依赖对外公网源地址；dev 默认使用本机端口，prod 留空时不阻断主服务启动。
+	publicOrigin := strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_ORIGIN")), "/")
+	if publicOrigin == "" && appEnv == "dev" {
+		publicOrigin = "http://localhost:" + port
+	}
+	if publicOrigin != "" {
+		parsed, err := url.Parse(publicOrigin)
+		validScheme := parsed != nil && (parsed.Scheme == "https" || (appEnv == "dev" && parsed.Scheme == "http"))
+		if err != nil || !validScheme || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("invalid PUBLIC_ORIGIN %q", publicOrigin)
+		}
+	}
+
 	// 缺少服务 Key 不阻止管理员进入看板；只有解密所需的部署主密钥必须先存在。
 	serviceEncryptionKey, err := base64.StdEncoding.DecodeString(os.Getenv("SERVICE_ENCRYPTION_KEY"))
 	if err != nil || len(serviceEncryptionKey) != 32 {
@@ -147,6 +162,7 @@ func Load() (Config, error) {
 		TurnstileSiteKey:     strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
 		TurnstileSecretKey:   strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
 		TurnstileHostname:    strings.ToLower(strings.TrimSpace(os.Getenv("TURNSTILE_HOSTNAME"))),
+		PublicOrigin:         publicOrigin,
 		Port:                 port,
 		DatabaseURL:          databaseURL,
 		RedisURL:             redisURL,

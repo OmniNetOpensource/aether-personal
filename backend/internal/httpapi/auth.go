@@ -61,16 +61,21 @@ func (s *server) verifyLoginCodeByEmail(ctx context.Context, rawEmail string, co
 	return token, failure
 }
 
+// generateOpaqueToken 生成 32 字节密码学随机令牌及其 SHA-256 哈希，数据库只保存哈希值。
+func generateOpaqueToken() (string, [32]byte) {
+	tokenBytes := make([]byte, 32)
+	rand.Read(tokenBytes)
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	return token, sha256.Sum256([]byte(token))
+}
+
 // createUserSession 使用调用方的查询事务，验证码登录与开发登录共用签发逻辑。
 func (s *server) createUserSession(ctx context.Context, queries *database.Queries, email string) (string, error) {
 	userID, err := queries.UpsertUserByEmail(ctx, email)
 	if err != nil {
 		return "", err
 	}
-	tokenBytes := make([]byte, 32)
-	rand.Read(tokenBytes)
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	tokenHash := sha256.Sum256([]byte(token))
+	token, tokenHash := generateOpaqueToken()
 	if err := queries.CreateSession(ctx, database.CreateSessionParams{
 		UserID:    userID,
 		TokenHash: tokenHash[:],

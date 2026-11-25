@@ -100,6 +100,39 @@ type ModelSetting struct {
 	HotCompactAtTokens     int32
 }
 
+type OauthAuthorizationCode struct {
+	CodeHash      []byte
+	ClientID      uuid.UUID
+	UserID        uuid.UUID
+	RedirectUri   string
+	CodeChallenge string
+	Scope         string
+	Resource      string
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+}
+
+type OauthClient struct {
+	ID           uuid.UUID
+	ClientName   string
+	RedirectUris []string
+	CreatedAt    time.Time
+}
+
+type OauthToken struct {
+	ID               uuid.UUID
+	ClientID         uuid.UUID
+	UserID           uuid.UUID
+	Scope            string
+	Resource         string
+	AccessTokenHash  []byte
+	AccessExpiresAt  time.Time
+	RefreshTokenHash []byte
+	RefreshExpiresAt time.Time
+	CreatedAt        time.Time
+	LastUsedAt       *time.Time
+}
+
 type SandboxWorkspace struct {
 	UserID                 uuid.UUID
 	ServerAddr             string

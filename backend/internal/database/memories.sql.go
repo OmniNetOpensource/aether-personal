@@ -43,13 +43,11 @@ func (q *Queries) DeleteMemoryPath(ctx context.Context, arg DeleteMemoryPathPara
 }
 
 const ensureMemoryRoot = `-- name: EnsureMemoryRoot :exec
-
 INSERT INTO memory_files (user_id, path, content)
 VALUES ($1, '/memories/memory.md', E'# Memory\n\n## 核心约定\n\n## 主题索引\n')
 ON CONFLICT (user_id, path) DO NOTHING
 `
 
-// 本文件按用户保存虚拟记忆文件，只有 memory 工具读取和编辑这些正文，请求组装不自动加载记忆。
 func (q *Queries) EnsureMemoryRoot(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, ensureMemoryRoot, userID)
 	return err
@@ -159,6 +157,18 @@ func (q *Queries) ListUserMemoryFiles(ctx context.Context, userID uuid.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockUserMemory = `-- name: LockUserMemory :exec
+
+SELECT pg_advisory_xact_lock(hashtextextended('memory:' || $1::uuid::text, 0))
+`
+
+// 本文件按用户保存虚拟记忆文件，供主代理、只读子代理、记忆查看页与远程 MCP 共用，请求组装不自动加载记忆。
+// 事务内持有，提交时释放：串行化同一用户来自主代理与外部 MCP 的记忆修改，防读改写覆盖。
+func (q *Queries) LockUserMemory(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockUserMemory, userID)
+	return err
 }
 
 const renameMemoryPath = `-- name: RenameMemoryPath :exec
