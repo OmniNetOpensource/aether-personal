@@ -147,6 +147,7 @@ export function AdminApp() {
       const timelineQuery = buildQuery();
       const snapshotQuery = new URLSearchParams(windowRef.current ?? {});
       if (user) snapshotQuery.set('user_id', user);
+      if (user && subagent) snapshotQuery.set('subagent_id', subagent);
       const [loadedSnapshot, list] = await Promise.all([
         api<Snapshot>(`/admin/snapshot?${snapshotQuery}`, { signal: abort.signal }),
         user ? api<Timeline>(`/admin/timeline?${timelineQuery}`, { signal: abort.signal }) : null,

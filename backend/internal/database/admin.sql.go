@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 const getAdminAgentStatus = `-- name: GetAdminAgentStatus :one
@@ -35,6 +36,73 @@ func (q *Queries) GetAdminAgentStatus(ctx context.Context, selectedUserID uuid.U
 	row := q.db.QueryRow(ctx, getAdminAgentStatus, selectedUserID)
 	var i GetAdminAgentStatusRow
 	err := row.Scan(&i.UserID, &i.Email, &i.Status)
+	return i, err
+}
+
+const getAdminStepUsage = `-- name: GetAdminStepUsage :one
+
+SELECT
+	count(*)::bigint AS steps_count,
+	count(*) FILTER (WHERE s.purpose IN ('compact', 'hot_compact'))::bigint AS compact_steps,
+	count(*) FILTER (WHERE s.error IS NOT NULL)::bigint AS failed_steps,
+	coalesce(sum(s.input_tokens), 0)::bigint AS input_tokens,
+	coalesce(sum(s.cached_input_tokens), 0)::bigint AS cached_input_tokens,
+	coalesce(sum(s.input_tokens) FILTER (WHERE s.cached_input_tokens IS NOT NULL), 0)::bigint AS cached_measured_input_tokens,
+	count(*) FILTER (WHERE s.cached_input_tokens IS NOT NULL)::bigint AS cached_steps,
+	coalesce(sum(s.output_tokens), 0)::bigint AS output_tokens,
+	coalesce(sum(s.cost), 0)::numeric AS cost,
+	count(*) FILTER (WHERE s.cost IS NOT NULL)::bigint AS cost_steps
+FROM steps s
+WHERE s.started_at >= $1::timestamptz
+	AND s.started_at < $2::timestamptz
+	AND (
+		$3::uuid IS NULL
+		OR (s.user_id = $3::uuid AND s.subagent_id IS NOT DISTINCT FROM $4::uuid)
+	)
+`
+
+type GetAdminStepUsageParams struct {
+	FromAt     time.Time
+	ToAt       time.Time
+	UserID     *uuid.UUID
+	SubagentID *uuid.UUID
+}
+
+type GetAdminStepUsageRow struct {
+	StepsCount                int64
+	CompactSteps              int64
+	FailedSteps               int64
+	InputTokens               int64
+	CachedInputTokens         int64
+	CachedMeasuredInputTokens int64
+	CachedSteps               int64
+	OutputTokens              int64
+	Cost                      decimal.Decimal
+	CostSteps                 int64
+}
+
+// 本文件是管理看板的查询集合：提供时间线筛选所需的用户列表、步骤用量汇总、Main 与 Subagent 状态，按游标读取带单步用量的消息时间线，并读取单条消息详情（sqlc 据此生成代码）。
+// 汇总筛选窗口内的步骤数、输入/缓存/输出 Token 与费用；未选用户时汇总全站，选用户后按 Main 或指定 Subagent 隔离。
+func (q *Queries) GetAdminStepUsage(ctx context.Context, arg GetAdminStepUsageParams) (GetAdminStepUsageRow, error) {
+	row := q.db.QueryRow(ctx, getAdminStepUsage,
+		arg.FromAt,
+		arg.ToAt,
+		arg.UserID,
+		arg.SubagentID,
+	)
+	var i GetAdminStepUsageRow
+	err := row.Scan(
+		&i.StepsCount,
+		&i.CompactSteps,
+		&i.FailedSteps,
+		&i.InputTokens,
+		&i.CachedInputTokens,
+		&i.CachedMeasuredInputTokens,
+		&i.CachedSteps,
+		&i.OutputTokens,
+		&i.Cost,
+		&i.CostSteps,
+	)
 	return i, err
 }
 
@@ -105,12 +173,17 @@ WITH user_messages AS MATERIALIZED (
 		AND m.subagent_id IS NOT DISTINCT FROM $8::uuid
 		AND NOT m.generating
 )
-SELECT id, sequence::bigint AS sequence, created_at AS at, order_at::timestamptz AS order_at, role, content, sender, is_summary
-FROM user_messages
-WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+SELECT m.id, m.sequence::bigint AS sequence, m.created_at AS at, m.order_at::timestamptz AS order_at,
+	m.role, m.content, m.sender, m.is_summary,
+	s.model AS step_model, s.purpose AS step_purpose,
+	s.input_tokens AS step_input_tokens, s.cached_input_tokens AS step_cached_input_tokens,
+	s.output_tokens AS step_output_tokens, s.cost AS step_cost
+FROM user_messages m
+LEFT JOIN steps s ON (m.role = 'assistant' OR m.is_summary) AND s.id = m.step_id
+WHERE m.created_at >= $1::timestamptz AND m.created_at < $2::timestamptz
 	AND ($3::timestamptz IS NULL
-		OR (order_at, sequence, id) < ($3::timestamptz, $4::bigint, $5::uuid))
-ORDER BY order_at DESC, sequence DESC, id DESC LIMIT $6::integer
+		OR (m.order_at, m.sequence, m.id) < ($3::timestamptz, $4::bigint, $5::uuid))
+ORDER BY m.order_at DESC, m.sequence DESC, m.id DESC LIMIT $6::integer
 `
 
 type ListAdminTimelineParams struct {
@@ -125,17 +198,23 @@ type ListAdminTimelineParams struct {
 }
 
 type ListAdminTimelineRow struct {
-	ID        uuid.UUID
-	Sequence  int64
-	At        time.Time
-	OrderAt   time.Time
-	Role      string
-	Content   []byte
-	Sender    *string
-	IsSummary bool
+	ID                    uuid.UUID
+	Sequence              int64
+	At                    time.Time
+	OrderAt               time.Time
+	Role                  string
+	Content               []byte
+	Sender                *string
+	IsSummary             bool
+	StepModel             *string
+	StepPurpose           *string
+	StepInputTokens       *int32
+	StepCachedInputTokens *int32
+	StepOutputTokens      *int32
+	StepCost              *decimal.Decimal
 }
 
-// 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息时间线，使用单调不回退的 order_at 与序号游标翻页。
+// 按 (user_id, subagent_id) 隔离读取指定 Agent 的消息时间线，关联模型回复与压缩摘要对应的步骤用量，使用单调不回退的 order_at 与序号游标翻页。
 func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelineParams) ([]ListAdminTimelineRow, error) {
 	rows, err := q.db.Query(ctx, listAdminTimeline,
 		arg.FromAt,
@@ -163,6 +242,12 @@ func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelinePa
 			&i.Content,
 			&i.Sender,
 			&i.IsSummary,
+			&i.StepModel,
+			&i.StepPurpose,
+			&i.StepInputTokens,
+			&i.StepCachedInputTokens,
+			&i.StepOutputTokens,
+			&i.StepCost,
 		); err != nil {
 			return nil, err
 		}
@@ -175,7 +260,6 @@ func (q *Queries) ListAdminTimeline(ctx context.Context, arg ListAdminTimelinePa
 }
 
 const listAdminUsers = `-- name: ListAdminUsers :many
-
 SELECT u.id, u.email, u.created_at
 FROM users u
 WHERE ($1::uuid IS NULL OR u.id = $1::uuid)
@@ -189,7 +273,6 @@ type ListAdminUsersRow struct {
 	CreatedAt time.Time
 }
 
-// 本文件是管理看板的查询集合：提供时间线筛选所需的用户列表、Main 与 Subagent 状态，按游标读取指定 Agent 的消息时间线，并读取单条消息详情（sqlc 据此生成代码）。
 // 列出用户供看板下拉框选择，按创建时间倒序排列。
 func (q *Queries) ListAdminUsers(ctx context.Context, userID *uuid.UUID) ([]ListAdminUsersRow, error) {
 	rows, err := q.db.Query(ctx, listAdminUsers, userID)

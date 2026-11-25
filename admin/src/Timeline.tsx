@@ -1,9 +1,14 @@
-// 本文件是管理看板的运行过程页：按时间从新到旧渲染 Main 或指定后台 Subagent 的输入、推理与工具调用，并支持在两者间一键跳转。
+// 本文件是管理看板的运行过程页：顶部汇总筛选窗口内的步骤 Token、缓存命中率与费用，下方按时间从新到旧渲染 Main 或指定后台 Subagent 的输入、推理、工具调用与单步消耗。
 
 import type { ReactNode } from 'react';
 import {
+  formatCompact,
+  formatMoney,
+  formatNumber,
   formatTime,
+  stepUsageMeta,
   type Snapshot,
+  type SnapshotUsage,
   type Timeline,
   type TimelineItem,
 } from './api.js';
@@ -33,14 +38,67 @@ function extractSubagentID(raw: string | undefined): string | null {
   return uuidPattern.test(candidate) ? candidate : null;
 }
 
+// UsageSummary 展示当前筛选范围的步骤数、输入 Token、缓存命中率、输出 Token 与总费用。
+function UsageSummary({ usage }: { usage?: SnapshotUsage }) {
+  if (!usage) return null;
+  const hitRate =
+    usage.cached_steps > 0 && usage.cached_measured_input_tokens > 0
+      ? `${((usage.cached_input_tokens / usage.cached_measured_input_tokens) * 100).toFixed(1)}%`
+      : '—';
+  const cacheNote =
+    usage.cached_steps > 0
+      ? `已缓存 ${formatCompact(usage.cached_input_tokens)} · 覆盖 ${formatNumber(usage.cached_steps)} 步`
+      : '暂无缓存统计';
+
+  return (
+    <section className="metrics" aria-label="用量汇总">
+      <div className="metric-card">
+        <span className="metric-label">步骤数</span>
+        <strong className="metric-value">{formatNumber(usage.steps_count)}</strong>
+        <span className="metric-note">{`含压缩 ${formatNumber(usage.compact_steps)} · 失败 ${formatNumber(usage.failed_steps)}`}</span>
+      </div>
+      <div className="metric-card">
+        <span className="metric-label">输入 Token</span>
+        <strong className="metric-value">{formatCompact(usage.input_tokens)}</strong>
+        <span className="metric-note">{`${formatNumber(usage.input_tokens)} Token`}</span>
+      </div>
+      <div className="metric-card">
+        <span className="metric-label">缓存命中率</span>
+        <strong className="metric-value">{hitRate}</strong>
+        <span className="metric-note">{cacheNote}</span>
+      </div>
+      <div className="metric-card">
+        <span className="metric-label">输出 Token</span>
+        <strong className="metric-value">{formatCompact(usage.output_tokens)}</strong>
+        <span className="metric-note">{`${formatNumber(usage.output_tokens)} Token`}</span>
+      </div>
+      <div className="metric-card cost-card">
+        <span className="metric-label">费用</span>
+        <strong className="metric-value">{formatMoney(usage.cost, true)}</strong>
+        <span className="metric-note">{`已计费 ${formatNumber(usage.cost_steps)} / ${formatNumber(usage.steps_count)} 步`}</span>
+      </div>
+    </section>
+  );
+}
+
 // TimelinePage 按时间降序渲染 Main 或指定 Subagent 的时间线：最新在上，工具结果并入对应的工具调用卡片。
 export function TimelinePage(props: TimelineViewProps) {
   const { user, subagent, snapshot, timeline } = props;
   if (!user)
-    return <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 与后台 Subagent 的运行过程。" />;
+    return (
+      <>
+        <UsageSummary usage={snapshot.usage} />
+        <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 与后台 Subagent 的运行过程。" />
+      </>
+    );
   const expectedKey = `${user}:${subagent}`;
   if (!timeline || timeline.key !== expectedKey)
-    return <div className="loading-card">正在读取运行过程…</div>;
+    return (
+      <>
+        <UsageSummary usage={snapshot.usage} />
+        <div className="loading-card">正在读取运行过程…</div>
+      </>
+    );
 
   const summary = snapshot.agents.items[0];
   const email = snapshot.users.items.find((item) => item.id === user)?.email ?? user;
@@ -61,53 +119,56 @@ export function TimelinePage(props: TimelineViewProps) {
     : '最新在上；按时间范围显示消息、推理与工具调用，点击 Subagent 相关卡片可深入查看子代理轨迹。';
 
   return (
-    <Panel
-      title={panelTitle}
-      description={panelDescription}
-      right={
-        subagent ? (
-          <div className="refresh-group">
-            {activeSubagent ? <Pill status={activeSubagent.status} /> : null}
-            <button type="button" className="button" onClick={() => props.onSelectSubagent('')}>
-              ← 返回 Main
-            </button>
-          </div>
-        ) : summary ? (
-          <Pill status={summary.status} />
-        ) : null
-      }
-    >
-      <ol className="timeline">
-        {timeline.system_prompt ? (
-          <TimelineNode kind="runtime" title={subagent ? 'Subagent 不可见指令' : '不可见指令'} at={null}>
-            <span className="timeline-meta">每次请求的第一条 user 消息，不落库，随部署生效</span>
-            <Foldable
-              storageKey={`${subagent || 'main'}:instructions`}
-              label="展开查看"
-              text={timeline.system_prompt.text}
-              openState={props.openState}
-            />
-          </TimelineNode>
-        ) : null}
-        {[...timeline.items].reverse().map((item, index) => {
-          if (item.role === 'assistant')
-            return <AssistantNode key={item.id ?? index} item={item} results={results} {...props} />;
-          if (item.role === 'tool') {
-            if (item.tool_call_id && paired.has(item.tool_call_id)) return null;
-            return <ToolResultNode key={item.id ?? index} item={item} {...props} />;
-          }
-          return <InputNode key={item.id ?? index} item={item} {...props} />;
-        })}
-        {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
-        {timeline.next_cursor ? (
-          <li className="timeline-more">
-            <button type="button" className="button" onClick={(event) => props.onLoadEarlier(event.currentTarget)}>
-              加载更早的记录
-            </button>
-          </li>
-        ) : null}
-      </ol>
-    </Panel>
+    <>
+      <UsageSummary usage={snapshot.usage} />
+      <Panel
+        title={panelTitle}
+        description={panelDescription}
+        right={
+          subagent ? (
+            <div className="refresh-group">
+              {activeSubagent ? <Pill status={activeSubagent.status} /> : null}
+              <button type="button" className="button" onClick={() => props.onSelectSubagent('')}>
+                ← 返回 Main
+              </button>
+            </div>
+          ) : summary ? (
+            <Pill status={summary.status} />
+          ) : null
+        }
+      >
+        <ol className="timeline">
+          {timeline.system_prompt ? (
+            <TimelineNode kind="runtime" title={subagent ? 'Subagent 不可见指令' : '不可见指令'} at={null}>
+              <span className="timeline-meta">每次请求的第一条 user 消息，不落库，随部署生效</span>
+              <Foldable
+                storageKey={`${subagent || 'main'}:instructions`}
+                label="展开查看"
+                text={timeline.system_prompt.text}
+                openState={props.openState}
+              />
+            </TimelineNode>
+          ) : null}
+          {[...timeline.items].reverse().map((item, index) => {
+            if (item.role === 'assistant')
+              return <AssistantNode key={item.id ?? index} item={item} results={results} {...props} />;
+            if (item.role === 'tool') {
+              if (item.tool_call_id && paired.has(item.tool_call_id)) return null;
+              return <ToolResultNode key={item.id ?? index} item={item} {...props} />;
+            }
+            return <InputNode key={item.id ?? index} item={item} {...props} />;
+          })}
+          {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
+          {timeline.next_cursor ? (
+            <li className="timeline-more">
+              <button type="button" className="button" onClick={(event) => props.onLoadEarlier(event.currentTarget)}>
+                加载更早的记录
+              </button>
+            </li>
+          ) : null}
+        </ol>
+      </Panel>
+    </>
   );
 }
 
@@ -192,12 +253,13 @@ function InputNode({
   };
   const triggerTitle = item.name ? triggerTitles[item.name] : undefined;
   const [kind, title] = item.is_summary
-    ? ['summary', '上下文压缩摘要']
+    ? ['summary', item.usage?.purpose === 'hot_compact' ? '热压缩摘要' : '上下文压缩摘要']
     : triggerTitle
       ? ['runtime', triggerTitle]
       : (senders[item.sender ?? ''] ?? ['runtime', '运行时提示']);
   const linkedSubagentID =
     !props.subagent && item.name === 'subagent_event' ? extractSubagentID(view.text) : null;
+  const summaryUsage = item.is_summary ? item.usage : undefined;
 
   return (
     <TimelineNode
@@ -205,14 +267,19 @@ function InputNode({
       title={title}
       at={item.at}
       extras={
-        linkedSubagentID ? (
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => props.onSelectSubagent(linkedSubagentID)}
-          >
-            查看 Subagent 轨迹 →
-          </button>
+        summaryUsage || linkedSubagentID ? (
+          <>
+            {summaryUsage ? <span className="timeline-meta">{stepUsageMeta(summaryUsage)}</span> : null}
+            {linkedSubagentID ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => props.onSelectSubagent(linkedSubagentID)}
+              >
+                查看 Subagent 轨迹 →
+              </button>
+            ) : null}
+          </>
         ) : undefined
       }
     >
@@ -245,6 +312,7 @@ function AssistantNode({
       kind="assistant"
       title="模型回复"
       at={item.at}
+      extras={item.usage ? <span className="timeline-meta">{stepUsageMeta(item.usage)}</span> : undefined}
     >
       {view.reasoning?.state === 'text' ? (
         <Foldable

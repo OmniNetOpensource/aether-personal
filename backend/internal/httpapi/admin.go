@@ -1,4 +1,4 @@
-// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表以及选中用户的 Main 与近期 Subagent 状态。
+// 本文件实现管理看板的基础只读接口：解析共用的时间与筛选条件，返回用户列表、筛选窗口内的步骤用量汇总，以及选中用户的 Main 与近期 Subagent 状态。
 
 package httpapi
 
@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
 // adminFilters 是快照与运行时间线共用的查询条件。
@@ -43,6 +45,20 @@ type adminSubagent struct {
 	Error      *string    `json:"error,omitempty"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// adminStepUsage 是当前筛选窗口内的步骤用量汇总，供看板顶部指标卡展示。
+type adminStepUsage struct {
+	StepsCount                int64            `json:"steps_count"`
+	CompactSteps              int64            `json:"compact_steps"`
+	FailedSteps               int64            `json:"failed_steps"`
+	InputTokens               int64            `json:"input_tokens"`
+	CachedInputTokens         int64            `json:"cached_input_tokens"`
+	CachedMeasuredInputTokens int64            `json:"cached_measured_input_tokens"`
+	CachedSteps               int64            `json:"cached_steps"`
+	OutputTokens              int64            `json:"output_tokens"`
+	Cost                      *decimal.Decimal `json:"cost"`
+	CostSteps                 int64            `json:"cost_steps"`
 }
 
 // adminMe 返回当前共享管理员会话的显示名称。
@@ -160,6 +176,30 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	usageRow, err := queries.GetAdminStepUsage(ctx, database.GetAdminStepUsageParams{
+		FromAt:     filter.From,
+		ToAt:       filter.To,
+		UserID:     filter.UserID,
+		SubagentID: filter.SubagentID,
+	})
+	if err != nil {
+		internalError(w, "read admin step usage failed", err)
+		return
+	}
+	usage := adminStepUsage{
+		StepsCount:                usageRow.StepsCount,
+		CompactSteps:              usageRow.CompactSteps,
+		FailedSteps:               usageRow.FailedSteps,
+		InputTokens:               usageRow.InputTokens,
+		CachedInputTokens:         usageRow.CachedInputTokens,
+		CachedMeasuredInputTokens: usageRow.CachedMeasuredInputTokens,
+		CachedSteps:               usageRow.CachedSteps,
+		OutputTokens:              usageRow.OutputTokens,
+		CostSteps:                 usageRow.CostSteps,
+	}
+	if usageRow.CostSteps > 0 {
+		usage.Cost = &usageRow.Cost
+	}
 	if err := tx.Commit(ctx); err != nil {
 		internalError(w, "commit admin snapshot failed", err)
 		return
@@ -169,5 +209,6 @@ func (s *server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"users":        map[string]any{"items": users},
 		"agents":       map[string]any{"items": agents},
 		"subagents":    map[string]any{"items": subagents},
+		"usage":        usage,
 	})
 }

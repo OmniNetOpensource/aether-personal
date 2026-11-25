@@ -68,11 +68,36 @@ export interface SnapshotSubagent {
   finished_at?: string;
 }
 
+// SnapshotUsage 是当前筛选窗口内的步骤用量与费用汇总。
+export interface SnapshotUsage {
+  steps_count: number;
+  compact_steps: number;
+  failed_steps: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cached_measured_input_tokens: number;
+  cached_steps: number;
+  output_tokens: number;
+  cost: string | null;
+  cost_steps: number;
+}
+
 export interface Snapshot {
   generated_at: string;
   users: { items: SnapshotUser[] };
   agents: { items: SnapshotAgent[] };
   subagents?: { items: SnapshotSubagent[] };
+  usage?: SnapshotUsage;
+}
+
+// TimelineUsage 是时间线上模型回复或压缩摘要节点关联的单步消耗。
+export interface TimelineUsage {
+  model: string;
+  purpose: string;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
+  cost: string | null;
 }
 
 export interface TimelineToolCall {
@@ -98,6 +123,7 @@ export interface TimelineItem {
   tool_calls?: TimelineToolCall[];
   tool_call_id?: string;
   truncated?: boolean;
+  usage?: TimelineUsage;
 }
 
 export interface Timeline {
@@ -163,6 +189,32 @@ export const formatTime = (value: string | null | undefined) =>
         hour12: false,
       })
     : '—';
+export const formatMoney = (value: string | number | null | undefined, compact = false) => {
+  if (value == null) return '未知';
+  const amount = Number(value);
+  const digits = compact && Math.abs(amount) >= 1 ? [2, 4] : [4, 6];
+  return `$${amount.toLocaleString('en-US', {
+    minimumFractionDigits: digits[0],
+    maximumFractionDigits: digits[1],
+  })}`;
+};
+export const shortModel = (value: string | null | undefined) =>
+  value?.split('/').slice(1).join('/') || value || '未知';
+
+// stepUsageMeta 把单步模型名、输入/缓存/输出 Token 与费用整理成时间线标题行摘要。
+export function stepUsageMeta(usage: TimelineUsage): string {
+  const inputText =
+    usage.input_tokens == null
+      ? '输入 未知'
+      : usage.cached_input_tokens != null
+        ? usage.input_tokens > 0
+          ? `输入 ${formatNumber(usage.input_tokens)}（缓存 ${formatNumber(usage.cached_input_tokens)} / ${((usage.cached_input_tokens / usage.input_tokens) * 100).toFixed(1)}%）`
+          : `输入 0（缓存 ${formatNumber(usage.cached_input_tokens)}）`
+        : `输入 ${formatNumber(usage.input_tokens)}`;
+  const outputText = `输出 ${usage.output_tokens == null ? '未知' : formatNumber(usage.output_tokens)}`;
+  const costText = usage.cost == null ? '费用 未知' : formatMoney(usage.cost);
+  return `${shortModel(usage.model)} · ${inputText} · ${outputText} · ${costText}`;
+}
 
 // quotaAmount 按供应商的计价单位格式化一个额度数字，未知时不显示成 0。
 export function quotaAmount(value: number | null, unit: string): string {

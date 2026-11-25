@@ -1,4 +1,4 @@
-// 本文件实现管理看板的运行时间线：支持按 Main 或指定后台 Subagent 读取按时间排列的消息节点，并按需读取单条消息全文。
+// 本文件实现管理看板的运行时间线：支持按 Main 或指定后台 Subagent 读取按时间排列的消息节点与单步用量，并按需读取单条消息全文。
 
 package httpapi
 
@@ -16,6 +16,7 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -47,6 +48,17 @@ type timelineItem struct {
 	ToolCalls  []timelineToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string             `json:"tool_call_id,omitempty"`
 	Truncated  bool               `json:"truncated,omitempty"`
+	Usage      *timelineStepUsage `json:"usage,omitempty"`
+}
+
+// timelineStepUsage 是模型回复或压缩摘要节点关联的单步模型、输入输出 Token、缓存命中数与费用。
+type timelineStepUsage struct {
+	Model             string           `json:"model"`
+	Purpose           string           `json:"purpose"`
+	InputTokens       *int32           `json:"input_tokens"`
+	CachedInputTokens *int32           `json:"cached_input_tokens"`
+	OutputTokens      *int32           `json:"output_tokens"`
+	Cost              *decimal.Decimal `json:"cost"`
 }
 
 // timelineReasoning 的 state：text 有可读推理，encrypted 只返回了加密推理，none 没有返回推理。
@@ -241,6 +253,20 @@ func (s *server) adminTimeline(w http.ResponseWriter, r *http.Request) {
 		item := timelineMessage(row.Role, row.Content, timelineTextLimit)
 		item.ID, item.Sequence, item.At = &row.ID, row.Sequence, row.At
 		item.Sender, item.IsSummary = row.Sender, row.IsSummary
+		if row.StepModel != nil {
+			purpose := ""
+			if row.StepPurpose != nil {
+				purpose = *row.StepPurpose
+			}
+			item.Usage = &timelineStepUsage{
+				Model:             *row.StepModel,
+				Purpose:           purpose,
+				InputTokens:       row.StepInputTokens,
+				CachedInputTokens: row.StepCachedInputTokens,
+				OutputTokens:      row.StepOutputTokens,
+				Cost:              row.StepCost,
+			}
+		}
 		items = append(items, item)
 	}
 	// 固定指令由代码注入，首页展示对应角色的当前部署原文。

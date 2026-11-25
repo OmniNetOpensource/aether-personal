@@ -18,7 +18,7 @@
 
 - **自动上下文压缩**：`GetLastContextUsage` 改为从 `steps` 表读取同用户、同角色最近一次成功完成步骤的 `model` 与 `input_tokens`。
 - **闲置后台反思**：`ListReflectionDue` 直接从 `messages` 表判断（`main_work` 视图已覆盖生成中与待处理消息，闲置起点直接取 Main 最新一条消息的 `created_at`）。
-- **管理看板时间线**：不再关联 `model_calls` 展示单次调用耗时、Token、费用、失败请求节点及请求/响应 JSON 详情弹窗（移除 `GET /admin/calls/{id}` 与 `CallDetail.tsx`，筛选栏精简为用户、Agent 与时间范围），时间线专注于展示输入、模型推理与正文、工具调用与回执、压缩摘要及 Subagent 轨迹跳转。下文关于 `model_calls` 的段落保留作历史演进记录。
+- **管理看板时间线**：不再关联 `model_calls` 展示失败请求节点及请求/响应 JSON 详情弹窗（移除 `GET /admin/calls/{id}` 与 `CallDetail.tsx`，筛选栏精简为用户、Agent 与时间范围）。2026-11-25 补回基于 `steps` 表的用量展示（`00066_step_cached_input_tokens.sql` 新增 `cached_input_tokens`）：`GET /admin/snapshot` 返回当前筛选范围的 `usage` 汇总（顶部五张指标卡：步骤数、输入 Token、缓存命中率、输出 Token、费用；缓存命中率分母仅计入有缓存读数的步骤，避免历史空值拉低分母），`GET /admin/timeline` 通过 `messages.step_id` 左连接 `steps`，在每条模型回复与上下文压缩摘要节点标题行展示单步模型、输入/缓存/输出 Token 与费用，并区分热压缩摘要。下文关于 `model_calls` 的段落保留作历史演进记录。
 
 ## 为什么曾增加 model_calls（历史，已于 2026-11-17 移除）
 
@@ -97,8 +97,8 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 | `POST /admin/login` | 校验 `{password}` 并返回管理令牌 |
 | `POST /admin/logout` | 撤销当前管理会话 |
 | `GET /admin/me` | 当前共享管理员名称 |
-| `GET /admin/snapshot` | 用户下拉列表，以及当前选中用户的 Main 状态与近期后台 Subagent 列表（2026-11-11 删除页面合并后不再读取的趋势/工具/旧步骤聚合；2026-11-12 增加 `subagents`；2026-11-17 随 `model_calls` 删除移除 `models` 候选） |
-| `GET /admin/timeline` | `user_id`（及可选 `subagent_id`）的一页运行时间线；`before` 游标翻到更早，首页附带对应角色的不可见指令（Main 或 Subagent），Main 时间线上的 `spawn_subagent`、`forward_subagent`、`cancel_subagent` 与 `subagent_event` 节点支持一键跳转查看该 Subagent 轨迹 |
+| `GET /admin/snapshot` | 用户下拉列表、筛选窗口内的 `steps` 用量汇总（`usage`：步骤数、输入/缓存/输出 Token、缓存统计覆盖与总费用），以及当前选中用户的 Main 状态与近期后台 Subagent 列表（2026-11-11 删除页面合并后不再读取的趋势/工具/旧步骤聚合；2026-11-12 增加 `subagents`；2026-11-17 随 `model_calls` 删除移除 `models` 候选；2026-11-25 新增 `usage`） |
+| `GET /admin/timeline` | `user_id`（及可选 `subagent_id`）的一页运行时间线；`before` 游标翻到更早，首页附带对应角色的不可见指令（Main 或 Subagent），模型回复与压缩摘要节点附带关联 `steps` 的单步模型、输入/缓存/输出 Token 与费用，Main 时间线上的 `spawn_subagent`、`forward_subagent`、`cancel_subagent` 与 `subagent_event` 节点支持一键跳转查看该 Subagent 轨迹 |
 | `GET /admin/timeline/messages/{id}` | 单条消息的全文与私有 OSS 签名截图，供时间线展开截断内容（`admin/server.mjs` CSP `img-src` 放行 `https://*.aliyuncs.com`） |
 | `GET /admin/quotas` | 各服务的剩余额度，后端用部署配置的 Key 并行向供应商查询，见下文额度面板 |
 
