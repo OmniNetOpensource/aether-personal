@@ -236,11 +236,12 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 			if !allowed {
 				skipped := "hot compaction skipped: newer turn already started"
 				return q.FinishStep(ctx, database.FinishStepParams{
-					ID:           compactStepID,
-					InputTokens:  result.Usage.PromptTokens,
-					OutputTokens: result.Usage.CompletionTokens,
-					Cost:         result.Usage.Cost,
-					Error:        &skipped,
+					ID:                compactStepID,
+					InputTokens:       result.Usage.PromptTokens,
+					CachedInputTokens: result.Usage.CachedTokens,
+					OutputTokens:      result.Usage.CompletionTokens,
+					Cost:              result.Usage.Cost,
+					Error:             &skipped,
 				})
 			}
 		}
@@ -258,7 +259,13 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 				return err
 			}
 		}
-		return q.FinishStep(ctx, database.FinishStepParams{ID: compactStepID, InputTokens: result.Usage.PromptTokens, OutputTokens: result.Usage.CompletionTokens, Cost: result.Usage.Cost})
+		return q.FinishStep(ctx, database.FinishStepParams{
+			ID:                compactStepID,
+			InputTokens:       result.Usage.PromptTokens,
+			CachedInputTokens: result.Usage.CachedTokens,
+			OutputTokens:      result.Usage.CompletionTokens,
+			Cost:              result.Usage.Cost,
+		})
 	})
 	if err != nil {
 		return err

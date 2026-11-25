@@ -114,10 +114,11 @@ func (r *Runner) completeSubagentAndAnnounce(ctx context.Context, stepID, replyI
 			return err
 		}
 		if err := queries.FinishStep(ctx, database.FinishStepParams{
-			ID:           stepID,
-			InputTokens:  response.Usage.PromptTokens,
-			OutputTokens: response.Usage.CompletionTokens,
-			Cost:         response.Usage.Cost,
+			ID:                stepID,
+			InputTokens:       response.Usage.PromptTokens,
+			CachedInputTokens: response.Usage.CachedTokens,
+			OutputTokens:      response.Usage.CompletionTokens,
+			Cost:              response.Usage.Cost,
 		}); err != nil {
 			return err
 		}

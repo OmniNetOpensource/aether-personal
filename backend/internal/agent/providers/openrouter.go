@@ -88,9 +88,12 @@ type openRouterStreamChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     *int32           `json:"prompt_tokens"`
-		CompletionTokens *int32           `json:"completion_tokens"`
-		Cost             *decimal.Decimal `json:"cost"`
+		PromptTokens        *int32 `json:"prompt_tokens"`
+		CompletionTokens    *int32 `json:"completion_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens *int32 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		Cost *decimal.Decimal `json:"cost"`
 	} `json:"usage"`
 }
 
@@ -128,6 +131,10 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 		}
 		if chunk.Usage != nil {
 			response.Usage.PromptTokens = chunk.Usage.PromptTokens
+			response.Usage.CachedTokens = nil
+			if chunk.Usage.PromptTokensDetails != nil {
+				response.Usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 			response.Usage.CompletionTokens = chunk.Usage.CompletionTokens
 			response.Usage.Cost = chunk.Usage.Cost
 		}

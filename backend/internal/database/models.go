@@ -142,18 +142,19 @@ type Session struct {
 }
 
 type Step struct {
-	ID            uuid.UUID
-	UserID        uuid.UUID
-	Model         string
-	InputTokens   *int32
-	OutputTokens  *int32
-	Cost          *decimal.Decimal
-	Error         *string
-	StartedAt     time.Time
-	FinishedAt    *time.Time
-	Purpose       string
-	SubagentID    *uuid.UUID
-	InputSequence int64
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	Model             string
+	InputTokens       *int32
+	OutputTokens      *int32
+	Cost              *decimal.Decimal
+	Error             *string
+	StartedAt         time.Time
+	FinishedAt        *time.Time
+	Purpose           string
+	SubagentID        *uuid.UUID
+	InputSequence     int64
+	CachedInputTokens *int32
 }
 
 type Subagent struct {

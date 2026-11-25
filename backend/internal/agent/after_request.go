@@ -112,7 +112,13 @@ func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, respo
 		if err := queries.CompleteMainReply(ctx, database.CompleteMainReplyParams{ID: replyID, Content: response.Choices[0].Message, Visible: visible}); err != nil {
 			return err
 		}
-		return queries.FinishStep(ctx, database.FinishStepParams{ID: stepID, InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, Cost: response.Usage.Cost})
+		return queries.FinishStep(ctx, database.FinishStepParams{
+			ID:                stepID,
+			InputTokens:       response.Usage.PromptTokens,
+			CachedInputTokens: response.Usage.CachedTokens,
+			OutputTokens:      response.Usage.CompletionTokens,
+			Cost:              response.Usage.Cost,
+		})
 	})
 	if err != nil {
 		return err

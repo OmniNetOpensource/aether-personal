@@ -119,6 +119,9 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 	if response.Usage.PromptTokens != nil && *response.Usage.PromptTokens < 0 {
 		response.Usage.PromptTokens = nil
 	}
+	if response.Usage.CachedTokens != nil && *response.Usage.CachedTokens < 0 {
+		response.Usage.CachedTokens = nil
+	}
 	if response.Usage.CompletionTokens != nil && *response.Usage.CompletionTokens < 0 {
 		response.Usage.CompletionTokens = nil
 	}

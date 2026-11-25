@@ -105,7 +105,7 @@ VALUES ($1, $2, $3, now())
 RETURNING id;
 
 -- name: FinishStep :exec
-UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now()
+UPDATE steps SET input_tokens = $2, cached_input_tokens = $3, output_tokens = $4, cost = $5, error = $6, finished_at = now()
 WHERE id = $1 AND finished_at IS NULL;
 
 -- name: FailUnfinishedSteps :exec

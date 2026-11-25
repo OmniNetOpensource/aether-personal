@@ -126,7 +126,7 @@ erDiagram
 
 ### `steps`
 
-记录逻辑执行步骤的元信息（含每次模型调用实际使用的模型名与 `input_tokens`、`output_tokens`、`cost`），完成时间包含工具执行。原独立请求日志表 `model_calls`（`00006`、`00010`）因存储全量请求/响应 JSON 导致单表膨胀至数 GB，已于 2026-11-17 由 `00059_drop_model_calls.sql` 移除，自动压缩所需的上次输入 Token 用量改由 `steps` 直接提供。不重复保存请求内容：某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
+记录逻辑执行步骤的元信息（含每次模型调用实际使用的模型名与 `input_tokens`、`cached_input_tokens`、`output_tokens`、`cost`），完成时间包含工具执行。原独立请求日志表 `model_calls`（`00006`、`00010`）因存储全量请求/响应 JSON 导致单表膨胀至数 GB，已于 2026-11-17 由 `00059_drop_model_calls.sql` 移除，自动压缩所需的上次输入 Token 用量改由 `steps` 直接提供。不重复保存请求内容：某次请求的内容可由该 Agent 在其输出之前的 `messages` 还原。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -134,6 +134,7 @@ erDiagram
 | `user_id` | uuid | 所属用户 |
 | `model` | text | 使用的模型 |
 | `input_tokens` | integer | 输入 token 数 |
+| `cached_input_tokens` | integer | 缓存命中的输入 token 数（供应商未返回时为空） |
 | `output_tokens` | integer | 输出 token 数 |
 | `cost` | numeric | 费用 |
 | `error` | text | 失败原因，成功时为空 |
@@ -282,6 +283,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00055_add_subagents.sql` | 放开 `tasks` 单进行中唯一索引；新建 `subagents` 表与栅栏代数；为 `messages`、`steps`、`model_calls` 增加 `subagent_id` 隔离列与索引；为 `model_settings` 增加可选 `subagent_model` | `已实现` |
 | `00058_drop_tasks.sql` | 删除持久化需求队列 `tasks` 表及索引，整体移除任务系统 | `开发中` |
 | `00059_drop_model_calls.sql` | 删除 `model_calls` 表及索引，为 `steps` 补充按 Subagent 查询最近步骤的索引 | `已实现` |
+| `00066_step_cached_input_tokens.sql` | 为 `steps` 增加可空 `cached_input_tokens` 列，记录各渠道返回的缓存命中输入 Token 数 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

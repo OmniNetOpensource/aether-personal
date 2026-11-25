@@ -186,7 +186,7 @@ func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Respons
 				Model string `json:"model"`
 				Usage struct {
 					Input         *int32 `json:"input_tokens"`
-					CacheRead     int32  `json:"cache_read_input_tokens"`
+					CacheRead     *int32 `json:"cache_read_input_tokens"`
 					CacheCreation int32  `json:"cache_creation_input_tokens"`
 					Output        *int32 `json:"output_tokens"`
 				} `json:"usage"`
@@ -213,9 +213,14 @@ func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Respons
 		switch event.Type {
 		case "message_start":
 			response.ID, response.Model = event.Message.ID, event.Message.Model
+			response.Usage.CachedTokens = event.Message.Usage.CacheRead
 			response.Usage.CompletionTokens = event.Message.Usage.Output
 			if usage := event.Message.Usage; usage.Input != nil {
-				total := int64(*usage.Input) + int64(usage.CacheRead) + int64(usage.CacheCreation)
+				var cacheRead int64
+				if usage.CacheRead != nil {
+					cacheRead = int64(*usage.CacheRead)
+				}
+				total := int64(*usage.Input) + cacheRead + int64(usage.CacheCreation)
 				if total < 0 || total > 2147483647 {
 					return response, false, fmt.Errorf("Claude returned invalid input usage")
 				}

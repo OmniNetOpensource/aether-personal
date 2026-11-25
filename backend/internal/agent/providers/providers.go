@@ -36,6 +36,7 @@ type Response struct {
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     *int32           `json:"prompt_tokens"`
+		CachedTokens     *int32           `json:"cached_tokens"`
 		CompletionTokens *int32           `json:"completion_tokens"`
 		Cost             *decimal.Decimal `json:"cost"`
 	} `json:"usage"`

@@ -304,6 +304,7 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 		} `json:"candidates"`
 		Usage struct {
 			PromptTokens     *int32 `json:"promptTokenCount"`
+			CachedTokens     *int32 `json:"cachedContentTokenCount"`
 			CompletionTokens *int32 `json:"candidatesTokenCount"`
 			ThinkingTokens   *int32 `json:"thoughtsTokenCount"`
 		} `json:"usageMetadata"`
@@ -317,6 +318,7 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 	}
 	response.ID, response.Model = wire.ResponseID, wire.ModelVersion
 	response.Usage.PromptTokens = wire.Usage.PromptTokens
+	response.Usage.CachedTokens = wire.Usage.CachedTokens
 	response.Usage.CompletionTokens = wire.Usage.CompletionTokens
 	if wire.Usage.CompletionTokens != nil && wire.Usage.ThinkingTokens != nil {
 		total := int64(*wire.Usage.CompletionTokens) + int64(*wire.Usage.ThinkingTokens)

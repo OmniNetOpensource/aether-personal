@@ -77,22 +77,24 @@ func (q *Queries) FailUnfinishedSteps(ctx context.Context, arg FailUnfinishedSte
 }
 
 const finishStep = `-- name: FinishStep :exec
-UPDATE steps SET input_tokens = $2, output_tokens = $3, cost = $4, error = $5, finished_at = now()
+UPDATE steps SET input_tokens = $2, cached_input_tokens = $3, output_tokens = $4, cost = $5, error = $6, finished_at = now()
 WHERE id = $1 AND finished_at IS NULL
 `
 
 type FinishStepParams struct {
-	ID           uuid.UUID
-	InputTokens  *int32
-	OutputTokens *int32
-	Cost         *decimal.Decimal
-	Error        *string
+	ID                uuid.UUID
+	InputTokens       *int32
+	CachedInputTokens *int32
+	OutputTokens      *int32
+	Cost              *decimal.Decimal
+	Error             *string
 }
 
 func (q *Queries) FinishStep(ctx context.Context, arg FinishStepParams) error {
 	_, err := q.db.Exec(ctx, finishStep,
 		arg.ID,
 		arg.InputTokens,
+		arg.CachedInputTokens,
 		arg.OutputTokens,
 		arg.Cost,
 		arg.Error,
