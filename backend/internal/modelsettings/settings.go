@@ -64,7 +64,7 @@ type RuntimeSettings struct {
 func LoadRuntime(ctx context.Context, queries *database.Queries) (RuntimeSettings, error) {
 	row, err := queries.GetRuntimeSettings(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return RuntimeSettings{CompactAtTokens: 100000, HotCompactAtTokens: 60000, HotCompactDelaySeconds: 159, ReflectionIdleMinutes: 120}, nil
+		return RuntimeSettings{CompactAtTokens: 100000, HotCompactAtTokens: 60000, HotCompactDelaySeconds: 75, ReflectionIdleMinutes: 120}, nil
 	}
 	return RuntimeSettings(row), err
 }
