@@ -1,4 +1,4 @@
-// 本文件是 Cloudflare Worker 入口：把聊天、模型设置、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
+// 本文件是 Cloudflare Worker 入口：把聊天、模型设置、记忆查看、远程记忆 MCP 与 OAuth 2.1、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
 
 const apiMethods = new Map([
   // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
@@ -10,13 +10,24 @@ const apiMethods = new Map([
   ['/model-settings', 'GET, PUT'],
   ['/memory-files', 'GET'],
   ['/memory-files/content', 'GET'],
+  ['/.well-known/oauth-protected-resource', 'GET, OPTIONS'],
+  ['/.well-known/oauth-protected-resource/mcp/memory', 'GET, OPTIONS'],
+  ['/.well-known/oauth-authorization-server', 'GET, OPTIONS'],
+  ['/mcp/memory', 'GET, POST, DELETE'],
+  ['/oauth/register', 'POST'],
+  ['/oauth/authorize/context', 'GET'],
+  ['/oauth/authorize/decision', 'POST'],
+  ['/oauth/token', 'POST'],
+  ['/oauth/revoke', 'POST'],
+  ['/oauth/connections', 'GET'],
 ]);
 
-// resolveApiMethod 识别固定 API 路径与动态公开分享读取路径对应的允许 HTTP 方法。
+// resolveApiMethod 识别固定 API 路径与动态公开分享、授权连接撤销路径对应的允许 HTTP 方法。
 function resolveApiMethod(pathname) {
   const exact = apiMethods.get(pathname);
   if (exact) return exact;
   if (/^\/shares\/[^/]+$/.test(pathname)) return 'GET';
+  if (/^\/oauth\/connections\/[^/]+$/.test(pathname)) return 'DELETE';
   return undefined;
 }
 
@@ -25,15 +36,17 @@ export default {
     const url = new URL(request.url);
     const method = resolveApiMethod(url.pathname);
     if (!method) {
-      if (/^\/(auth|admin|sandbox|shares)(\/|$)/.test(url.pathname)) {
-        return new Response('Not found', { status: 404 });
-      }
-      // 公开分享阅读页 /s/<token> 与只读记忆查看页 /memories 复用 SPA 根外壳，缺失的脚本与静态资源路径仍原样返回 404。
+      // 公开分享阅读页 /s/<token>、只读记忆查看页 /memories 与 OAuth 授权确认页 /oauth/authorize 复用 SPA 根外壳，缺失的静态资源路径仍原样返回 404。
       if (
-        (url.pathname === '/memories' || /^\/s\/[^/]+$/.test(url.pathname)) &&
+        (url.pathname === '/memories' ||
+          url.pathname === '/oauth/authorize' ||
+          /^\/s\/[^/]+$/.test(url.pathname)) &&
         (request.method === 'GET' || request.method === 'HEAD')
       ) {
         return env.ASSETS.fetch(new Request(new URL('/', url.origin), request));
+      }
+      if (/^\/(auth|admin|sandbox|shares|mcp|oauth|\.well-known)(\/|$)/.test(url.pathname)) {
+        return new Response('Not found', { status: 404 });
       }
       return env.ASSETS.fetch(request);
     }
