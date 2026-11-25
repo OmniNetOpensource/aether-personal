@@ -1,4 +1,4 @@
-// 本文件是浏览器端应用入口：加载全局样式并按当前路径渲染聊天主页或按需加载的只读记忆页。
+// 本文件是浏览器端应用入口：加载全局样式并按当前路径渲染聊天主页、只读记忆页或 OAuth 授权确认页。
 
 import { StrictMode, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -14,13 +14,27 @@ const MemoriesPage = lazy(() =>
   })),
 );
 
-// RootRouter 根据当前地址栏路径分发到聊天应用或只读记忆浏览页。
+// 远程记忆 MCP 授权页单独分包加载，仅外部应用跳入时按需拉取。
+const OAuthAuthorizePage = lazy(() =>
+  import('./components/oauth/OAuthAuthorizePage.js').then((module) => ({
+    default: module.OAuthAuthorizePage,
+  })),
+);
+
+// RootRouter 根据当前地址栏路径分发到聊天应用、只读记忆浏览页或 OAuth 授权确认页。
 function RootRouter() {
   const pathname = usePathname();
   if (pathname === '/memories') {
     return (
       <Suspense fallback={<LoadingScreen />}>
         <MemoriesPage />
+      </Suspense>
+    );
+  }
+  if (pathname === '/oauth/authorize') {
+    return (
+      <Suspense fallback={<LoadingScreen />}>
+        <OAuthAuthorizePage />
       </Suspense>
     );
   }

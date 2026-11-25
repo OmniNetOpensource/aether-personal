@@ -1,0 +1,133 @@
+/* 本文件定义 /oauth/authorize 授权确认页的居中卡片布局样式，复用全局主题配色变量。 */
+
+.oauth-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.oauth-card {
+  width: min(460px, 100%);
+  padding: 28px 24px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 16px 48px var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.oauth-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.oauth-badge {
+  align-self: flex-start;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--gold-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.oauth-header h1 {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.oauth-header p {
+  color: var(--text-muted);
+}
+
+.oauth-client-box {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.oauth-client-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.oauth-client-host {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.oauth-scope-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.oauth-account-row {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.oauth-account-row strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.oauth-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--error);
+  font-size: 13px;
+}
+
+.oauth-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.oauth-btn-secondary,
+.oauth-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.oauth-btn-secondary {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.oauth-btn-primary {
+  background: var(--forest);
+  color: var(--on-forest);
+}

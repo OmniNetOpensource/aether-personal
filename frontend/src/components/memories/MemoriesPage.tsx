@@ -1,4 +1,4 @@
-// 本文件实现 /memories 路由的双栏只读记忆浏览页，展示左侧可筛选文件列表与右侧 Markdown 预览。
+// 本文件实现 /memories 路由的双栏只读记忆浏览页，展示左侧可筛选文件列表、右侧 Markdown 预览以及远程 MCP 接入管理弹窗。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AuthError } from '../../lib/api.js';
@@ -6,8 +6,11 @@ import { fetchMemoryFileContent, fetchMemoryFiles } from '../../lib/memories.js'
 import type { MemoryFileDetail, MemoryFileSummary } from '../../lib/memories.js';
 import { formatFileSize } from '../../lib/messageAttachments.js';
 import { NavLink } from '../../lib/navigation.js';
+import { fetchOAuthConnections, revokeOAuthConnection } from '../../lib/oauth.js';
+import type { OAuthConnectionSummary } from '../../lib/oauth.js';
 import { readSession } from '../../lib/platform.js';
 import { LoadingScreen } from '../LoadingScreen.js';
+import { ModalDialog } from '../ModalDialog.js';
 import { Markdown } from '../markdown/Markdown.js';
 import './memories.css';
 
@@ -27,6 +30,7 @@ export function MemoriesPage() {
   const [filterText, setFilterText] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [reloadCount, setReloadCount] = useState(0);
   const [fileRetry, setFileRetry] = useState(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -143,8 +147,10 @@ export function MemoriesPage() {
           email={status === 'error' ? email : ''}
           refreshing={false}
           showSidebarToggle={false}
+          showMCPButton={false}
           sidebarOpen={false}
           onToggleSidebar={() => {}}
+          onOpenMCP={() => {}}
           onRefresh={() => setReloadCount((count) => count + 1)}
         />
         <div className="memories-center-state">
@@ -183,8 +189,10 @@ export function MemoriesPage() {
         email={email}
         refreshing={loadingPath !== null}
         showSidebarToggle
+        showMCPButton={Boolean(token)}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        onOpenMCP={() => setMcpDialogOpen(true)}
         onRefresh={() => setReloadCount((count) => count + 1)}
       />
       <div className="memories-workbench">
@@ -313,24 +321,39 @@ export function MemoriesPage() {
           </div>
         </section>
       </div>
+      {token && mcpDialogOpen && (
+        <MemoryMCPDialog
+          token={token}
+          onAuthExpired={() => {
+            setMcpDialogOpen(false);
+            setToken(null);
+            setStatus('unauthenticated');
+          }}
+          onClose={() => setMcpDialogOpen(false)}
+        />
+      )}
     </main>
   );
 }
 
-// MemoriesTitleBar 渲染顶部导航条：在桌面和移动端提供返回对话、抽屉开关与手动刷新。
+// MemoriesTitleBar 渲染顶部导航条：在桌面和移动端提供返回对话、抽屉开关、MCP 接入入口与手动刷新。
 function MemoriesTitleBar({
   email,
   refreshing,
   showSidebarToggle,
+  showMCPButton,
   sidebarOpen,
   onToggleSidebar,
+  onOpenMCP,
   onRefresh,
 }: {
   email: string;
   refreshing: boolean;
   showSidebarToggle: boolean;
+  showMCPButton: boolean;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  onOpenMCP: () => void;
   onRefresh: () => void;
 }) {
   return (
@@ -357,15 +380,170 @@ function MemoriesTitleBar({
           </span>
         )}
       </div>
-      <button
-        type="button"
-        className="memories-titlebar-btn"
-        disabled={refreshing}
-        onClick={onRefresh}
-      >
-        刷新
-      </button>
+      <div className="memories-titlebar-actions">
+        {showMCPButton && (
+          <button type="button" className="memories-titlebar-btn" onClick={onOpenMCP}>
+            MCP 接入
+          </button>
+        )}
+        <button
+          type="button"
+          className="memories-titlebar-btn"
+          disabled={refreshing}
+          onClick={onRefresh}
+        >
+          刷新
+        </button>
+      </div>
     </header>
+  );
+}
+
+// MemoryMCPDialog 展示远程记忆 MCP 接入地址与当前账号已授权的外部应用清单，支持一键复制地址与随时撤销授权。
+function MemoryMCPDialog({
+  token,
+  onAuthExpired,
+  onClose,
+}: {
+  token: string;
+  onAuthExpired: () => void;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [mcpURL, setMcpURL] = useState('');
+  const [connections, setConnections] = useState<OAuthConnectionSummary[]>([]);
+  const [revokingID, setRevokingID] = useState<string | null>(null);
+  const [urlCopied, setUrlCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onAuthExpiredRef = useRef(onAuthExpired);
+  onAuthExpiredRef.current = onAuthExpired;
+
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    setLoading(true);
+    setError('');
+    void fetchOAuthConnections(token, abortController.signal)
+      .then((payload) => {
+        if (abortController.signal.aborted) return;
+        setMcpURL(payload.mcp_url);
+        setConnections(payload.connections);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (abortController.signal.aborted) return;
+        if (err instanceof AuthError) {
+          onAuthExpiredRef.current();
+          return;
+        }
+        setError(err instanceof Error ? err.message : '无法读取 MCP 接入信息');
+        setLoading(false);
+      });
+    return () => abortController.abort();
+  }, [token]);
+
+  const copyURL = async () => {
+    if (!mcpURL) return;
+    await navigator.clipboard.writeText(mcpURL);
+    setUrlCopied(true);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setUrlCopied(false), 1800);
+  };
+
+  const revoke = async (connectionID: string) => {
+    if (revokingID) return;
+    setRevokingID(connectionID);
+    setError('');
+    try {
+      await revokeOAuthConnection(token, connectionID);
+      setConnections((previous) => previous.filter((item) => item.id !== connectionID));
+    } catch (err: unknown) {
+      if (err instanceof AuthError) {
+        onAuthExpiredRef.current();
+        return;
+      }
+      setError(err instanceof Error ? err.message : '撤销授权失败');
+    } finally {
+      setRevokingID(null);
+    }
+  };
+
+  return (
+    <ModalDialog
+      open
+      canClose={revokingID === null}
+      className="memories-mcp-dialog"
+      ariaLabelledBy="memories-mcp-title"
+      onClose={onClose}
+    >
+      <div className="memories-mcp-header">
+        <h2 id="memories-mcp-title">远程记忆 MCP</h2>
+        <button type="button" className="memories-mcp-close" disabled={revokingID !== null} onClick={onClose}>
+          关闭
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="memories-mcp-hint">正在读取接入信息…</p>
+      ) : (
+        <div className="memories-mcp-body">
+          <section className="memories-mcp-section">
+            <h3>接入地址（Streamable HTTP + OAuth 2.1）</h3>
+            {mcpURL ? (
+              <div className="memories-mcp-url-row">
+                <code className="memories-mcp-url">{mcpURL}</code>
+                <button type="button" className="memories-copy-btn" onClick={() => void copyURL()}>
+                  {urlCopied ? '已复制' : '复制地址'}
+                </button>
+              </div>
+            ) : (
+              <p className="memories-mcp-hint">当前部署尚未配置 PUBLIC_ORIGIN，暂不可用。</p>
+            )}
+            <p className="memories-mcp-hint">
+              在 ChatGPT Developer Mode、Gemini Apps Developer Mode、Claude 或 Cursor 中填入此地址并选择 OAuth
+              授权，即可与 aether 双向共享同一份记忆。
+            </p>
+          </section>
+
+          <section className="memories-mcp-section">
+            <h3>已授权应用 ({connections.length})</h3>
+            {connections.length === 0 ? (
+              <p className="memories-mcp-hint">还没有已授权的外部应用。</p>
+            ) : (
+              <ul className="memories-mcp-list">
+                {connections.map((item) => (
+                  <li key={item.id} className="memories-mcp-item">
+                    <div className="memories-mcp-item-meta">
+                      <span className="memories-mcp-item-name">{item.client_name}</span>
+                      <span className="memories-mcp-item-time">
+                        授权于 {formatUpdatedAt(item.created_at)}
+                        {item.last_used_at ? ` · 最近使用 ${formatUpdatedAt(item.last_used_at)}` : ' · 尚未调用'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="memories-mcp-revoke"
+                      disabled={revokingID !== null}
+                      onClick={() => void revoke(item.id)}
+                    >
+                      {revokingID === item.id ? '撤销中…' : '撤销授权'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {error && (
+            <p className="memories-mcp-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </ModalDialog>
   );
 }
 
