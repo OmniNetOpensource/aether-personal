@@ -23,7 +23,7 @@
 
 ```mermaid
 flowchart LR
-    APP["第一层：TanStack Start Web App<br/>移动端 PWA"]
+    APP["第一层：React Web App<br/>移动端 PWA"]
     subgraph BACKEND["第二层：Go 后端（对等无状态多容器）"]
         API["API<br/>HTTP + WebSocket"]
         RUNTIME["Agent 运行时<br/>Main"]
@@ -56,12 +56,12 @@ flowchart LR
 | --- | --- | --- |
 | React 界面 | 邮箱登录、Main 消息、Markdown、输入框内的发送中与发送失败提示、失败重发与真实思考动态 | 本地实现 |
 | TypeScript 连接管理 | 主页打开即连 WebSocket、收到 `ready` 前显示 loading、`hello` 携带令牌、重连按 position 补消息、历史翻页与登录命令走同一连接、发送等待 `delivered`、重发沿用 client_message_id；服务器事件在 `serverEvents.ts` 定义、由 `ServerEventRelay.ts` 统一中转 | 本地实现 |
-| 浏览器存储 | localStorage 保存登录，兼容早期 Flutter 与 Lynx 的键；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
+| 浏览器存储 | localStorage 保存登录（`aether_session` / `aether_email`）；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
 | PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
 
 保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单和常驻侧边栏；存在未完成任务时在输入框上方浮现轻量进度胶囊，点击可展开任务进展浮层（等待回复项可直接附带任务上下文发送补充）。工具过程留在后台，Main 的实际消息进入聊天。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；消息列表不显示回执，发送中与发送失败只在输入框提示，失败时内容留在输入框、再按发送即重发（2026-11-02，见 [04](04-messaging.md#消息状态)）。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
-2026-11-03，用户要求消息列表虚拟滚动。列表只挂载视口上下附近的消息：已经量过的高度按消息记住，还没出现在视口附近的先按估计高度占位，进入预渲染范围后再量真实高度；视口上方的高度变化会同步滚动位置，避免阅读内容跳动。贴底、上翻不自动回底、加载更早消息时留在原处、引用回看都不变。这样很长的历史不用把每条 Markdown 都留在页面上。同日，用户要求发送消息后不要把列表拉回底部：人已经贴在底部时，新消息和输入框高度变化仍跟着底部走；正在看更早消息时，发送后留在原地。选择理由是发送不打断正在进行的阅读。2026-11-19，用户进一步要求回收太远的消息渲染与占用：主聊天列表在首屏以及停在最新底部（且非翻页、引用跳转或分享多选）时只保留最近 30 条消息，裁掉头部超出窗口的旧历史并回退翻页游标、清理对应展开状态，再次上翻时按游标向后端重新拉取；历史搜索上下文窗口同步接入 `react-virtuoso` 虚拟滚动，离开视口的消息自动卸载 DOM。选择理由是避免长期停留或反复上翻历史后内存中持续累积消息对象与虚拟高度树，同时防止搜索上下文连续翻页把大量 Markdown 留在 DOM 中。
+2026-11-03，用户要求消息列表虚拟滚动。列表只挂载视口上下附近的消息：已经量过的高度按消息记住，还没出现在视口附近的先按估计高度占位，进入预渲染范围后再量真实高度；视口上方的高度变化会同步滚动位置，避免阅读内容跳动。贴底、上翻不自动回底、加载更早消息时留在原处、引用回看都不变。这样很长的历史不用把每条 Markdown 都留在页面上。同日，用户要求发送消息后不要把列表拉回底部：人已经贴在底部时，新消息和输入框高度变化仍跟着底部走；正在看更早消息时，发送后留在原地。选择理由是发送不打断正在进行的阅读。2026-11-19，用户进一步要求回收太远的消息渲染与占用：主聊天列表在首屏以及停在最新底部时只保留最近 30 条消息，裁掉头部超出窗口的旧历史并回退翻页游标、清理对应展开状态，再次上翻时按游标向后端重新拉取。2026-11-25 简化前端实现：长消息折叠不再运行逐帧 `rAF` 高度动画、改为直接切换并在收起后一次性锚定视口；主列表回底改用浏览器原生滚动；历史搜索上下文窗口仅围绕锚点按页加载，改回普通滚动容器并在向上翻页后按高度差保持位置。
 
 2026-10-28，用户要求输入框外围透明，单行时文字与图标垂直居中，多行时加号和发送按钮固定在输入框底部，文字向上扩展，并在左侧增加加号。输入框以透明外围的浮层覆盖消息区，滚动内容为输入框实际高度预留底部空间；多行输入与已选文件改变高度时同步更新。用户确认本次加号仅提供本地文件选择入口，支持显示文件名和移除选择；不上传文件、不随聊天发送文件。 该阶段范围已被 2026-11-02 的多模态输入需求取代：当前在统一输入面板中混排文字、引用和图片，加号实际上传图片到私有 OSS，模型调用前由后端读取并转 base64，详见 [04](04-messaging.md#引用图片与多模态输入框)。
 
@@ -77,11 +77,11 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱、「模型设置」、「查看记忆」（跳转 `/memories` 只读记忆浏览器）与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
 
-2026-11-02，用户要求前端改为 TanStack Start。Start 基于现有 React、React DOM 与 TypeScript，接管文件路由、HTML 外壳和构建时预渲染，底层构建工具保留 Rsbuild。当前采用 [Start 官方 SPA 模式](https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode)：构建时生成公开的 HTML 外壳，登录与聊天在浏览器启动后通过既有 Go WebSocket 恢复。聊天数据属于登录用户，当前无需为了搜索引擎渲染消息，因此继续静态部署，避免新增常驻 JavaScript 服务或第二套认证与消息 API。
+2026-11-25，为了降低前端复杂度并去掉未使用的框架与冗余校验，前端从 TanStack Start + Zod 简化为纯 Rsbuild + React + TypeScript 静态 SPA（此前的 2026-11-02 Start 方案由本条取代）：聊天数据属于登录用户且仅有 `/` 与 `/memories` 两个页面，无需服务端渲染或路由代码生成，直接使用 `index.html` 与 `src/lib/navigation.tsx` 做轻量路径分发即可，并移除未接通的前端对话分享与本地设计画布 `src/design/`。
 
-代码位于 `frontend/src/`：`router.tsx` 创建路由器，`routes/__root.tsx` 维护 HTML、元信息与 PWA 清单，`routes/index.tsx` 挂载现有聊天应用。`routeTree.gen.ts` 由 Start 自动生成并提交，不手改；开发和构建时重新生成。聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑。移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
+代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 按路径挂载聊天主页或按需分包的 `/memories` 页面；聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑；移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
 
-依赖固定在 `frontend/package-lock.json`，Node.js 最低版本为 `22.12.0`。`npm run build` 先生成路由与构建、执行类型检查，再生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。构建时使用的服务端产物放在 `frontend/build/server`，不部署、不进入 PWA 缓存。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+依赖固定在 `frontend/package-lock.json`，Node.js 最低版本为 `22.12.0`。`npm run build` 先由 Rsbuild 打包静态资源，再执行类型检查并生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录（不再产生 `frontend/build/server`）。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 
@@ -187,7 +187,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
-| 前端 | TanStack Start + React + TypeScript，Rsbuild 构建 | SPA 静态部署，移动端安装 PWA |
+| 前端 | React + TypeScript，Rsbuild 构建 | 纯静态 SPA 部署，移动端安装 PWA |
 | 管理看板 | TanStack Start + React + TypeScript，Rsbuild 构建；Node 内置 HTTP 托管与代理 | 与聊天端同款 SPA，独立服务与域名部署，见 [08](08-admin-observability.md#看板改用-tanstack-start2026-11-03) |
 
 ## 后端骨架 `已实现`
