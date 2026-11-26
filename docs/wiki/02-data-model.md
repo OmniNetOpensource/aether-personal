@@ -290,6 +290,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00059_drop_model_calls.sql` | 删除 `model_calls` 表及索引，为 `steps` 补充按 Subagent 查询最近步骤的索引 | `已实现` |
 | `00066_step_cached_input_tokens.sql` | 为 `steps` 增加可空 `cached_input_tokens` 列，记录各渠道返回的缓存命中输入 Token 数 | `已实现` |
 | `00067_add_mcp_oauth.sql` | 新增 `oauth_clients`、`oauth_authorization_codes` 与 `oauth_tokens` 表，支持远程记忆 MCP 的 OAuth 2.1（PKCE + DCR）授权 | `已实现` |
+| `00068_allow_oauth_register_rate_limits.sql` | 扩充 `login_rate_limits.scope` 约束，允许写入 OAuth 动态客户端注册的按 IP 与全站限流计数 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。
