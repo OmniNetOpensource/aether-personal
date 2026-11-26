@@ -84,5 +84,6 @@ SQL
 - 表结构：固定取值的字段用 `text` + `CHECK`，不用 enum；外键一律 `ON DELETE CASCADE`。
 - sqlc 生成类型：不能为空的列用普通类型，能为空的列加 `*`（`nil` 表示空）；UUID 用 `google/uuid`，时间用 `time.Time`，`numeric` 用 `shopspring/decimal`。
 - 验证码和登录令牌在数据库中只存哈希值；第三方 API Key 必须还原后发给供应商，因此使用 AES-GCM 加密保存，完整 Key 不回显，主加密密钥与数据库分开保存。
+- 新增依赖一律通过包管理器拉取当前最新稳定版（Go 用 `go get <module>@latest`，JS/TS 用 `pnpm add <pkg>`），不手写历史版本号；已有依赖通过 `.github/dependabot.yml` 每周自动检测更新。
 - 提交信息使用 Conventional Commits（`feat(backend): ...`、`docs: ...`、`chore: ...`）。
 - 提交时采用小规模、自包含的 commit：一次提交只包含一个能独立成立的改动。
