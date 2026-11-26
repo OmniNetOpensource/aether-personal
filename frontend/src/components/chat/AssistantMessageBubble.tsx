@@ -13,14 +13,12 @@ export function AssistantMessageBubble({
   endsGroup,
   expanded,
   onExpandedChange,
-  onScrollBy,
 }: {
   message: ChatMessage;
   joinedWithPrevious: boolean;
   endsGroup: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onScrollBy?: (top: number) => void;
 }) {
   const attachments = message.parts.filter((part) => part.type === 'image' || part.type === 'file');
   return (
@@ -29,11 +27,7 @@ export function AssistantMessageBubble({
         <div
           className={`bubble ${joinedWithPrevious ? 'join-top' : ''} ${endsGroup ? 'group-end' : ''}`}
         >
-          <CollapsibleMessage
-            expanded={expanded}
-            onExpandedChange={onExpandedChange}
-            onScrollBy={onScrollBy}
-          >
+          <CollapsibleMessage expanded={expanded} onExpandedChange={onExpandedChange}>
             {message.text ? (
               <div data-quote-body data-quote-text data-message-id={message.id}>
                 <Markdown text={message.text} />

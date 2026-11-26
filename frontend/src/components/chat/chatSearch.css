@@ -349,7 +349,7 @@
   overflow-anchor: none;
   outline-offset: -3px;
 }
-/* 行内收住气泡外边距，使 Virtuoso 量到的行高包含消息间距与目标消息留白。 */
+/* 行内收住气泡外边距，使每条历史消息的高度包含消息间距与目标消息留白。 */
 .history-context-row,
 .history-context-list-header,
 .history-context-list-footer {

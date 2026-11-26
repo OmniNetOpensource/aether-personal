@@ -30,7 +30,6 @@ export const ChatMessageEntry = memo(function ChatMessageEntry({
   onQuoteNavigate,
   expanded,
   onExpandedChange,
-  onScrollBy,
 }: {
   message: ChatMessage;
   showTime: boolean;
@@ -39,7 +38,6 @@ export const ChatMessageEntry = memo(function ChatMessageEntry({
   onQuoteNavigate: (quote: MessageQuote) => void;
   expanded: boolean;
   onExpandedChange: (messageID: string, expanded: boolean) => void;
-  onScrollBy?: (top: number) => void;
 }) {
   const handleExpandedChange = useCallback(
     (nextExpanded: boolean) => {
@@ -58,7 +56,6 @@ export const ChatMessageEntry = memo(function ChatMessageEntry({
           onQuoteNavigate={onQuoteNavigate}
           expanded={expanded}
           onExpandedChange={handleExpandedChange}
-          onScrollBy={onScrollBy}
         />
       ) : (
         <AssistantMessageBubble
@@ -67,7 +64,6 @@ export const ChatMessageEntry = memo(function ChatMessageEntry({
           endsGroup={endsGroup}
           expanded={expanded}
           onExpandedChange={handleExpandedChange}
-          onScrollBy={onScrollBy}
         />
       )}
     </>

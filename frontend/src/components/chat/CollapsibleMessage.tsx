@@ -1,4 +1,4 @@
-// 本文件为用户和助手消息提供按实际高度折叠与展开的正文容器，保留完整内容、引用位置与收起滚动锚定。
+// 本文件为用户和助手消息提供按实际高度折叠与展开的正文容器，保留完整内容、引用位置与普通滚动容器的收起按钮锚定。
 
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -10,21 +10,18 @@ const collapsedMessageHeight = 360;
 export function CollapsibleMessage({
   expanded,
   onExpandedChange,
-  onScrollBy,
   children,
 }: {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onScrollBy?: (top: number) => void;
   children: ReactNode;
 }) {
   const clip = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const toggleButton = useRef<HTMLButtonElement>(null);
+  const collapseButtonTop = useRef<number | null>(null);
   const bodyId = useId();
   const [overflows, setOverflows] = useState(false);
-  const previousExpanded = useRef(expanded);
-  const scrollByRef = useRef(onScrollBy);
-  scrollByRef.current = onScrollBy;
 
   // 测量不受外层裁切影响的完整正文；图片加载、代码高亮和窗口换行后重新判断。
   useLayoutEffect(() => {
@@ -39,25 +36,20 @@ export function CollapsibleMessage({
     return () => observer.disconnect();
   }, []);
 
-  // 收起已滚过头部的长消息时，将消息顶部拉回视口上方留白处，避免收起后失去阅读位置。
+  // 历史上下文窗口使用普通滚动容器：收起后按点击前按钮距视口顶部的位置补齐 scrollTop，让按钮和下方内容停在原位。
+  // 主聊天列表的展开与收起锚定由 ChatMessageList 里的 TanStack Virtual 同帧处理，不在这里重复改 scrollTop。
   useLayoutEffect(() => {
-    const wasExpanded = previousExpanded.current;
-    previousExpanded.current = expanded;
-    if (!wasExpanded || expanded || !overflows) return;
-    const clipElement = clip.current;
-    if (!clipElement) return;
-    const row =
-      clipElement.closest<HTMLElement>('[data-chat-row], [data-history-message]') ?? clipElement;
-    const viewport = clipElement.closest<HTMLElement>(
-      '[data-virtuoso-scroller], .history-context-viewport',
-    );
-    if (!viewport) return;
-    const rowTop = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
-    if (rowTop < 16) {
-      if (scrollByRef.current) scrollByRef.current(rowTop - 16);
-      else viewport.scrollTop += rowTop - 16;
-    }
-  }, [expanded, overflows]);
+    const previousButtonTop = collapseButtonTop.current;
+    collapseButtonTop.current = null;
+    if (expanded || previousButtonTop === null) return;
+    const button = toggleButton.current;
+    const viewport = clip.current?.closest<HTMLElement>('.history-context-viewport');
+    if (!button || !viewport) return;
+    const currentButtonTop =
+      button.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    const delta = currentButtonTop - previousButtonTop;
+    if (Math.abs(delta) >= 0.5) viewport.scrollTop += delta;
+  }, [expanded]);
 
   // 首次挂载就限制未展开的高度，避免虚拟列表先量全文、再因折叠反复移动与重挂载。
   const collapsed = overflows && !expanded;
@@ -84,11 +76,22 @@ export function CollapsibleMessage({
       {overflows && (
         <div className="message-collapse-footer">
           <button
+            ref={toggleButton}
             type="button"
             className="message-collapse-toggle"
             aria-expanded={expanded}
             aria-controls={bodyId}
-            onClick={() => onExpandedChange(!expanded)}
+            onClick={() => {
+              if (expanded) {
+                const viewport = clip.current?.closest<HTMLElement>('.history-context-viewport');
+                const button = toggleButton.current;
+                if (viewport && button) {
+                  collapseButtonTop.current =
+                    button.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+                }
+              }
+              onExpandedChange(!expanded);
+            }}
           >
             {expanded ? '收起' : '展开全文'}
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">

@@ -1,34 +1,19 @@
-// 本文件用 Virtuoso 展示聊天历史，负责翻页、贴底跟随与回收旧历史、回底、长消息展开和引用回看。
+// 本文件用 TanStack Virtual 展示聊天历史，负责翻页、贴底跟随与回收旧历史、回底、长消息展开收起锚定和引用回看。
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import { Virtuoso } from 'react-virtuoso';
-import type { VirtuosoHandle } from 'react-virtuoso';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { latestMessageWindow } from '../../lib/ChatController.js';
 import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
 import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
-import { useVirtuosoFirstItemIndex } from './useVirtuosoFirstItemIndex.js';
 
-// 页头、页尾始终使用相同组件，翻页或思考状态改变时只更新内容。
-type ListContext = { header: ReactNode; footer: ReactNode };
-const components = {
-  Header: ({ context }: { context: ListContext }) => (
-    <div className="chat-list-header">{context.header}</div>
-  ),
-  Footer: ({ context }: { context: ListContext }) => (
-    <div className="chat-list-footer">{context.footer}</div>
-  ),
-};
-
-// 固定引用避免 Virtuoso 因内联对象或函数在每次渲染时重算列表状态。
-const initialBottomLocation = { index: 'LAST' as const, align: 'end' as const };
-const viewportOverscan = { top: 800, bottom: 800 };
 const defaultMessageRowHeight = 120;
-const computeMessageKey = (_: number, message: ChatMessage) => message.id;
+const virtualOverscanCount = 6;
+const atBottomThreshold = 160;
+const pinnedBottomThreshold = 4;
 
-// ChatMessageList 把尺寸与可见行交给 Virtuoso，只保存用户的导航、贴底回收和展开状态。
+// ChatMessageList 由 TanStack Virtual 计算可见行与偏移，并按展开、收起与贴底场景显式控制尺寸变化的滚动补偿。
 export function ChatMessageList({
   controller,
   onQuote,
@@ -38,17 +23,22 @@ export function ChatMessageList({
   onQuote: (quote: MessageQuote) => void;
   latestRequest: number;
 }) {
-  const list = useRef<VirtuosoHandle>(null);
   const viewport = useRef<HTMLDivElement | null>(null);
   const viewportObserver = useRef<ResizeObserver | null>(null);
   const lastLatestRequest = useRef(latestRequest);
+  const initialPositioned = useRef(false);
   const browsingHistory = useRef(false);
   const atBottomRef = useRef(true);
   const isScrollingRef = useRef(false);
+  const lastStartReachedID = useRef<string | null>(null);
   const trimTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const scheduleTrimRef = useRef<() => void>(() => {});
+  const loadOlderRef = useRef<() => void>(() => {});
+  const scrollToEndRef = useRef<() => void>(() => {});
   const navigation = useRef<MessageQuote | null>(null);
   const clearHighlight = useRef<() => void>(() => {});
+  const pendingToggle = useRef<{ id: string; action: 'expand' | 'collapse' } | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const [quoteTarget, setQuoteTarget] = useState<MessageQuote | null>(null);
   const [quoteError, setQuoteError] = useState('');
   const [navigatingQuote, setNavigatingQuote] = useState(false);
@@ -56,52 +46,124 @@ export function ChatMessageList({
   const [expandedMessages, setExpandedMessages] = useState(() => new Set<string>());
   const [atBottom, setAtBottom] = useState(true);
 
-  // 控制器在消息变更时替换数组引用；未变更时直接复用同一引用，firstItemIndex 兼顾向上翻页与头部裁剪。
   const messages = controller.messages;
-  const firstItemIndex = useVirtuosoFirstItemIndex(messages);
-  const previousFirstItemIndex = useRef(firstItemIndex);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
-  // Virtuoso 裁剪头部旧消息时同步调用了 scrollBy，但浏览器 scroll 事件要到下一帧才触发；
-  // 在绘制前通过微任务补发一次 scroll 事件，让 Virtuoso 立即更新 visibleRange，消除单帧空白闪动。
+  // anchorTo: 'end' 自动按消息 key 保持头部翻页与头部回收的阅读位置；
+  // directDomUpdates 在 ResizeObserver 同帧直接更新容器高度与各行 top，避免展开时和下一条消息重叠一帧；
+  // scrollEndThreshold: -1 把全部高度变化的滚动补偿决策收口到下方的 shouldAdjustScrollPositionOnItemSizeChange。
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => viewport.current,
+    estimateSize: () => defaultMessageRowHeight,
+    getItemKey: (index) => messages[index].id,
+    overscan: virtualOverscanCount,
+    scrollMargin: headerHeight,
+    anchorTo: 'end',
+    followOnAppend: false,
+    scrollEndThreshold: -1,
+    directDomUpdates: true,
+    directDomUpdatesMode: 'position',
+    onChange: (instance) => {
+      isScrollingRef.current = instance.isScrolling;
+      if (!instance.isScrolling) scheduleTrimRef.current();
+      if (!instance.scrollElement || !initialPositioned.current) return;
+      const nextAtBottom = instance.isAtEnd(atBottomThreshold);
+      if (nextAtBottom !== atBottomRef.current) {
+        atBottomRef.current = nextAtBottom;
+        setAtBottom(nextAtBottom);
+        if (!nextAtBottom) setPinOlderHistory(false);
+        else scheduleTrimRef.current();
+      }
+      const range = instance.range;
+      if (!range) return;
+      if (range.startIndex > 0) {
+        lastStartReachedID.current = null;
+        return;
+      }
+      const firstMessage = messagesRef.current[0];
+      if (
+        browsingHistory.current &&
+        firstMessage &&
+        lastStartReachedID.current !== firstMessage.id
+      ) {
+        lastStartReachedID.current = firstMessage.id;
+        loadOlderRef.current();
+      }
+    },
+  });
+
+  // 显式控制单条消息尺寸变化时是否调整 scrollTop：
+  // 展开锁行顶（不补偿）、收起锁按钮与下方内容（同步补偿）、停在最新底部时继续贴底，其余沿用视口上方补偿规则。
   useLayoutEffect(() => {
-    const previous = previousFirstItemIndex.current;
-    previousFirstItemIndex.current = firstItemIndex;
-    if (firstItemIndex > previous) {
-      queueMicrotask(() => {
-        viewport.current?.dispatchEvent(new Event('scroll'));
-      });
-    }
-  }, [firstItemIndex]);
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+      if (pendingToggle.current?.id === item.key) {
+        const { action } = pendingToggle.current;
+        pendingToggle.current = null;
+        return action === 'collapse';
+      }
+      if (
+        instance.isAtEnd(pinnedBottomThreshold) &&
+        !browsingHistory.current &&
+        !navigation.current
+      ) {
+        return true;
+      }
+      const scrollOffset = instance.scrollOffset ?? 0;
+      const isFirstMeasure = !instance.itemSizeCache.has(item.key);
+      return isFirstMeasure
+        ? item.start < scrollOffset
+        : item.end <= scrollOffset && instance.scrollDirection !== 'backward';
+    };
+  }, [virtualizer]);
 
-  // 输入框多行增高或移动键盘弹出缩窄视口时，若原本已在底部则同步保持贴底。
-  const bindViewport = useCallback((element: HTMLElement | Window | null) => {
+  // 首次有消息（或清空后重新加载）时直接定位到最新底部。
+  useLayoutEffect(() => {
+    if (messages.length === 0) {
+      initialPositioned.current = false;
+      return;
+    }
+    if (initialPositioned.current) return;
+    initialPositioned.current = true;
+    virtualizer.scrollToEnd({ behavior: 'auto' });
+  }, [messages.length, virtualizer]);
+
+  // 追踪页头高度作为虚拟列表 scrollMargin；输入框增高或移动键盘缩窄视口时，若原本已在底部则同步保持贴底。
+  const bindViewport = useCallback((scroller: HTMLDivElement | null) => {
     viewportObserver.current?.disconnect();
     viewportObserver.current = null;
-    const scroller = element instanceof HTMLDivElement ? element : null;
     viewport.current = scroller;
     if (!scroller) return;
+    const header = scroller.querySelector<HTMLElement>('.chat-list-header');
+    const footer = scroller.querySelector<HTMLElement>('.chat-list-footer');
     let lastClientHeight = scroller.clientHeight;
-    let lastFooterHeight =
-      scroller.querySelector<HTMLElement>('.chat-list-footer')?.offsetHeight ?? 0;
+    let lastHeaderHeight = header?.offsetHeight ?? 0;
+    let lastFooterHeight = footer?.offsetHeight ?? 0;
+    setHeaderHeight(lastHeaderHeight);
     const observer = new ResizeObserver(() => {
       const nextClientHeight = scroller.clientHeight;
-      const footer = scroller.querySelector<HTMLElement>('.chat-list-footer');
+      const nextHeaderHeight = header?.offsetHeight ?? 0;
       const nextFooterHeight = footer?.offsetHeight ?? 0;
       const viewportShrank = nextClientHeight < lastClientHeight;
       const footerGrew = nextFooterHeight > lastFooterHeight;
       lastClientHeight = nextClientHeight;
       lastFooterHeight = nextFooterHeight;
+      if (nextHeaderHeight !== lastHeaderHeight) {
+        lastHeaderHeight = nextHeaderHeight;
+        setHeaderHeight(nextHeaderHeight);
+      }
       if (
         (viewportShrank || footerGrew) &&
         atBottomRef.current &&
         !isScrollingRef.current &&
         !navigation.current
       ) {
-        scroller.scrollTop = scroller.scrollHeight;
+        scrollToEndRef.current();
       }
     });
     observer.observe(scroller);
-    const footer = scroller.querySelector<HTMLElement>('.chat-list-footer');
+    if (header) observer.observe(header);
     if (footer) observer.observe(footer);
     viewportObserver.current = observer;
   }, []);
@@ -121,6 +183,7 @@ export function ChatMessageList({
       if (!canTrim()) return;
       const removed = controller.trimOlderMessages(latestMessageWindow);
       if (removed === 0) return;
+      lastStartReachedID.current = null;
       const keptIDs = new Set(controller.messages.map((message) => message.id));
       setExpandedMessages((current) => {
         if (current.size === 0) return current;
@@ -141,20 +204,6 @@ export function ChatMessageList({
     return () => clearTimeout(trimTimer.current);
   }, [scheduleTrim, messages.length, atBottom]);
 
-  // 离开底部后解除“贴底手动翻页”保护，后续回到底部时即可回收之前翻出的旧历史。
-  const handleAtBottomChange = useCallback((nextAtBottom: boolean) => {
-    atBottomRef.current = nextAtBottom;
-    setAtBottom(nextAtBottom);
-    if (!nextAtBottom) setPinOlderHistory(false);
-    else scheduleTrimRef.current();
-  }, []);
-
-  // Virtuoso 滚动启停只更新 ref 并触发空闲裁剪检查，不在每次滚动首尾触发整表 React 重渲染。
-  const handleIsScrolling = useCallback((scrolling: boolean) => {
-    isScrollingRef.current = scrolling;
-    if (!scrolling) scheduleTrimRef.current();
-  }, []);
-
   // 用户主动滚轮、触摸或按键时标记正在浏览历史，允许顶部的向上加载触发。
   const handleUserScrollStart = useCallback(() => {
     browsingHistory.current = true;
@@ -165,30 +214,16 @@ export function ChatMessageList({
     if (atBottomRef.current) setPinOlderHistory(true);
     void controller.loadHistory(true);
   }, [controller]);
+  loadOlderRef.current = loadOlderHistory;
 
-  const handleStartReached = useCallback(() => {
-    if (browsingHistory.current) loadOlderHistory();
-  }, [loadOlderHistory]);
-
-  // scrollToEnd 用浏览器原生滚动滑向最新消息底部；距底超过两屏时先跳到末尾范围，避免沿途挂载大量旧消息。
+  // scrollToEnd 直接跳到最新消息底部，由虚拟列表在底部行测高收敛时保持贴底。
   const scrollToEnd = useCallback(() => {
-    const element = viewport.current;
-    if (!element || controller.messages.length === 0) return;
-    const behavior: ScrollBehavior = matchMedia('(prefers-reduced-motion: reduce)').matches
-      ? 'auto'
-      : 'smooth';
-    const distance = element.scrollHeight - element.clientHeight - element.scrollTop;
-    if (distance > element.clientHeight * 2) {
-      list.current?.scrollToIndex(initialBottomLocation);
-      requestAnimationFrame(() => {
-        viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior });
-      });
-    } else {
-      element.scrollTo({ top: element.scrollHeight, behavior });
-    }
-  }, [controller]);
+    if (controller.messages.length === 0) return;
+    virtualizer.scrollToEnd({ behavior: 'auto' });
+  }, [controller, virtualizer]);
+  scrollToEndRef.current = scrollToEnd;
 
-  // 回到底部按钮取消尚在翻页或等待高亮的引用，并平滑滑向最新消息底部。
+  // 回到底部按钮取消尚在翻页或等待高亮的引用，并立即跳到最新消息底部。
   const scrollToBottom = useCallback(() => {
     browsingHistory.current = false;
     navigation.current = null;
@@ -202,7 +237,7 @@ export function ChatMessageList({
     }
   }, [scrollToEnd]);
 
-  // 人已经贴在底部时，新消息插入或思考气泡出现自动平滑跟到底部；正在看更早消息时保持原地不动。
+  // 人已经贴在底部时，新消息插入或思考气泡出现立即跟到底部；正在看更早消息时保持原地不动。
   const tailMessageID = messages.at(-1)?.id;
   const footerActive = (controller.connected && controller.mainThinking) || controller.mainFailed;
   const previousTailMessageID = useRef<string | undefined>(tailMessageID);
@@ -272,37 +307,60 @@ export function ChatMessageList({
     [navigateQuote],
   );
 
-  // 滚动完成后目标行已挂载，此时可按引用的字符范围定位与高亮。
+  // 先将引用所在消息滚进视口居中，再等待该行挂载并完成高亮定位。
   useEffect(() => {
     if (!quoteTarget) return;
-    const quote = quoteTarget;
-    const index = controller.messages.findIndex((message) => message.id === quote.message_id);
-    list.current?.scrollIntoView({
-      index,
-      align: 'center',
-      done: () => {
-        if (navigation.current !== quote) return;
-        setNavigatingQuote(false);
-        const element = viewport.current;
-        const body = element?.querySelector<HTMLElement>(
-          `[data-quote-body][data-message-id="${quote.message_id}"]`,
-        );
-        if (!element || !body) {
-          setQuoteError('暂时找不到引用原文，请加载历史后重试');
-          return;
-        }
-        const clear = highlightQuote(body, quote, element);
-        const timer = setTimeout(clear, 3000);
-        clearHighlight.current = () => {
-          clearTimeout(timer);
-          clear();
-        };
-      },
-    });
-  }, [controller, quoteTarget]);
+    const index = controller.messages.findIndex((message) => message.id === quoteTarget.message_id);
+    if (index < 0) {
+      setNavigatingQuote(false);
+      setQuoteTarget(null);
+      setQuoteError('暂时找不到引用原文，请加载历史后重试');
+      return;
+    }
+    virtualizer.scrollToIndex(index, { align: 'center', behavior: 'auto' });
+  }, [controller, quoteTarget, virtualizer]);
 
-  // 展开状态按消息 ID 记录；收起长消息时的滚动锚定由 CollapsibleMessage 通过 handleScrollBy 同步完成。
+  const virtualItems = virtualizer.getVirtualItems();
+  const quoteTargetMounted = Boolean(
+    quoteTarget && virtualItems.some((item) => item.key === quoteTarget.message_id),
+  );
+
+  // 目标行挂载并完成首帧测高后停止虚拟列表的自动收敛，再按引用字符范围精确居中与高亮。
+  useEffect(() => {
+    if (!quoteTarget || !quoteTargetMounted) return;
+    const quote = quoteTarget;
+    const frame = requestAnimationFrame(() => {
+      if (navigation.current !== quote) return;
+      virtualizer.cancelScroll();
+      setNavigatingQuote(false);
+      setQuoteTarget(null);
+      const element = viewport.current;
+      const body = element?.querySelector<HTMLElement>(
+        `[data-quote-body][data-message-id="${quote.message_id}"]`,
+      );
+      if (!element || !body) {
+        setQuoteError('暂时找不到引用原文，请加载历史后重试');
+        return;
+      }
+      const clear = highlightQuote(body, quote, element);
+      const timer = setTimeout(clear, 3000);
+      clearHighlight.current = () => {
+        clearTimeout(timer);
+        clear();
+      };
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [quoteTarget, quoteTargetMounted, virtualizer]);
+
+  // 记录用户主动切换展开或收起的目标消息，供 TanStack Virtual 同帧决定是否补偿 scrollTop。
   const handleExpandedChange = useCallback((messageID: string, expanded: boolean) => {
+    const toggle = { id: messageID, action: expanded ? ('expand' as const) : ('collapse' as const) };
+    pendingToggle.current = toggle;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (pendingToggle.current === toggle) pendingToggle.current = null;
+      });
+    });
     setExpandedMessages((current) => {
       if (current.has(messageID) === expanded) return current;
       const next = new Set(current);
@@ -312,16 +370,21 @@ export function ChatMessageList({
     });
   }, []);
 
-  const handleScrollBy = useCallback((top: number) => {
-    list.current?.scrollBy({ top });
-  }, []);
-
-  // 消息行只包含真实消息，页头和页尾状态不占用消息索引。
   const hasMessages = messages.length > 0;
-  const context = useMemo<ListContext>(
-    () => ({
-      header: (
-        <>
+
+  return (
+    <>
+      <div
+        ref={bindViewport}
+        id="messages"
+        className="messages"
+        aria-label="聊天消息"
+        tabIndex={0}
+        onWheel={handleUserScrollStart}
+        onTouchStart={handleUserScrollStart}
+        onKeyDown={handleUserScrollStart}
+      >
+        <div className="chat-list-header">
           {quoteError && (
             <p className="error" role="status">
               {quoteError}
@@ -346,108 +409,84 @@ export function ChatMessageList({
               {controller.loadingHistory ? '正在加载…' : '加载更早的消息'}
             </button>
           )}
-        </>
-      ),
-      footer:
-        controller.connected && controller.mainThinking ? (
-          <div className="thinking" role="status" aria-label="aether 正在处理">
-            <div className="thinking-dots" aria-hidden="true">
-              <span className="dot" />
-              <span className="dot dot-two" />
-              <span className="dot dot-three" />
-            </div>
-          </div>
-        ) : controller.mainFailed ? (
-          <p className="error" role="alert">
-            回复失败，请再发一条消息重试。
-          </p>
-        ) : null,
-    }),
-    [
-      controller,
-      controller.connected,
-      controller.error,
-      controller.hasMoreHistory,
-      controller.loadingHistory,
-      controller.mainFailed,
-      controller.mainThinking,
-      hasMessages,
-      loadOlderHistory,
-      quoteError,
-    ],
-  );
-
-  const renderItemContent = useCallback(
-    (itemIndex: number, message: ChatMessage) => {
-      const index = itemIndex - firstItemIndex;
-      const { showTime, joinedWithPrevious, endsGroup } = getMessageGroupState(messages, index);
-      return (
-        <div className="chat-list-row" data-chat-row={message.id}>
-          <ChatMessageEntry
-            message={message}
-            showTime={showTime}
-            joinedWithPrevious={joinedWithPrevious}
-            endsGroup={endsGroup}
-            expanded={expandedMessages.has(message.id)}
-            onExpandedChange={handleExpandedChange}
-            onQuoteNavigate={handleQuoteNavigate}
-            onScrollBy={handleScrollBy}
-          />
         </div>
-      );
-    },
-    [expandedMessages, firstItemIndex, handleExpandedChange, handleQuoteNavigate, handleScrollBy, messages],
-  );
-
-  return (
-    <>
-      <Virtuoso
-        ref={list}
-        id="messages"
-        className="messages"
-        aria-label="聊天消息"
-        scrollerRef={bindViewport}
-        data={messages}
-        components={components}
-        context={context}
-        computeItemKey={computeMessageKey}
-        firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={initialBottomLocation}
-        defaultItemHeight={defaultMessageRowHeight}
-        increaseViewportBy={viewportOverscan}
-        atBottomThreshold={160}
-        atBottomStateChange={handleAtBottomChange}
-        isScrolling={handleIsScrolling}
-        onWheel={handleUserScrollStart}
-        onTouchStart={handleUserScrollStart}
-        onKeyDown={handleUserScrollStart}
-        startReached={handleStartReached}
-        itemContent={renderItemContent}
-      />
+        <div
+          ref={virtualizer.containerRef}
+          className="chat-list-items"
+          style={{ position: 'relative', width: '100%' }}
+        >
+          {virtualItems.map((virtualItem) => {
+            const message = messages[virtualItem.index];
+            const { showTime, joinedWithPrevious, endsGroup } = getMessageGroupState(
+              messages,
+              virtualItem.index,
+            );
+            return (
+              <div
+                key={virtualItem.key}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  width: '100%',
+                }}
+              >
+                <div className="chat-list-row" data-chat-row={message.id}>
+                  <ChatMessageEntry
+                    message={message}
+                    showTime={showTime}
+                    joinedWithPrevious={joinedWithPrevious}
+                    endsGroup={endsGroup}
+                    expanded={expandedMessages.has(message.id)}
+                    onExpandedChange={handleExpandedChange}
+                    onQuoteNavigate={handleQuoteNavigate}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="chat-list-footer">
+          {controller.connected && controller.mainThinking ? (
+            <div className="thinking" role="status" aria-label="aether 正在处理">
+              <div className="thinking-dots" aria-hidden="true">
+                <span className="dot" />
+                <span className="dot" />
+                <span className="dot" />
+              </div>
+            </div>
+          ) : controller.mainFailed ? (
+            <p className="error" role="alert">
+              回复失败，请再发一条消息重试。
+            </p>
+          ) : null}
+        </div>
+      </div>
       <QuoteSelection container={viewport} onQuote={onQuote} />
-      <button
-        type="button"
-        className={`scroll-to-bottom${atBottom ? ' is-hidden' : ''}`}
-        aria-label="滚动到底部"
-        title="滚动到底部"
-        aria-hidden={atBottom}
-        tabIndex={atBottom ? -1 : 0}
-        onPointerDown={(event) => {
-          // 鼠标按下时保留输入焦点；WebKit 需要触摸的默认行为才能随后发出 click。
-          if (event.pointerType === 'mouse') event.preventDefault();
-        }}
-        onClick={scrollToBottom}
-      >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M12 5v14m-6-6 6 6 6-6"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
+      {!atBottom && (
+        <button
+          type="button"
+          className="scroll-to-bottom"
+          aria-label="滚动到底部"
+          title="滚动到底部"
+          onPointerDown={(event) => {
+            // 鼠标按下时保留输入焦点；WebKit 需要触摸的默认行为才能随后发出 click。
+            if (event.pointerType === 'mouse') event.preventDefault();
+          }}
+          onClick={scrollToBottom}
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 5v14m-6-6 6 6 6-6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
     </>
   );
 }
