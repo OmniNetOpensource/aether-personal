@@ -1,5 +1,5 @@
-// 本文件是 agent loop 的请求后阶段：处理本轮的结局。成功就保存回复并执行其中的工具（Subagent 无工具收尾时原子完成并向 Main 投递结果）；
-// 被新输入取代或遇到临时故障就安排下一轮；其余失败在这里统一收尾。
+// 本文件是 agent loop 的请求后阶段：处理本轮的结局。成功就保存回复、必要时在当前租约内立刻执行热压缩并执行工具
+// （Subagent 无工具收尾时原子完成并向 Main 投递结果）；被新输入取代或遇到临时故障就安排下一轮；其余失败在这里统一收尾。
 
 package agent
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -37,9 +38,9 @@ func (r *Runner) afterRequest(ctx, drainCtx context.Context, retry *modelRetry, 
 		if err := r.saveReply(ctx, stepID, replyID, response); err != nil {
 			return r.failRun(ctx, through, err)
 		}
-		// 最终回复已经落库并可见，后台计时独立于这一轮的聊天租约。
+		// 最终回复已落库并推送聊天；达到热压缩阈值时直接在当前租约内立刻收尾压缩，避免缓存过期或与下轮抢跑。
 		if r.subagentID == nil && len(message.ToolCalls) == 0 && response.Usage.PromptTokens != nil && AssistantTextToUser(response.Choices[0].Message) != "" {
-			r.scheduleHotCompaction(drainCtx, replyID, through, *response.Usage.PromptTokens)
+			r.maybeHotCompact(ctx, drainCtx, stepID, replyID, *response.Usage.PromptTokens)
 		}
 		if err := r.executeToolCalls(ctx, stepID, message.ToolCalls); err != nil {
 			return r.failRun(ctx, through, err)
@@ -129,6 +130,50 @@ func (r *Runner) saveReply(ctx context.Context, stepID, replyID uuid.UUID, respo
 	return nil
 }
 
+// maybeHotCompact 在 Main 交付最终回答后检查是否达到热压缩阈值；未进入停机排空时直接在当前租约内复用热前缀生成摘要。
+// 失败只记日志，不影响已交付的回复与后续新消息。
+func (r *Runner) maybeHotCompact(ctx, drainCtx context.Context, stepID, replyID uuid.UUID, inputTokens int32) {
+	if drainCtx.Err() != nil {
+		return
+	}
+	compactCtx, cancel := context.WithTimeout(ctx, modelRequestTimeout)
+	defer cancel()
+	q := database.New(r.databasePool)
+	settings, err := modelsettings.LoadRuntime(compactCtx, q)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("load runtime settings for hot compaction failed", "user_id", r.userID, "reply_id", replyID, "error", err)
+		}
+		return
+	}
+	if inputTokens < settings.HotCompactAtTokens {
+		return
+	}
+	model, err := q.GetStepModel(compactCtx, stepID)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("load step model for hot compaction failed", "user_id", r.userID, "step_id", stepID, "error", err)
+		}
+		return
+	}
+	rows, err := q.ListAgentContextRows(compactCtx, database.ListAgentContextRowsParams{UserID: r.userID})
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("load context for hot compaction failed", "user_id", r.userID, "reply_id", replyID, "error", err)
+		}
+		return
+	}
+	// 摘要边界固定在刚交付的这条回答；压缩前或压缩期间到达的新用户消息序号更大，会自动留在新摘要之后。
+	replyIndex := slices.IndexFunc(rows, func(row database.ListAgentContextRowsRow) bool { return row.ID == replyID })
+	if replyIndex < 0 {
+		return
+	}
+	rows = rows[:replyIndex+1]
+	if err := r.compactContext(compactCtx, rows, rows[replyIndex].Sequence, model, compactPrompt, "hot_compact", nil); err != nil && ctx.Err() == nil && !errors.Is(err, errLostLease) {
+		slog.Error("hot compaction failed", "user_id", r.userID, "reply_id", replyID, "error", err)
+	}
+}
+
 // executeToolCalls 并行执行独立工具，Main 的电脑操作则在一个协程里按模型原始顺序执行。
 func (r *Runner) executeToolCalls(ctx context.Context, stepID uuid.UUID, calls []toolCall) error {
 	toolErrors := make([]error, len(calls))
@@ -214,9 +259,9 @@ func (r *Runner) executeCompact(ctx context.Context, stepID uuid.UUID, call tool
 		return err
 	}
 	prompt := compactPrompt + "\n\nReason: " + args.Reason + "\nFocus: " + args.Focus
-	return r.compactContext(ctx, rows, input.InputSequence, input.Model, prompt, &database.InsertAgentMessageParams{
+	return r.compactContext(ctx, rows, input.InputSequence, input.Model, prompt, "compact", &database.InsertAgentMessageParams{
 		UserID: r.userID, SubagentID: r.subagentID, Role: "tool", Content: content, StepID: &stepID,
-	}, uuid.Nil)
+	})
 }
 
 // toolResultContent 把一个工具调用的结果写成原生 tool 消息，靠 tool_call_id 与调用对应。

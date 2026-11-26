@@ -19,18 +19,17 @@ WHERE user_model_settings.version = sqlc.arg(expected_version)
 RETURNING version;
 
 -- name: GetRuntimeSettings :one
-SELECT compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, version
+SELECT compact_at_tokens, hot_compact_at_tokens, version
 FROM model_settings WHERE singleton = true;
 
 -- name: SaveRuntimeSettings :one
--- 保留旧的全局模型列供旧版回滚，当前运行时只读取压缩阈值和热压缩等待时间。
-INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, version, updated_by)
-SELECT 'openrouter/free', sqlc.arg(compact_at_tokens), sqlc.arg(hot_compact_at_tokens), sqlc.arg(hot_compact_delay_seconds), 1, '管理员'
+-- 保留旧的全局模型列供旧版回滚，当前运行时只读取主动压缩提醒线与热压缩触发线。
+INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, version, updated_by)
+SELECT 'openrouter/free', sqlc.arg(compact_at_tokens), sqlc.arg(hot_compact_at_tokens), 1, '管理员'
 WHERE sqlc.arg(expected_version)::bigint = 0
    OR EXISTS (SELECT 1 FROM model_settings WHERE singleton = true)
 ON CONFLICT (singleton) DO UPDATE SET compact_at_tokens = EXCLUDED.compact_at_tokens,
     hot_compact_at_tokens = EXCLUDED.hot_compact_at_tokens,
-    hot_compact_delay_seconds = EXCLUDED.hot_compact_delay_seconds,
     version = model_settings.version + 1, updated_at = now(), updated_by = EXCLUDED.updated_by
 WHERE model_settings.version = sqlc.arg(expected_version)
 RETURNING version;

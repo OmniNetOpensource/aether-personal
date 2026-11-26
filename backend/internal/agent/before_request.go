@@ -128,7 +128,7 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 		if end == 0 {
 			return r.buildAgentRequest(rows, model), nil
 		}
-		if err := r.compactContext(ctx, rows[:end], rows[end-1].Sequence, model, compactPrompt, nil, uuid.Nil); err != nil {
+		if err := r.compactContext(ctx, rows[:end], rows[end-1].Sequence, model, compactPrompt, "compact", nil); err != nil {
 			return modelRequest{}, err
 		}
 	case before >= int64(settings.CompactAtTokens):
@@ -162,30 +162,16 @@ func (r *Runner) prepareContext(ctx context.Context, model string, capacity int6
 	return r.buildAgentRequest(rows, model), nil
 }
 
-// compactContext 供容量保护和显式工具调用共用；在旧世代生成摘要，成功时连同工具回执原子提交。
-func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentContextRowsRow, through int64, model, prompt string, receipt *database.InsertAgentMessageParams, idleReplyID uuid.UUID) error {
+// compactContext 供容量保护、显式工具调用与最终回答后的热压缩共用；在当前租约保护下复用旧世代前缀生成摘要并原子提交。
+func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentContextRowsRow, through int64, model, prompt, purpose string, receipt *database.InsertAgentMessageParams) error {
 	queries := database.New(r.databasePool)
 	request := r.buildAgentRequest(rows, model)
 	request.Messages = append(request.Messages, runtimeMessage("compaction", compactInstructions+"\n\n"+prompt))
-	// 普通压缩随 Runner 租约提交；后台热压缩开步前要求目标回复仍是末尾，提交时若下一轮尚未开步则照常提交摘要。
-	purpose := "compact"
-	if idleReplyID != uuid.Nil {
-		purpose = "hot_compact"
-	}
 	var compactStepID uuid.UUID
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		txQueries := database.New(tx)
-		if idleReplyID == uuid.Nil {
-			if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
-				return err
-			}
-		} else {
-			if err := txQueries.LockUserMessages(ctx, r.userID); err != nil {
-				return err
-			}
-			if _, err := txQueries.GetLatestMainReplyModel(ctx, database.GetLatestMainReplyModelParams{UserID: r.userID, ReplyID: idleReplyID}); err != nil {
-				return err
-			}
+		if err := r.lockAndVerifyLease(ctx, txQueries); err != nil {
+			return err
 		}
 		var err error
 		compactStepID, err = txQueries.StartCompactStep(ctx, database.StartCompactStepParams{
@@ -221,29 +207,8 @@ func (r *Runner) compactContext(ctx context.Context, rows []database.ListAgentCo
 	summaryJSON, _ := json.Marshal(map[string]any{"role": "user", "name": "context_summary", "content": contextSummaryPrompt + summary})
 	err = pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		q := database.New(tx)
-		if idleReplyID == uuid.Nil {
-			if err := r.lockAndVerifyLease(ctx, q); err != nil {
-				return err
-			}
-		} else {
-			if err := q.LockUserMessages(ctx, r.userID); err != nil {
-				return err
-			}
-			allowed, err := q.HasHotCompactCommitWindow(ctx, database.HasHotCompactCommitWindowParams{UserID: r.userID, ReplyID: idleReplyID})
-			if err != nil {
-				return err
-			}
-			if !allowed {
-				skipped := "hot compaction skipped: newer turn already started"
-				return q.FinishStep(ctx, database.FinishStepParams{
-					ID:                compactStepID,
-					InputTokens:       result.Usage.PromptTokens,
-					CachedInputTokens: result.Usage.CachedTokens,
-					OutputTokens:      result.Usage.CompletionTokens,
-					Cost:              result.Usage.Cost,
-					Error:             &skipped,
-				})
-			}
+		if err := r.lockAndVerifyLease(ctx, q); err != nil {
+			return err
 		}
 		if err := q.InsertContextSummary(ctx, database.InsertContextSummaryParams{
 			UserID:                 r.userID,

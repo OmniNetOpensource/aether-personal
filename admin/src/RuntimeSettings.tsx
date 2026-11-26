@@ -1,4 +1,4 @@
-// 本文件是管理看板的全局运行设置，供管理员修改压缩提醒线、热压缩触发线和热压缩等待时间。
+// 本文件是管理看板的全局运行设置，供管理员修改主动压缩提醒线和热压缩触发线。
 
 import { useEffect, useState } from "react";
 import { api, ApiError, formatTime, type RuntimeSettings } from "./api.js";
@@ -96,8 +96,7 @@ export function RuntimeSettingsPage({
 
   const changed =
     settings.compact_at_tokens !== draft.compact_at_tokens ||
-    settings.hot_compact_at_tokens !== draft.hot_compact_at_tokens ||
-    settings.hot_compact_delay_seconds !== draft.hot_compact_delay_seconds;
+    settings.hot_compact_at_tokens !== draft.hot_compact_at_tokens;
 
   return (
     <form onSubmit={save} className="panel model-role-card">
@@ -133,23 +132,6 @@ export function RuntimeSettingsPage({
               setDraft({
                 ...draft,
                 hot_compact_at_tokens: Number(event.target.value),
-              })
-            }
-          />
-        </label>
-        <label className="model-picker">
-          热压缩等待时间（秒）
-          <input
-            type="number"
-            min={1}
-            max={2147483647}
-            required
-            disabled={saving}
-            value={draft.hot_compact_delay_seconds || ""}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                hot_compact_delay_seconds: Number(event.target.value),
               })
             }
           />

@@ -1,4 +1,4 @@
-// 本文件提供管理看板的全局运行参数接口，管理员可以调整压缩提醒线、热压缩触发线和热压缩等待时间。
+// 本文件提供管理看板的全局运行参数接口，管理员可以调整主动压缩提醒线和热压缩触发线。
 
 package httpapi
 
@@ -35,18 +35,16 @@ func (s *server) updateAdminRuntimeSettings(w http.ResponseWriter, r *http.Reque
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&settings) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
 		settings.Version < 0 || settings.CompactAtTokens < 1000 || settings.CompactAtTokens > 2000000 ||
-		settings.HotCompactAtTokens < 1000 || settings.HotCompactAtTokens > 2000000 ||
-		settings.HotCompactDelaySeconds < 1 {
+		settings.HotCompactAtTokens < 1000 || settings.HotCompactAtTokens > 2000000 {
 		http.Error(w, "invalid runtime settings", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	version, err := s.queries.SaveRuntimeSettings(ctx, database.SaveRuntimeSettingsParams{
-		CompactAtTokens:        settings.CompactAtTokens,
-		HotCompactAtTokens:     settings.HotCompactAtTokens,
-		HotCompactDelaySeconds: settings.HotCompactDelaySeconds,
-		ExpectedVersion:        settings.Version,
+		CompactAtTokens:    settings.CompactAtTokens,
+		HotCompactAtTokens: settings.HotCompactAtTokens,
+		ExpectedVersion:    settings.Version,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "settings changed; reload before applying", http.StatusConflict)

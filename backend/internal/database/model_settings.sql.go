@@ -12,26 +12,20 @@ import (
 )
 
 const getRuntimeSettings = `-- name: GetRuntimeSettings :one
-SELECT compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, version
+SELECT compact_at_tokens, hot_compact_at_tokens, version
 FROM model_settings WHERE singleton = true
 `
 
 type GetRuntimeSettingsRow struct {
-	CompactAtTokens        int32
-	HotCompactAtTokens     int32
-	HotCompactDelaySeconds int32
-	Version                int64
+	CompactAtTokens    int32
+	HotCompactAtTokens int32
+	Version            int64
 }
 
 func (q *Queries) GetRuntimeSettings(ctx context.Context) (GetRuntimeSettingsRow, error) {
 	row := q.db.QueryRow(ctx, getRuntimeSettings)
 	var i GetRuntimeSettingsRow
-	err := row.Scan(
-		&i.CompactAtTokens,
-		&i.HotCompactAtTokens,
-		&i.HotCompactDelaySeconds,
-		&i.Version,
-	)
+	err := row.Scan(&i.CompactAtTokens, &i.HotCompactAtTokens, &i.Version)
 	return i, err
 }
 
@@ -64,33 +58,26 @@ func (q *Queries) GetUserModelSettings(ctx context.Context, userID uuid.UUID) (G
 }
 
 const saveRuntimeSettings = `-- name: SaveRuntimeSettings :one
-INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, hot_compact_delay_seconds, version, updated_by)
-SELECT 'openrouter/free', $1, $2, $3, 1, '管理员'
-WHERE $4::bigint = 0
+INSERT INTO model_settings (main_model, compact_at_tokens, hot_compact_at_tokens, version, updated_by)
+SELECT 'openrouter/free', $1, $2, 1, '管理员'
+WHERE $3::bigint = 0
    OR EXISTS (SELECT 1 FROM model_settings WHERE singleton = true)
 ON CONFLICT (singleton) DO UPDATE SET compact_at_tokens = EXCLUDED.compact_at_tokens,
     hot_compact_at_tokens = EXCLUDED.hot_compact_at_tokens,
-    hot_compact_delay_seconds = EXCLUDED.hot_compact_delay_seconds,
     version = model_settings.version + 1, updated_at = now(), updated_by = EXCLUDED.updated_by
-WHERE model_settings.version = $4
+WHERE model_settings.version = $3
 RETURNING version
 `
 
 type SaveRuntimeSettingsParams struct {
-	CompactAtTokens        int32
-	HotCompactAtTokens     int32
-	HotCompactDelaySeconds int32
-	ExpectedVersion        int64
+	CompactAtTokens    int32
+	HotCompactAtTokens int32
+	ExpectedVersion    int64
 }
 
-// 保留旧的全局模型列供旧版回滚，当前运行时只读取压缩阈值和热压缩等待时间。
+// 保留旧的全局模型列供旧版回滚，当前运行时只读取主动压缩提醒线与热压缩触发线。
 func (q *Queries) SaveRuntimeSettings(ctx context.Context, arg SaveRuntimeSettingsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, saveRuntimeSettings,
-		arg.CompactAtTokens,
-		arg.HotCompactAtTokens,
-		arg.HotCompactDelaySeconds,
-		arg.ExpectedVersion,
-	)
+	row := q.db.QueryRow(ctx, saveRuntimeSettings, arg.CompactAtTokens, arg.HotCompactAtTokens, arg.ExpectedVersion)
 	var version int64
 	err := row.Scan(&version)
 	return version, err

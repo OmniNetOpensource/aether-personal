@@ -97,7 +97,6 @@ func (r *Runner) onToolCommitted(name, result string) {
 // completeSubagentAndAnnounce 在单一事务内按固定锁序（先用户消息锁、后 Subagent 锁）保存最终回复、标为 completed，
 // 并向 Main 的消息列表投递 subagent_event 触发消息，提交后唤醒 Main。
 func (r *Runner) completeSubagentAndAnnounce(ctx context.Context, stepID, replyID uuid.UUID, response chatResponse, outputText string) error {
-	var sequence int64
 	err := pgx.BeginFunc(ctx, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, r.userID); err != nil {
@@ -154,7 +153,7 @@ func (r *Runner) completeSubagentAndAnnounce(ctx context.Context, stepID, replyI
 		if err != nil {
 			return err
 		}
-		sequence, err = queries.InsertTriggerMessage(ctx, database.InsertTriggerMessageParams{
+		_, err = queries.InsertTriggerMessage(ctx, database.InsertTriggerMessageParams{
 			UserID:  r.userID,
 			Content: triggerContent,
 		})
@@ -164,7 +163,7 @@ func (r *Runner) completeSubagentAndAnnounce(ctx context.Context, stepID, replyI
 		return err
 	}
 	if r.manager != nil {
-		r.manager.Wake(ctx, r.userID, sequence)
+		r.manager.Wake(ctx, r.userID)
 	}
 	return nil
 }
@@ -173,7 +172,6 @@ func (r *Runner) completeSubagentAndAnnounce(ctx context.Context, stepID, replyI
 func (r *Runner) failSubagentAndAnnounce(cause error) (roundEnd, error) {
 	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var sequence int64
 	err := pgx.BeginFunc(cleanup, r.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(cleanup, r.userID); err != nil {
@@ -245,7 +243,7 @@ func (r *Runner) failSubagentAndAnnounce(cause error) (roundEnd, error) {
 		if err != nil {
 			return err
 		}
-		sequence, err = queries.InsertTriggerMessage(cleanup, database.InsertTriggerMessageParams{
+		_, err = queries.InsertTriggerMessage(cleanup, database.InsertTriggerMessageParams{
 			UserID:  r.userID,
 			Content: triggerContent,
 		})
@@ -259,7 +257,7 @@ func (r *Runner) failSubagentAndAnnounce(cause error) (roundEnd, error) {
 		return roundStop, fmt.Errorf("save subagent failure: %w", err)
 	}
 	if r.manager != nil {
-		r.manager.Wake(context.Background(), r.userID, sequence)
+		r.manager.Wake(context.Background(), r.userID)
 	}
 	return roundStop, nil
 }

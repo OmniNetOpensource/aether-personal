@@ -160,27 +160,6 @@ func (q *Queries) GetLatestChatChange(ctx context.Context, userID uuid.UUID) (in
 	return column_1, err
 }
 
-const getLatestMainReplyModel = `-- name: GetLatestMainReplyModel :one
-SELECT s.model FROM messages m JOIN steps s ON s.id = m.step_id
-WHERE m.id = $1 AND m.id = (
-    SELECT tail.id FROM messages tail WHERE tail.user_id = $2 AND tail.subagent_id IS NULL
-    ORDER BY tail.sequence DESC LIMIT 1
-)
-`
-
-type GetLatestMainReplyModelParams struct {
-	ReplyID uuid.UUID
-	UserID  uuid.UUID
-}
-
-// 仅返回对话末尾仍是目标回复时的当轮模型；任何后到的输入、占位或摘要都会使目标失效。
-func (q *Queries) GetLatestMainReplyModel(ctx context.Context, arg GetLatestMainReplyModelParams) (string, error) {
-	row := q.db.QueryRow(ctx, getLatestMainReplyModel, arg.ReplyID, arg.UserID)
-	var model string
-	err := row.Scan(&model)
-	return model, err
-}
-
 const getLegacyChatCursor = `-- name: GetLegacyChatCursor :one
 SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2
 `
@@ -220,6 +199,17 @@ func (q *Queries) GetMainStatus(ctx context.Context, userID uuid.UUID) (GetMainS
 	return i, err
 }
 
+const getStepModel = `-- name: GetStepModel :one
+SELECT model FROM steps WHERE id = $1
+`
+
+func (q *Queries) GetStepModel(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getStepModel, id)
+	var model string
+	err := row.Scan(&model)
+	return model, err
+}
+
 const getUserLeaseEpoch = `-- name: GetUserLeaseEpoch :one
 SELECT main_lease_epoch FROM users WHERE id = $1::uuid
 `
@@ -229,43 +219,6 @@ func (q *Queries) GetUserLeaseEpoch(ctx context.Context, userID uuid.UUID) (int6
 	var main_lease_epoch int64
 	err := row.Scan(&main_lease_epoch)
 	return main_lease_epoch, err
-}
-
-const hasHotCompactCommitWindow = `-- name: HasHotCompactCommitWindow :one
-SELECT EXISTS(
-    SELECT 1 FROM messages target
-    WHERE target.id = $1
-      AND target.user_id = $2
-      AND target.subagent_id IS NULL
-      AND NOT EXISTS (
-          SELECT 1 FROM messages later
-          WHERE later.user_id = target.user_id
-            AND later.subagent_id IS NULL
-            AND later.sequence > target.sequence
-            AND (later.role = 'assistant' OR later.is_summary)
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM steps s
-          WHERE s.user_id = target.user_id
-            AND s.subagent_id IS NULL
-            AND s.purpose = 'agent'
-            AND s.finished_at IS NULL
-      )
-)
-`
-
-type HasHotCompactCommitWindowParams struct {
-	ReplyID uuid.UUID
-	UserID  uuid.UUID
-}
-
-// 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
-// 若新用户消息刚入库但下一轮尚未开步，仍可提交摘要并让新消息保留在摘要之后。
-func (q *Queries) HasHotCompactCommitWindow(ctx context.Context, arg HasHotCompactCommitWindowParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasHotCompactCommitWindow, arg.ReplyID, arg.UserID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const hasMainWork = `-- name: HasMainWork :one

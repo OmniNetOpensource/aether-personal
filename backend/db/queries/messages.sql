@@ -151,37 +151,8 @@ WHERE s.id = $1;
 INSERT INTO steps (user_id, subagent_id, model, started_at, purpose)
 VALUES ($1, $2, $3, now(), $4) RETURNING id;
 
--- name: GetLatestMainReplyModel :one
--- 仅返回对话末尾仍是目标回复时的当轮模型；任何后到的输入、占位或摘要都会使目标失效。
-SELECT s.model FROM messages m JOIN steps s ON s.id = m.step_id
-WHERE m.id = sqlc.arg(reply_id) AND m.id = (
-    SELECT tail.id FROM messages tail WHERE tail.user_id = sqlc.arg(user_id) AND tail.subagent_id IS NULL
-    ORDER BY tail.sequence DESC LIMIT 1
-);
-
--- name: HasHotCompactCommitWindow :one
--- 热压缩请求完成后校验是否仍可提交摘要：目标回复之后不能出现新的助手消息、摘要或已开步的 Main 轮次；
--- 若新用户消息刚入库但下一轮尚未开步，仍可提交摘要并让新消息保留在摘要之后。
-SELECT EXISTS(
-    SELECT 1 FROM messages target
-    WHERE target.id = sqlc.arg(reply_id)
-      AND target.user_id = sqlc.arg(user_id)
-      AND target.subagent_id IS NULL
-      AND NOT EXISTS (
-          SELECT 1 FROM messages later
-          WHERE later.user_id = target.user_id
-            AND later.subagent_id IS NULL
-            AND later.sequence > target.sequence
-            AND (later.role = 'assistant' OR later.is_summary)
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM steps s
-          WHERE s.user_id = target.user_id
-            AND s.subagent_id IS NULL
-            AND s.purpose = 'agent'
-            AND s.finished_at IS NULL
-      )
-);
+-- name: GetStepModel :one
+SELECT model FROM steps WHERE id = $1;
 
 -- name: InsertContextSummary :exec
 INSERT INTO messages (user_id, subagent_id, role, content, step_id, is_summary, summary_through_sequence)

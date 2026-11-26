@@ -89,6 +89,6 @@ func deliverSchedule(ctx context.Context, pool *pgxpool.Pool, manager *agent.Man
 	if err != nil || sequence == 0 {
 		return err
 	}
-	manager.Wake(ctx, userID, sequence)
+	manager.Wake(ctx, userID)
 	return nil
 }

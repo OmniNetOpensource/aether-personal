@@ -148,7 +148,6 @@ export interface QuotaItem {
 export interface RuntimeSettings {
   compact_at_tokens: number;
   hot_compact_at_tokens: number;
-  hot_compact_delay_seconds: number;
   version: number;
 }
 

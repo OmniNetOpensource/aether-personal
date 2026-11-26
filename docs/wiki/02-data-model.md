@@ -43,7 +43,7 @@ erDiagram
 | `oauth_authorization_codes` | 5 分钟有效、单次消费的 PKCE 授权码哈希（`00067`） | `已实现` |
 | `oauth_tokens` | 外部 MCP 客户端访问 `/mcp/memory` 的访问/刷新令牌哈希与最近使用时间（`00067`） | `已实现` |
 | `user_model_settings` | 每个账号的 Main、Subagent 和压缩模型、已知输入容量与保存版本（`00057`） | `已实现` |
-| `model_settings` | 全局压缩阈值与热压缩等待时间。旧版全局模型列保留供回滚 | `已实现` |
+| `model_settings` | 全局主动压缩提醒线与热压缩触发线。旧版全局模型列保留供回滚 | `已实现` |
 | `service_settings` | 看板管理的服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -292,6 +292,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00067_add_mcp_oauth.sql` | 新增 `oauth_clients`、`oauth_authorization_codes` 与 `oauth_tokens` 表，支持远程记忆 MCP 的 OAuth 2.1（PKCE + DCR）授权 | `已实现` |
 | `00068_allow_oauth_register_rate_limits.sql` | 扩充 `login_rate_limits.scope` 约束，允许写入 OAuth 动态客户端注册的按 IP 与全站限流计数 | `已实现` |
 | `00069_drop_reflection_idle_minutes.sql` | 删除 `model_settings.reflection_idle_minutes` 列，整体移除闲置后台反思（历史反思消息行保留） | `已实现` |
+| `00070_drop_hot_compact_delay_seconds.sql` | 删除 `model_settings.hot_compact_delay_seconds` 列，热压缩改为在最终回答落库后立即于当前 Main 租约内执行 | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

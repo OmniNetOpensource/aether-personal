@@ -496,18 +496,16 @@ func (s *server) handleLoginFrame(ctx context.Context, relay *eventRelay, frame 
 	}) == nil
 }
 
-// saveUserMessage 在事务里落库，提交后将用户推入 Redis 唤醒队列并通知取消等待中的热压缩；
+// saveUserMessage 在事务里落库，提交后将用户推入 Redis 唤醒队列；
 // 随后把这条消息推给本连接并回 delivered 确认，前端清空输入框时消息已经在列表里，Runner 认领后另行通知亮起思考气泡。
 // 返回 false 表示连接已不可用，调用方应退出主循环。
 func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame, changeCursor *int64) bool {
-	var sequence int64
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		if err := queries.LockUserMessages(ctx, userID); err != nil {
 			return err
 		}
-		var err error
-		sequence, err = queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
+		_, err := queries.InsertUserMessage(ctx, database.InsertUserMessageParams{
 			UserID:          userID,
 			Content:         userMessageContent(frame),
 			ClientMessageID: &frame.ClientMessageID,
@@ -521,7 +519,7 @@ func (s *server) saveUserMessage(ctx context.Context, relay *eventRelay, userID 
 	}
 
 	// 唤醒先于任何 WebSocket 写入；连接此时断开也不影响已经提交的工作。
-	s.agents.Wake(ctx, userID, sequence)
+	s.agents.Wake(ctx, userID)
 	if s.pushChatMessages(ctx, relay, userID, changeCursor) != nil {
 		return false
 	}
@@ -552,7 +550,8 @@ func (s *server) pushChatMessages(ctx context.Context, relay *eventRelay, userID
 		slog.Error("get Main activity failed", "user_id", userID, "error", err)
 		return err
 	}
-	thinking := (s.agents != nil && s.agents.HasActiveLease(ctx, userID))
+	// 最终回复落库后的静默热压缩仍持有 Main 租约，此时无待办不亮气泡；压缩中途收到新输入后 main_work 变真立刻亮起。
+	thinking := status.Thinking && s.agents != nil && s.agents.HasActiveLease(ctx, userID)
 	if !thinking {
 		subagentsRunning, err := s.queries.HasRunningSubagents(ctx, userID)
 		if err != nil {

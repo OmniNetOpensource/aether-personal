@@ -1,4 +1,4 @@
-// 本文件跨后端实例对等调度 Main 与后台 Subagent：Redis 传递独立唤醒队列、临时租约与新输入/取消广播，PostgreSQL 保存全部持久状态。
+// 本文件跨后端实例对等调度 Main 与后台 Subagent：Redis 传递独立唤醒队列、临时租约与 Subagent 取消广播，PostgreSQL 保存全部持久状态。
 
 package agent
 
@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,7 +29,6 @@ const ChatNotifyChannel = "chat:notify"
 
 const (
 	agentWakeQueueKey  = "agent:wake_queue"
-	agentInputChannel  = "agent:input"
 	leaseTTL           = 30 * time.Second
 	leaseRenewInterval = 10 * time.Second
 	recoveryInterval   = 5 * time.Second
@@ -82,18 +79,17 @@ func (m *Manager) HasActiveLease(ctx context.Context, userID uuid.UUID) bool {
 
 // Manager 在对等实例内分别管理 Main 与 Subagent 的独立并发槽位和活跃 Runner，保证后台 Subagent 不会挤占 Main 响应用户消息的容量。
 type Manager struct {
-	databasePool   *pgxpool.Pool
-	redisClient    *redis.Client
-	modelClient    *http.Client
-	toolDeps       tools.Dependencies
-	services       *services.Store
-	slots          chan struct{}
-	subagentSlots  chan struct{}
-	mutex          sync.Mutex
-	runners        map[uuid.UUID]*Runner
-	subagentStops  map[uuid.UUID]context.CancelCauseFunc
-	hotCompactions map[uuid.UUID]*hotCompaction
-	running        sync.WaitGroup
+	databasePool  *pgxpool.Pool
+	redisClient   *redis.Client
+	modelClient   *http.Client
+	toolDeps      tools.Dependencies
+	services      *services.Store
+	slots         chan struct{}
+	subagentSlots chan struct{}
+	mutex         sync.Mutex
+	runners       map[uuid.UUID]*Runner
+	subagentStops map[uuid.UUID]context.CancelCauseFunc
+	running       sync.WaitGroup
 }
 
 // NewManager 创建对等实例内的调度器；Main 与 Subagent 各自使用独立槽位池，满载时将剩余任务自然留给其他空闲实例。
@@ -114,30 +110,23 @@ func NewManager(pool *pgxpool.Pool, redisClient *redis.Client, settings config.C
 			HTTPClient:   &http.Client{Timeout: 120 * time.Second},
 			Sandbox:      sandbox.New(pool, serviceSettings, imageStore, settings.Sandbox),
 		},
-		slots:          make(chan struct{}, capacity),
-		subagentSlots:  make(chan struct{}, capacity),
-		runners:        map[uuid.UUID]*Runner{},
-		subagentStops:  map[uuid.UUID]context.CancelCauseFunc{},
-		hotCompactions: make(map[uuid.UUID]*hotCompaction),
+		slots:         make(chan struct{}, capacity),
+		subagentSlots: make(chan struct{}, capacity),
+		runners:       map[uuid.UUID]*Runner{},
+		subagentStops: map[uuid.UUID]context.CancelCauseFunc{},
 	}
 }
 
-// Wake 在新输入或 subagent_event 提交后广播跨实例新输入信号（取消仍在等待中的热压缩）并将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
-func (m *Manager) Wake(ctx context.Context, userID uuid.UUID, sequence int64) {
-	m.handleNewInput(userID, sequence)
-
+// Wake 在新输入、定时触发或 subagent_event 提交后将用户推入去重唤醒队列；使用独立超时避免客户端断线截断信号。
+func (m *Manager) Wake(ctx context.Context, userID uuid.UUID) {
 	wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	userText := userID.String()
-	pipeline := m.redisClient.Pipeline()
-	pipeline.Publish(wakeCtx, agentInputChannel, fmt.Sprintf("%s:%d", userText, sequence))
-	pipeline.Eval(wakeCtx, enqueueWakeLua, []string{agentWakeQueueKey}, userText)
-	if _, err := pipeline.Exec(wakeCtx); err != nil {
+	if err := m.enqueueWake(wakeCtx, userID); err != nil {
 		slog.Error("publish agent wake signal failed", "user_id", userID, "error", err)
 	}
 }
 
-// Start 启动恢复持久待办，并并行运行输入打断监听、Subagent 取消监听、周期补偿以及 Main 和 Subagent 两条队列消费；
+// Start 启动恢复持久待办，并并行运行 Subagent 取消监听、周期补偿以及 Main 和 Subagent 两条队列消费；
 // 收到排空信号时先停接新任务，等在飞步骤安全结束并释放租约交棒后，再停止信号监听并退出。
 func (m *Manager) Start(drainCtx, runCtx context.Context) error {
 	if err := m.recoverPending(drainCtx); err != nil {
@@ -151,7 +140,6 @@ func (m *Manager) Start(drainCtx, runCtx context.Context) error {
 	defer stopWorkers()
 
 	var workers sync.WaitGroup
-	workers.Go(func() { m.listenInputSignals(workersCtx) })
 	workers.Go(func() { m.listenSubagentCancelSignals(workersCtx) })
 	workers.Go(func() { m.periodicRecovery(drainCtx) })
 	workers.Go(func() { m.consumeSubagentQueue(drainCtx, runCtx) })
@@ -217,42 +205,6 @@ func (m *Manager) consumeSubagentQueue(drainCtx, runCtx context.Context) {
 		}
 		m.tryStartSubagentRunner(drainCtx, runCtx, subagentID)
 	}
-}
-
-// listenInputSignals 订阅跨实例的新输入序号广播，用于及时取消仍在倒计时中的热压缩任务，不打断已发出的模型请求。
-func (m *Manager) listenInputSignals(ctx context.Context) {
-	pubsub := m.redisClient.Subscribe(ctx, agentInputChannel)
-	defer pubsub.Close()
-	messages := pubsub.Channel()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case message, ok := <-messages:
-			if !ok {
-				return
-			}
-			rawUserID, rawSequence, found := strings.Cut(message.Payload, ":")
-			if !found {
-				continue
-			}
-			userID, userErr := uuid.Parse(rawUserID)
-			sequence, seqErr := strconv.ParseInt(rawSequence, 10, 64)
-			if userErr != nil || seqErr != nil {
-				continue
-			}
-			m.handleNewInput(userID, sequence)
-		}
-	}
-}
-
-// handleNewInput 在本机写入与跨实例广播时共用：仅取消仍在等待期的旧热压缩任务，不中断任何已发出的请求。
-func (m *Manager) handleNewInput(userID uuid.UUID, sequence int64) {
-	m.mutex.Lock()
-	if job := m.hotCompactions[userID]; job != nil && sequence > job.inputSequence {
-		job.cancel()
-	}
-	m.mutex.Unlock()
 }
 
 // listenSubagentCancelSignals 订阅跨实例的 Subagent 取消广播；若目标 Subagent 正在本实例执行，立即中止其请求与工具。
