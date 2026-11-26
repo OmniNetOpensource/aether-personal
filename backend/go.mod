@@ -3,19 +3,19 @@ module github.com/OmniNetOpensource/aether-personal/backend
 go 1.27.2
 
 require (
-	github.com/alibabacloud-go/darabonba-openapi/v2 v2.2.4
-	github.com/alibabacloud-go/sandbox-20260820 v1.2.2
-	github.com/alibabacloud-go/tea v1.5.2
+	github.com/alibabacloud-go/darabonba-openapi/v2 v2.2.5
+	github.com/alibabacloud-go/sandbox-20260820 v1.5.2
+	github.com/alibabacloud-go/tea v1.5.4
 	github.com/aliyun-fc/e2b-go-sdk v0.0.0-20260902102031-b539ebd3e79b
 	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.1
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/shopspring/decimal v1.5.0
-	golang.org/x/sync v0.24.0
+	github.com/shopspring/decimal v1.6.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
@@ -26,8 +26,16 @@ require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
 	github.com/ClickHouse/ch-go v0.74.0 // indirect
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0 // indirect
+	github.com/alibabacloud-go/alibabacloud-gateway-pop v0.0.8 // indirect
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
+	github.com/alibabacloud-go/darabonba-array v0.1.0 // indirect
+	github.com/alibabacloud-go/darabonba-encode-util v0.0.2 // indirect
+	github.com/alibabacloud-go/darabonba-map v0.0.2 // indirect
+	github.com/alibabacloud-go/darabonba-signature-util v0.0.7 // indirect
+	github.com/alibabacloud-go/darabonba-string v1.0.2 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
+	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
+	github.com/alibabacloud-go/openapi-util v0.1.1 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.9 // indirect
 	github.com/aliyun/credentials-go v1.4.5 // indirect
 	github.com/andybalholm/brotli v1.2.6 // indirect
