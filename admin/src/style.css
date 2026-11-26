@@ -1376,9 +1376,10 @@ dialog::backdrop {
 .model-role-card { padding:28px; }
 .model-role-card > p { font-size:12px; line-height:1.8; margin:12px 0 24px; }
 .model-picker { display:flex; flex-direction:column; gap:10px; font-size:12px; color:var(--text-secondary); }
-.model-picker input { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; background:var(--surface); padding:13px; font:inherit; color:var(--text); }
-.model-picker input:focus { outline:2px solid var(--forest-border); outline-offset:2px; }
-.model-picker input:disabled { background:var(--surface-muted); color:var(--text-muted); }
+.model-picker input, .model-picker select { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; background:var(--surface); padding:13px; font:inherit; color:var(--text); }
+.model-picker input:focus, .model-picker select:focus { outline:2px solid var(--forest-border); outline-offset:2px; }
+.model-picker input:disabled, .model-picker select:disabled { background:var(--surface-muted); color:var(--text-muted); }
+.button.danger { background:var(--error-soft); border-color:var(--error); color:var(--error); }
 .model-catalog-note { font-size:11px; color:var(--text-muted); margin-top:20px; line-height:1.8; }
 @media(max-width:960px) { .model-role-grid { grid-template-columns:1fr; } .model-role-card { padding:22px; } }
 

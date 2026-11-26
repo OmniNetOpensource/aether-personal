@@ -82,6 +82,17 @@ type MessageShareItem struct {
 	MessageID uuid.UUID
 }
 
+type ModelProvider struct {
+	ID               uuid.UUID
+	Name             string
+	Protocol         string
+	BaseUrl          string
+	ApiKeyCiphertext []byte
+	KeySuffix        string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type ModelSetting struct {
 	ID                     uuid.UUID
 	Singleton              bool

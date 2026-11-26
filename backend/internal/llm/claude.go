@@ -1,6 +1,6 @@
-// 本文件适配 ikun Claude 原生 Messages 接口，供 Main 与压缩共用；保留原生内容和思考签名，转换工具调用并记录流式用量。
+// 本文件实现 Claude 原生 Messages 协议：保留原生内容与思考签名、转换工具调用、解码流式用量并读取 /v1/models 目录。
 
-package providers
+package llm
 
 import (
 	"bytes"
@@ -8,23 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
-
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
+	"time"
 )
 
 // ErrClaudeEmptyMaxTokens 标记以 max_tokens 结束但没有正文或工具调用的回复，供请求后阶段决定是否补试。
 var ErrClaudeEmptyMaxTokens = errors.New("Claude response did not complete (stop reason: max_tokens, no text or tool calls)")
-
-// claudeProvider 承接 ikun Claude 的普通对话与上下文压缩。
-type claudeProvider struct{}
-
-// Matches 认领带 ikun 渠道前缀的 Claude 模型。
-func (claudeProvider) Matches(model string) bool { return strings.HasPrefix(model, "ikun:claude-") }
-
-// Service 使用独立 Claude 凭证，不复用 Gemini 的令牌。
-func (claudeProvider) Service() string { return services.IkunClaude }
 
 // claudeMessage 保留消息顺序，工具回执按 Claude 协议放入 user 的 tool_result 块。
 type claudeMessage struct {
@@ -32,8 +24,8 @@ type claudeMessage struct {
 	Content []json.RawMessage `json:"content"`
 }
 
-// PrepareRequest 转换共用消息与工具定义；同模型的原生内容完整回传，只有压缩请求禁用工具。
-func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
+// prepareClaudeRequest 转换共用消息与工具定义；同模型的原生内容完整回传，只有压缩请求禁用工具。
+func prepareClaudeRequest(ctx context.Context, config Config, prepared Request) (OutgoingRequest, error) {
 	messages := []claudeMessage{}
 	for _, raw := range prepared.Messages {
 		var message struct {
@@ -53,7 +45,6 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 			continue
 		}
 		content := claudeMessage{Role: message.Role, Content: []json.RawMessage{}}
-		// 共用内容只有文本和已解析为 base64 的图片，不向供应商传 Gemini 原生签名。
 		var text string
 		if json.Unmarshal(message.Content, &text) == nil {
 			if text != "" {
@@ -132,11 +123,11 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 		}
 		tools = append(tools, encoded)
 	}
-	// ikun 允许省略 max_tokens，由渠道决定输出额度；Main 与压缩共用此行为。
-	// Main 使用模型默认推理设置并允许工具；压缩沿用统一请求给出的低强度与禁用工具设置。
+	// 省略 max_tokens 由上游决定输出额度；普通对话允许工具，压缩请求按 ToolChoice 禁用。
 	bodyFields := map[string]any{
-		"model": strings.TrimPrefix(prepared.Model, "ikun:"), "messages": messages,
-		"stream": true,
+		"model":    prepared.Model,
+		"messages": messages,
+		"stream":   true,
 	}
 	if len(tools) > 0 {
 		choice := "auto"
@@ -153,27 +144,27 @@ func (claudeProvider) PrepareRequest(ctx context.Context, credentials services.S
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, credentials.BaseURL+"/v1/messages", bytes.NewReader(body))
+	endpoint := strings.TrimRight(config.BaseURL, "/") + "/v1/messages"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
-	request.Header.Set("x-api-key", credentials.APIKey)
+	request.Header.Set("x-api-key", config.APIKey)
 	request.Header.Set("anthropic-version", "2023-06-01")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "aether")
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
-// claudeStreamBlock 累积一个内容块；原始字段保留供应商元数据，四个 Builder 分别承接对应的流式增量。
+// claudeStreamBlock 累积一个内容块；原始字段保留上游元数据，四个 Builder 分别承接对应的流式增量。
 type claudeStreamBlock struct {
 	fields                           map[string]json.RawMessage
 	text, thinking, signature, input strings.Builder
 }
 
-// DecodeStream 按内容块拼回正文、思考签名与工具参数，原生块用于下一轮完整续接，共用字段供运行时执行与看板读取。
-func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Response, bool, error) {
+// decodeClaudeStream 按内容块拼回正文、思考签名与工具参数，原生块用于下一轮完整续接，共用字段供运行时与看板读取。
+func decodeClaudeStream(payloads [][]byte, prepared Request) (Response, bool, error) {
 	var response Response
-	// 原始字段保留供应商附加元数据；增量用 Builder 累积，避免每个分片都复制整段正文或签名。
 	var blocks []*claudeStreamBlock
 	var stopReason string
 	var stopped bool
@@ -363,4 +354,87 @@ func (claudeProvider) DecodeStream(payloads [][]byte, prepared Request) (Respons
 		FinishReason string          `json:"finish_reason"`
 	}{message, finishReason})
 	return response, false, nil
+}
+
+// listClaudeModels 分页读取 Claude /v1/models 目录，返回不含渠道前缀的原生模型 ID 与已知输入容量。
+func listClaudeModels(ctx context.Context, client *http.Client, config Config) ([]CatalogModel, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	baseURL := strings.TrimRight(config.BaseURL, "/")
+	httpClient := noRedirectClient(client)
+	models := []CatalogModel{}
+	seen := map[string]bool{}
+	after := ""
+	for {
+		endpoint := baseURL + "/v1/models?limit=1000"
+		if after != "" {
+			endpoint += "&after_id=" + url.QueryEscape(after)
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("x-api-key", config.APIKey)
+		request.Header.Set("anthropic-version", "2023-06-01")
+		request.Header.Set("User-Agent", "aether")
+		response, err := httpClient.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<20)+1))
+		response.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if response.StatusCode != http.StatusOK || len(body) > 16<<20 {
+			return nil, fmt.Errorf("Claude model catalog unavailable (HTTP %d)", response.StatusCode)
+		}
+		var page struct {
+			Data []struct {
+				ID          string `json:"id"`
+				Name        string `json:"display_name"`
+				InputTokens int64  `json:"max_input_tokens"`
+			} `json:"data"`
+			HasMore bool   `json:"has_more"`
+			LastID  string `json:"last_id"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("decode Claude model catalog: %w", err)
+		}
+		for _, entry := range page.Data {
+			if !strings.HasPrefix(entry.ID, "claude-") || len(entry.ID) > 155 || strings.ContainsAny(entry.ID, "/?#:") || seen[entry.ID] {
+				continue
+			}
+			seen[entry.ID] = true
+			// 部分中转目录只列模型 ID；这些型号的 1M 输入容量来自 Anthropic 官方模型说明。
+			// https://platform.claude.com/docs/en/build-with-claude/context-windows
+			switch entry.ID {
+			case "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5":
+				if entry.InputTokens == 0 {
+					entry.InputTokens = 1000000
+				}
+			}
+			name := entry.Name
+			if name == "" {
+				name = entry.ID
+			}
+			model := CatalogModel{ID: entry.ID, Name: name}
+			if entry.InputTokens > 0 {
+				tokens := entry.InputTokens
+				model.ContextLength = &tokens
+			}
+			models = append(models, model)
+		}
+		if !page.HasMore {
+			break
+		}
+		if page.LastID == "" || page.LastID == after {
+			return nil, fmt.Errorf("Claude model catalog did not advance its cursor")
+		}
+		after = page.LastID
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("Claude model catalog has no agent model candidates")
+	}
+	return models, nil
 }

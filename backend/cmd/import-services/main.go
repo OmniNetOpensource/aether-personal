@@ -104,9 +104,6 @@ func main() {
 			continue
 		}
 		value := services.Settings{APIKey: os.Getenv(definition.LegacyKey)}
-		if definition.ID == services.IkunGemini {
-			value.BaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("GEMINI_BASE_URL_IKUNCODE")), "/")
-		}
 		if definition.ID == services.Resend {
 			value.EmailFrom = strings.TrimSpace(os.Getenv("EMAIL_FROM"))
 		}

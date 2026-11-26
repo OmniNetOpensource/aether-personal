@@ -1,4 +1,4 @@
-// 本文件提供 App 的个人模型设置：验证聊天会话，读取已配置的模型目录并保存当前账号的模型选择。
+// 本文件提供 App 的个人模型设置：验证聊天会话，通过统一的 llm 包并行拉取内置 OpenRouter 与自定义模型供应商目录，并保存当前账号的模型选择。
 
 package httpapi
 
@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/llm"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/modelsettings"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
@@ -27,6 +26,22 @@ type userModel struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	ContextLength *int64 `json:"-"`
+}
+
+// catalogSource 描述一次目录拉取任务：内置 OpenRouter 与每个自定义供应商都统一表达为一份 llm.Config。
+type catalogSource struct {
+	id         string
+	name       string
+	providerID *uuid.UUID
+	config     llm.Config
+	err        error
+}
+
+// catalogFailure 记录目录不可用的来源，App 仅显示固定文案。
+type catalogFailure struct {
+	id   string
+	name string
+	err  error
 }
 
 // requireChatUser 用现有 Bearer 会话确定操作对象，账号 ID 由服务端提供。
@@ -53,24 +68,46 @@ func (s *server) requireChatUser(next func(http.ResponseWriter, *http.Request, u
 	}
 }
 
-// getUserModels 返回已保存的选择与当前目录，目录查询失败时仍可以切回默认路由。
+// getUserModels 返回已保存的选择与当前目录，单个来源失败时仍可以选择其他来源或默认路由。
 func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	settings, err := modelsettings.LoadUser(r.Context(), s.queries, userID)
 	if err != nil {
 		internalError(w, "load user model settings", err)
 		return
 	}
-	// 已配置渠道独立返回目录，一家失败时仍可以选择其他渠道。
-	models, failures := s.modelCatalog(r.Context(), nil)
+	customProviders, err := s.services.ListModelProviderConfigs(r.Context())
+	if err != nil {
+		internalError(w, "load model providers for catalog", err)
+		return
+	}
+	sources := make([]catalogSource, 0, 1+len(customProviders))
+	openRouterCfg, openRouterErr := s.services.OpenRouterConfig()
+	sources = append(sources, catalogSource{
+		id:     services.OpenRouter,
+		name:   "OpenRouter",
+		config: openRouterCfg,
+		err:    openRouterErr,
+	})
+	for _, provider := range customProviders {
+		id := provider.ID
+		sources = append(sources, catalogSource{
+			id:         id.String(),
+			name:       provider.Name,
+			providerID: &id,
+			config:     provider.Config,
+			err:        provider.Err,
+		})
+	}
+	models, failures := s.fetchModelCatalogs(r.Context(), sources)
 	var notices []string
 	for _, failure := range failures {
 		if errors.Is(failure.err, services.ErrNotConfigured) {
-			if failure.service == services.OpenRouter {
+			if failure.id == services.OpenRouter {
 				notices = append(notices, "部署尚未配置 OpenRouter API Key。")
 			}
 			continue
 		}
-		slog.Error("load model catalog", "service", failure.service, "error", failure.err)
+		slog.Error("load model catalog", "source", failure.id, "error", failure.err)
 		notices = append(notices, failure.name+" 模型目录暂时不可用。")
 	}
 	slices.Sort(notices)
@@ -86,7 +123,7 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 	})
 }
 
-// saveUserModels 校验所选渠道的模型目录与客户端版本，一次更新该账号的模型选择。
+// saveUserModels 校验所选来源的模型目录与客户端版本，一次更新该账号的模型选择。
 func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	var selection modelsettings.Selection
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
@@ -96,28 +133,54 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 		return
 	}
 
-	// 默认路由和跟随选项始终可保存。具体型号按实际请求使用的渠道校验。
+	// 默认路由和跟随选项始终可保存；具体型号按它指向的 OpenRouter 或自定义供应商实时校验。
 	selectedModels := []string{selection.MainModel, selection.SubagentModel}
-	selectedProviders := map[string]bool{}
+	needOpenRouter := false
+	neededProviders := map[uuid.UUID]bool{}
 	for _, id := range selectedModels {
 		if id == "" || id == modelsettings.DefaultModel {
 			continue
 		}
-		if len(id) > 160 {
+		if len(id) > 256 {
 			http.Error(w, "模型 ID 过长", http.StatusBadRequest)
 			return
 		}
-		selectedProviders[providers.ForModel(id).Service()] = true
+		if strings.HasPrefix(id, "provider:") {
+			providerID, _, ok := modelsettings.ParseProviderModel(id)
+			if !ok {
+				http.Error(w, "所选模型已不可用，请重新选择", http.StatusBadRequest)
+				return
+			}
+			neededProviders[providerID] = true
+			continue
+		}
+		needOpenRouter = true
 	}
+
+	var sources []catalogSource
+	if needOpenRouter {
+		cfg, err := s.services.OpenRouterConfig()
+		sources = append(sources, catalogSource{id: services.OpenRouter, name: "OpenRouter", config: cfg, err: err})
+	}
+	for providerID := range neededProviders {
+		name, cfg, err := s.services.LoadModelProviderConfig(r.Context(), providerID)
+		if errors.Is(err, services.ErrNotFound) {
+			http.Error(w, "所选模型已不可用，请重新选择", http.StatusBadRequest)
+			return
+		}
+		idCopy := providerID
+		sources = append(sources, catalogSource{id: idCopy.String(), name: name, providerID: &idCopy, config: cfg, err: err})
+	}
+
 	capacities := map[string]*int64{"": nil, modelsettings.DefaultModel: nil}
-	if len(selectedProviders) > 0 {
-		models, failures := s.modelCatalog(r.Context(), selectedProviders)
+	if len(sources) > 0 {
+		models, failures := s.fetchModelCatalogs(r.Context(), sources)
 		for _, failure := range failures {
 			if errors.Is(failure.err, services.ErrNotConfigured) {
 				http.Error(w, failure.name+" 尚未配置", http.StatusServiceUnavailable)
 				return
 			}
-			slog.Error("validate model catalog", "service", failure.service, "error", failure.err)
+			slog.Error("validate model catalog", "source", failure.id, "error", failure.err)
 			http.Error(w, failure.name+" 模型目录暂时不可用，请稍后重试", http.StatusBadGateway)
 			return
 		}
@@ -152,105 +215,56 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 	writeAdminJSON(w, selection)
 }
 
-// catalogFailure 记录目录不可用的渠道，App 仅显示固定文案。
-type catalogFailure struct {
-	service string
-	name    string
-	err     error
-}
-
-// modelCatalog 并行读取所需渠道。requested 为空时读取全部已配置渠道。
-func (s *server) modelCatalog(ctx context.Context, requested map[string]bool) ([]userModel, []catalogFailure) {
-	sources := []struct {
-		service string
-		name    string
-		fetch   func(context.Context, services.Settings) ([]userModel, error)
-	}{
-		{services.OpenRouter, "OpenRouter", s.openRouterModels},
-		{services.IkunGemini, "ikun Gemini", s.ikunGeminiModels},
-		{services.IkunClaude, "ikun Claude", s.ikunClaudeModels},
-	}
+// fetchModelCatalogs 并行拉取指定来源的模型目录，并为自定义供应商编码 provider:<uuid>:<model> 标识与展示后缀。
+func (s *server) fetchModelCatalogs(ctx context.Context, sources []catalogSource) ([]userModel, []catalogFailure) {
 	type result struct {
 		models  []userModel
 		failure catalogFailure
 	}
 	results := make(chan result, len(sources))
-	count := 0
 	for _, source := range sources {
-		if requested != nil && !requested[source.service] {
-			continue
-		}
-		count++
 		go func() {
-			credentials, err := s.services.Load(ctx, source.service)
-			var models []userModel
-			if err == nil {
-				models, err = source.fetch(ctx, credentials)
+			if source.err != nil {
+				results <- result{failure: catalogFailure{id: source.id, name: source.name, err: source.err}}
+				return
 			}
-			results <- result{models, catalogFailure{source.service, source.name, err}}
+			catalog, err := llm.ListModels(ctx, s.httpClient, source.config)
+			if err != nil {
+				results <- result{failure: catalogFailure{id: source.id, name: source.name, err: err}}
+				return
+			}
+			items := make([]userModel, 0, len(catalog))
+			for _, entry := range catalog {
+				if source.providerID == nil {
+					if entry.ID == modelsettings.DefaultModel {
+						continue
+					}
+					items = append(items, userModel{ID: entry.ID, Name: entry.Name, ContextLength: entry.ContextLength})
+					continue
+				}
+				encodedID := modelsettings.EncodeProviderModel(*source.providerID, entry.ID)
+				if len(encodedID) > 256 {
+					continue
+				}
+				items = append(items, userModel{
+					ID:            encodedID,
+					Name:          entry.Name + " · " + source.name,
+					ContextLength: entry.ContextLength,
+				})
+			}
+			results <- result{models: items}
 		}()
 	}
 	var models []userModel
 	var failures []catalogFailure
-	for range count {
-		result := <-results
-		if result.failure.err != nil {
-			failures = append(failures, result.failure)
+	for range len(sources) {
+		outcome := <-results
+		if outcome.failure.err != nil {
+			failures = append(failures, outcome.failure)
 			continue
 		}
-		models = append(models, result.models...)
+		models = append(models, outcome.models...)
 	}
 	slices.SortFunc(models, func(a, b userModel) int { return strings.Compare(a.Name, b.Name) })
 	return models, failures
-}
-
-// openRouterModels 保留原看板的工具能力条件，价格不参与目录筛选。
-func (s *server) openRouterModels(ctx context.Context, credentials services.Settings) ([]userModel, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Authorization", "Bearer "+credentials.APIKey)
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("model catalog returned HTTP %d", response.StatusCode)
-	}
-	const maxCatalogSize = 16 << 20
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxCatalogSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxCatalogSize {
-		return nil, errors.New("model catalog is too large")
-	}
-	var catalog struct {
-		Data []struct {
-			ID                  string   `json:"id"`
-			Name                string   `json:"name"`
-			ContextLength       int64    `json:"context_length"`
-			SupportedParameters []string `json:"supported_parameters"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &catalog); err != nil {
-		return nil, err
-	}
-	var models []userModel
-	for _, entry := range catalog.Data {
-		if entry.ID == "" || entry.ID == modelsettings.DefaultModel || len(entry.ID) > 160 ||
-			!slices.Contains(entry.SupportedParameters, "tools") {
-			continue
-		}
-		model := userModel{ID: entry.ID, Name: entry.Name}
-		if entry.ContextLength > 0 {
-			model.ContextLength = &entry.ContextLength
-		}
-		models = append(models, model)
-	}
-	return models, nil
 }

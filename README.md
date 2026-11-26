@@ -20,7 +20,7 @@
 | 代码托管 | GitHub，仓库 `OmniNetOpensource/aether-personal`，公开 |
 | 许可协议 | [Apache-2.0](LICENSE) |
 | 数据库 | PostgreSQL 18（镜像 `pgvector/pgvector:pg18`）与纯内存 Redis 8；本地 dev 使用 Docker Compose |
-| 模型服务 | 用户在 App 选择 OpenRouter、ikun Gemini 或 ikun Claude 模型。Main 默认 `openrouter/free`。Subagent 默认跟随 Main，压缩默认跟随当前 Agent |
+| 模型服务 | 用户在 App 选择内置 OpenRouter 或管理看板配置的自定义模型供应商（OpenAI 兼容 / Gemini 原生 / Claude 原生）。Main 默认 `openrouter/free`，Subagent 默认跟随 Main，压缩默认跟随当前 Agent |
 | 密钥与费用 | OpenRouter / Resend Key 由实际部署者配置，费用由部署者承担；维护者实例由维护者承担 |
 | 登录 | 邮箱验证码 |
 | 验证码邮件 | Resend |
@@ -69,6 +69,7 @@
 | --- | --- |
 | `backend/cmd/server/` | 程序入口 |
 | `backend/internal/config/` | 环境配置 |
+| `backend/internal/llm/` | 与供应商无关的模型协议包（OpenAI 兼容、Gemini 原生、Claude 原生） |
 | `backend/internal/httpapi/` | API |
 | `backend/internal/database/` | sqlc 生成代码 |
 | `backend/db/migrations/` | 表结构迁移 |
@@ -148,4 +149,4 @@ make db-down   # 停止本地容器
 
 看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板采用 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
-看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围、模型与请求结果筛选查看输入、推理、工具调用与截图、压缩摘要和失败请求，并点开单次调用查看实际请求与响应 JSON；「配置」页管理主动压缩提醒线、热压缩触发线、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。
+看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围查看输入、推理、工具调用与截图、压缩摘要和单步用量；「配置」页管理主动压缩提醒线、热压缩触发线、自定义模型供应商、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

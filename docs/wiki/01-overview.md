@@ -31,7 +31,7 @@ flowchart LR
     DB[("PostgreSQL 18<br/>全部持久状态 + 栅栏代数")]
     REDIS[("Redis 8<br/>纯内存信号、租约与图片缓存")]
     subgraph EXTERNAL["第三层：外部服务"]
-        OPENROUTER["OpenRouter / ikun<br/>模型"]
+        OPENROUTER["OpenRouter / 自定义供应商<br/>模型"]
         RESEND["Resend<br/>验证码邮件"]
         TOOLS["搜索 · 私有 OSS<br/>FC 个人电脑沙箱"]
     end
@@ -103,7 +103,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 | 服务 | 用途 | 状态 |
 | --- | --- | --- |
-| OpenRouter、ikun Gemini、ikun Claude | Main 对话与独立上下文压缩模型 | `已实现` |
+| OpenRouter 及自定义模型供应商（OpenAI 兼容 / Gemini / Claude） | Main 与 Subagent 对话及上下文压缩模型 | `已实现` |
 | Resend | 发送验证码邮件（仅 `prod`） | `已实现` |
 | `search`、`search_twitter`、`fetch_url`、`read_image` | Serper、Parallel、EveryInfra 与直接图片读取，见 [05](05-main-runtime.md#search-与-fetch_url-已实现) | `已实现` |
 | 阿里云私有 OSS（配 Redis 共享图片缓存） | 聊天图片与 50 MiB 工作区文件的流式存取与临时签名 | `已实现` |
@@ -167,7 +167,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | `backend/cmd/server/` | 程序入口：读取配置、建立数据库连接池、启动 HTTP 服务、Agent 调度与定时任务进程 |
 | `backend/internal/config/` | 启动时一次性读取环境变量 |
 | `backend/internal/httpapi/` | HTTP 路由、WebSocket 聊天（登录、历史与收发）、服务器事件定义 |
-| `backend/internal/agent/` | Main 运行时：运行循环、调用 OpenRouter、系统提示词与工具定义 |
+| `backend/internal/llm/` | 与具体供应商无关的模型协议包：统一实现 OpenAI 兼容、Gemini 原生与 Claude 原生协议的请求、流式解码与模型目录 |
+| `backend/internal/agent/` | Main 与 Subagent 运行时：三阶段运行循环、系统提示词与工具定义 |
 | `backend/internal/database/` | sqlc 生成的数据库访问代码（不要手改） |
 | `backend/db/migrations/` | goose 迁移文件 |
 | `backend/db/queries/` | 手写 SQL，sqlc 据此生成代码 |

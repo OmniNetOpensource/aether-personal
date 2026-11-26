@@ -1,4 +1,4 @@
-// 本文件管理部署共用的服务凭证：OpenRouter 由部署环境提供，其余凭证保存在数据库的 AES-GCM 密文中。
+// 本文件管理部署共用的服务凭证：OpenRouter 由部署环境提供，其余第三方服务凭证保存在数据库的 AES-GCM 密文中。
 
 package services
 
@@ -18,20 +18,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// 支持的服务有固定边界，浏览器不能新增任意供应商或任意凭证名称。
+// 支持的非自定义服务有固定边界；模型供应商由 model_providers 表独立管理。
 const (
-	OpenRouter = "openrouter"
-	IkunGemini = "ikun_gemini"
-	IkunClaude = "ikun_claude"
-	Resend     = "resend"
-	Serper     = "serper"
-	Parallel   = "parallel"
-	EveryInfra = "everyinfra"
-	AliyunOSS  = "aliyun_oss"
-	AliyunFC   = "aliyun_fc"
-	// ikun Gemini 的默认线路由部署方确定，管理员日常只需填写 Key。
-	DefaultGeminiBaseURL = "https://api.ikuncode.cc"
-	DefaultClaudeBaseURL = "https://api.ikuncode.cc"
+	OpenRouter        = "openrouter"
+	OpenRouterBaseURL = "https://openrouter.ai/api/v1"
+	Resend            = "resend"
+	Serper            = "serper"
+	Parallel          = "parallel"
+	EveryInfra        = "everyinfra"
+	AliyunOSS         = "aliyun_oss"
+	AliyunFC          = "aliyun_fc"
 )
 
 // Definition 提供看板名称与旧环境变量名称，导入命令与管理页使用同一份服务目录。
@@ -43,8 +39,6 @@ type Definition struct {
 
 var Definitions = []Definition{
 	{OpenRouter, "OpenRouter", ""},
-	{IkunGemini, "ikun Gemini", "GEMINI_API_KEY_IKUNCODE"},
-	{IkunClaude, "ikun Claude", ""},
 	{Resend, "Resend", "RESEND_API_KEY"},
 	{Serper, "Serper", "SERP_API_KEY"},
 	{Parallel, "Parallel", "PARALLEL_API_KEY"},
@@ -53,11 +47,13 @@ var Definitions = []Definition{
 	{AliyunFC, "阿里云 FC 沙箱", ""},
 }
 
-// 固定错误让调用者区分未配置、解密失败与输入错误，不把秘密带入日志或 HTTP 响应。
+// 固定错误让调用者区分未配置、解密失败、输入错误、资源不存在与名称冲突，不把秘密带入日志或 HTTP 响应。
 var (
 	ErrNotConfigured = errors.New("service is not configured")
 	ErrUnreadable    = errors.New("service credential cannot be decrypted; check SERVICE_ENCRYPTION_KEY")
 	ErrInvalid       = errors.New("invalid service settings")
+	ErrNotFound      = errors.New("resource not found")
+	ErrConflict      = errors.New("resource already exists")
 )
 
 // Settings 仅供后端发出请求使用，不提供 JSON 序列化出口。
@@ -79,7 +75,7 @@ type Info struct {
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 
-// Store 保存部署注入的 OpenRouter Key，并为每次调用读取其他服务的数据库凭证。
+// Store 保存部署注入的 OpenRouter Key，并为每次调用读取数据库中的服务凭证与自定义模型供应商配置。
 type Store struct {
 	openRouterAPIKey string
 	queries          *database.Queries
@@ -106,7 +102,7 @@ func (s *Store) Load(ctx context.Context, service string) (Settings, error) {
 		if s.openRouterAPIKey == "" {
 			return Settings{}, fmt.Errorf("%s: %w", service, ErrNotConfigured)
 		}
-		return Settings{APIKey: s.openRouterAPIKey}, nil
+		return Settings{APIKey: s.openRouterAPIKey, BaseURL: OpenRouterBaseURL}, nil
 	}
 	row, err := s.queries.GetServiceSettings(ctx, service)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -122,7 +118,7 @@ func (s *Store) Load(ctx context.Context, service string) (Settings, error) {
 	if err != nil {
 		return Settings{}, fmt.Errorf("%s: %w", service, ErrUnreadable)
 	}
-	return Settings{APIKey: string(key), BaseURL: serviceBaseURL(service, row.BaseUrl), EmailFrom: row.EmailFrom}, nil
+	return Settings{APIKey: string(key), BaseURL: row.BaseUrl, EmailFrom: row.EmailFrom}, nil
 }
 
 // List 仅生成脱敏信息；单条凭证无法解密时仍允许管理员在看板替换或清除它。
@@ -137,7 +133,7 @@ func (s *Store) List(ctx context.Context) ([]Info, error) {
 	}
 	items := make([]Info, 0, len(Definitions))
 	for _, definition := range Definitions {
-		info := Info{ID: definition.ID, Name: definition.Name, Status: "not_configured", BaseURL: serviceBaseURL(definition.ID, "")}
+		info := Info{ID: definition.ID, Name: definition.Name, Status: "not_configured"}
 		if definition.ID == OpenRouter {
 			if s.openRouterAPIKey != "" {
 				info.Status = "configured"
@@ -146,7 +142,7 @@ func (s *Store) List(ctx context.Context) ([]Info, error) {
 			continue
 		}
 		if row, exists := byService[definition.ID]; exists {
-			info.BaseURL, info.EmailFrom, info.UpdatedAt = serviceBaseURL(definition.ID, row.BaseUrl), row.EmailFrom, &row.UpdatedAt
+			info.BaseURL, info.EmailFrom, info.UpdatedAt = row.BaseUrl, row.EmailFrom, &row.UpdatedAt
 			if row.ApiKeyCiphertext != nil {
 				info.Status, info.KeySuffix = "saved", row.KeySuffix
 				if row.Service == AliyunOSS {
@@ -177,8 +173,8 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 	if key != nil {
 		settings.ApiKeyCiphertext, settings.KeySuffix = nil, ""
 		if *key != "" {
-			if len(*key) > 8192 || strings.ContainsFunc(*key, func(r rune) bool { return r <= ' ' || r > '~' }) {
-				return fmt.Errorf("%w: API Key must contain visible ASCII characters", ErrInvalid)
+			if err := validateAPIKey(*key); err != nil {
+				return err
 			}
 			if service == AliyunOSS {
 				if _, err := parseOSSSettings(*key); err != nil {
@@ -186,12 +182,10 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 				}
 			}
 			settings.ApiKeyCiphertext = s.cipher.Seal(nil, nil, []byte(*key), []byte(service))
-			if len(*key) > 4 {
-				settings.KeySuffix = (*key)[len(*key)-4:]
-				if service == AliyunOSS {
-					config, _ := parseOSSSettings(*key)
-					settings.KeySuffix = config.AccessKeySecret[len(config.AccessKeySecret)-4:]
-				}
+			settings.KeySuffix = keySuffix(*key)
+			if service == AliyunOSS {
+				config, _ := parseOSSSettings(*key)
+				settings.KeySuffix = keySuffix(config.AccessKeySecret)
 			}
 		}
 	}
@@ -201,8 +195,7 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 	if emailFrom != nil {
 		settings.EmailFrom = strings.TrimSpace(*emailFrom)
 	}
-	settings.BaseUrl = serviceBaseURL(service, settings.BaseUrl)
-	if err := validate(service, settings.ApiKeyCiphertext != nil, settings.BaseUrl, settings.EmailFrom, s.appEnv); err != nil {
+	if err := validate(service, settings.ApiKeyCiphertext != nil, settings.BaseUrl, settings.EmailFrom); err != nil {
 		return err
 	}
 	return s.queries.SaveServiceSettings(ctx, settings)
@@ -210,53 +203,57 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 
 // Import 仅填入从未配置过的服务，批量迁移由显式命令调用，正常启动不读取旧 Key。
 func (s *Store) Import(ctx context.Context, service string, settings Settings) (bool, error) {
-	settings.BaseURL = serviceBaseURL(service, settings.BaseURL)
-	if err := validate(service, settings.APIKey != "", settings.BaseURL, settings.EmailFrom, s.appEnv); err != nil {
+	if err := validate(service, settings.APIKey != "", settings.BaseURL, settings.EmailFrom); err != nil {
 		return false, err
 	}
 	if settings.APIKey == "" {
 		return false, nil
 	}
-	if len(settings.APIKey) > 8192 || strings.ContainsFunc(settings.APIKey, func(r rune) bool { return r <= ' ' || r > '~' }) {
-		return false, ErrInvalid
-	}
-	suffix := ""
-	if len(settings.APIKey) > 4 {
-		suffix = settings.APIKey[len(settings.APIKey)-4:]
+	if err := validateAPIKey(settings.APIKey); err != nil {
+		return false, err
 	}
 	count, err := s.queries.ImportServiceSettings(ctx, database.ImportServiceSettingsParams{
-		Service: service, ApiKeyCiphertext: s.cipher.Seal(nil, nil, []byte(settings.APIKey), []byte(service)), KeySuffix: suffix, BaseUrl: settings.BaseURL, EmailFrom: settings.EmailFrom,
+		Service: service, ApiKeyCiphertext: s.cipher.Seal(nil, nil, []byte(settings.APIKey), []byte(service)), KeySuffix: keySuffix(settings.APIKey), BaseUrl: settings.BaseURL, EmailFrom: settings.EmailFrom,
 	})
 	return count == 1, err
 }
 
-// serviceBaseURL 统一正常请求、看板和旧配置导入的默认地址，保留已显式配置的线路。
-func serviceBaseURL(service, baseURL string) string {
-	if service == IkunGemini && baseURL == "" {
-		return DefaultGeminiBaseURL
+// validateAPIKey 限制密钥为可见 ASCII 字符串，供服务凭证与自定义模型供应商共用。
+func validateAPIKey(key string) error {
+	if key == "" || len(key) > 8192 || strings.ContainsFunc(key, func(r rune) bool { return r <= ' ' || r > '~' }) {
+		return fmt.Errorf("%w: API Key must contain visible ASCII characters", ErrInvalid)
 	}
-	if service == IkunClaude && baseURL == "" {
-		return DefaultClaudeBaseURL
+	return nil
+}
+
+// keySuffix 只在密钥超过四位时保留末尾四位用于看板脱敏展示。
+func keySuffix(key string) string {
+	if len(key) > 4 {
+		return key[len(key)-4:]
 	}
-	return baseURL
+	return ""
+}
+
+// validateBaseURL 校验外部接口根地址：生产仅允许 HTTPS，dev 额外允许指向本机回环的 HTTP。
+func validateBaseURL(baseURL, appEnv string) error {
+	if baseURL == "" || len(baseURL) > 2048 {
+		return fmt.Errorf("%w: base URL must be between 1 and 2048 characters", ErrInvalid)
+	}
+	parsed, err := url.Parse(baseURL)
+	isLocalDev := appEnv == "dev" && parsed != nil && parsed.Scheme == "http" &&
+		(parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1")
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !isLocalDev) {
+		return fmt.Errorf("%w: use an HTTPS base URL without credentials, query or fragment", ErrInvalid)
+	}
+	return nil
 }
 
 // validate 是服务配置写入边界：只接受固定服务及其配套字段，密钥不出现在错误文本中。
-func validate(service string, configured bool, baseURL, emailFrom, appEnv string) error {
+func validate(service string, configured bool, baseURL, emailFrom string) error {
 	if len(baseURL) > 2048 || len(emailFrom) > 320 {
 		return fmt.Errorf("%w: service fields are too long", ErrInvalid)
 	}
 	switch service {
-	case IkunGemini, IkunClaude:
-		if emailFrom != "" || (configured && baseURL == "") {
-			return fmt.Errorf("%w: model service requires a base URL", ErrInvalid)
-		}
-		if baseURL != "" {
-			parsed, err := url.Parse(baseURL)
-			if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !(appEnv == "dev" && parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"))) {
-				return fmt.Errorf("%w: use an HTTPS base URL without credentials, query or fragment", ErrInvalid)
-			}
-		}
 	case Resend:
 		if baseURL != "" || (configured && emailFrom == "") {
 			return fmt.Errorf("%w: Resend requires a sender address", ErrInvalid)

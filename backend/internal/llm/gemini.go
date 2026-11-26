@@ -1,32 +1,25 @@
-// 本文件适配 ikun 的 Gemini 原生协议：转换消息与工具，保留原生思考签名，并把响应和用量交回共用 Agent 循环。
+// 本文件实现 Gemini 原生协议：转换消息与工具、保留原生思考签名、解码流式分片并读取 /v1beta/models 目录。
 
-package providers
+package llm
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+	"unicode/utf8"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/google/uuid"
 )
 
-// geminiProvider 承接模型名以 ikun:gemini- 开头的模型，使用 Gemini 原生 generateContent 协议。
-type geminiProvider struct{}
-
-// Matches 只认领带 ikun: 渠道前缀的 Gemini 模型，供应商只收到去掉前缀的模型名。
-func (geminiProvider) Matches(model string) bool { return strings.HasPrefix(model, "ikun:gemini-") }
-
-// Service 返回看板中保存 ikun Gemini 凭证的服务名。
-func (geminiProvider) Service() string { return services.IkunGemini }
-
-// PrepareRequest 把统一请求转为 Gemini 的流式 generateContent 请求；流式端点逐块返回 SSE 事件，首段有效输出占位，完整响应供最终保存与推送。
-func (geminiProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
-	endpoint := credentials.BaseURL + "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(prepared.Model, "ikun:")) + ":streamGenerateContent?alt=sse"
+// prepareGeminiRequest 将统一请求转为 Gemini 的流式 generateContent 请求，直接使用上游真实模型名。
+func prepareGeminiRequest(ctx context.Context, config Config, prepared Request) (OutgoingRequest, error) {
+	endpoint := strings.TrimRight(config.BaseURL, "/") + "/v1beta/models/" + url.PathEscape(prepared.Model) + ":streamGenerateContent?alt=sse"
 	body, err := geminiRequestBody(prepared)
 	if err != nil {
 		return OutgoingRequest{}, err
@@ -35,10 +28,9 @@ func (geminiProvider) PrepareRequest(ctx context.Context, credentials services.S
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
-	request.Header.Set("x-goog-api-key", credentials.APIKey)
+	request.Header.Set("x-goog-api-key", config.APIKey)
 	request.Header.Set("User-Agent", "aether")
 	request.Header.Set("Content-Type", "application/json")
-	// 自定义密钥头不跟随重定向，避免被 HTTP 客户端转发给其他主机。
 	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
@@ -47,20 +39,6 @@ type geminiOutputPart struct {
 	Text    string              `json:"text"`
 	Thought bool                `json:"thought"`
 	Call    *geminiFunctionCall `json:"functionCall"`
-}
-
-// DecodeStream 把 Gemini 的流式分片拼成一条完整响应。
-func (geminiProvider) DecodeStream(payloads [][]byte, prepared Request) (Response, bool, error) {
-	return assembleGeminiStream(payloads, prepared)
-}
-
-// historyToolCall 是从历史消息里读出的共用工具调用形状，转换原生协议时按它找回每次调用的名称与参数。
-type historyToolCall struct {
-	ID       string `json:"id"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
 }
 
 // geminiContent 保留每个 part 的原始 JSON，签名及其所在位置在工具续接和重启后都不变。
@@ -163,10 +141,10 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 			if message.Role == "assistant" {
 				content.Role = "model"
 			}
-			// 同一 Gemini 模型的输出原样续接；切换来源时只转换共用文本和工具轨迹。
+			// 同一 Gemini 模型的输出原样续接；切换模型时只转换共用文本和工具轨迹。
 			if message.Role == "assistant" && message.GeminiContent != nil && message.GeminiModel == prepared.Model {
 				content = *message.GeminiContent
-				// 存量原生内容里可能有只有签名、没有数据的空段（流式分片或旧响应都可能产生），回传前并掉，否则供应商会以缺少 data 拒绝整条请求。
+				// 存量原生内容里可能有只有签名、没有数据的空段，回传前并掉，否则会被拒绝。
 				content.Parts = sanitizeGeminiParts(nil, content.Parts)
 				index := 0
 				for _, rawPart := range content.Parts {
@@ -252,8 +230,7 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 	}
 	// 省略输出额度参数，普通回复与压缩都由供应商决定额度。
 	generation := map[string]any{}
-	// 对齐 Aether 的推理强度；压缩和动态摘要沿用共用请求指定的低强度。
-	model := strings.TrimPrefix(prepared.Model, "ikun:")
+	model := prepared.Model
 	if strings.HasPrefix(model, "gemini-3") || strings.HasPrefix(model, "gemini-4") {
 		level := "HIGH"
 		if prepared.Reasoning["effort"] == "low" {
@@ -275,8 +252,6 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 		body["tools"] = []any{map[string]any{"functionDeclarations": declarations}}
 	}
 	if len(prepared.ToolChoice) > 0 {
-		// 禁止工具的选择（如上下文压缩）翻成 NONE：即使请求里没有工具声明，也明确告诉模型不要输出工具调用；
-		// 指定某个工具的选择仍按原来的 ANY 加白名单处理。
 		var choiceMode string
 		if json.Unmarshal(prepared.ToolChoice, &choiceMode) == nil && choiceMode == "none" {
 			body["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "NONE"}}
@@ -293,7 +268,7 @@ func geminiRequestBody(prepared Request) ([]byte, error) {
 	return json.Marshal(body)
 }
 
-// decodeGeminiResponse 在供应商边界校验响应，先保留已产生的用量，再决定输出是否可执行。
+// decodeGeminiResponse 校验合并后的 Gemini 响应，先保留已产生的用量，再决定输出是否可执行。
 func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 	var wire struct {
 		ResponseID   string `json:"responseId"`
@@ -387,7 +362,7 @@ func decodeGeminiResponse(body []byte, prepared Request) (Response, error) {
 }
 
 // sanitizeGeminiParts 把后续 parts 续到已累积的 parts 上，并清理只有 thoughtSignature、正文为空的空段：
-// 这种段单独回传给 Gemini 会被拒绝，所以把签名并到前一个分片上；流式拼接与存量原生内容回传共用这同一套清理。
+// 这种段单独回传给 Gemini 会被拒绝，所以把签名并到前一个分片上；流式拼接与存量原生内容回传共用这套清理。
 func sanitizeGeminiParts(accumulated, incoming []json.RawMessage) []json.RawMessage {
 	for _, raw := range incoming {
 		var part map[string]json.RawMessage
@@ -395,7 +370,6 @@ func sanitizeGeminiParts(accumulated, incoming []json.RawMessage) []json.RawMess
 			accumulated = append(accumulated, raw)
 			continue
 		}
-		// 判断这一段有没有真正的内容：除签名与 thought 标记外没有任何数据字段，或只有空文本，都算空段。
 		hasData := false
 		for key, value := range part {
 			if key == "thoughtSignature" || key == "thought" {
@@ -413,7 +387,6 @@ func sanitizeGeminiParts(accumulated, incoming []json.RawMessage) []json.RawMess
 			accumulated = append(accumulated, raw)
 			continue
 		}
-		// 空段只保留它的签名：并到前一段上；前面还没有任何段时直接丢弃。
 		signature, ok := part["thoughtSignature"]
 		if !ok || len(accumulated) == 0 {
 			continue
@@ -432,9 +405,9 @@ func sanitizeGeminiParts(accumulated, incoming []json.RawMessage) []json.RawMess
 	return accumulated
 }
 
-// assembleGeminiStream 把 Gemini 的流式分片合并成一条完整的原生响应，再交给原有的完整响应解析。
-// 整条流没有给出结束原因说明流被截断，按可重试失败处理；最终解析沿用 decodeGeminiResponse 的校验。
-func assembleGeminiStream(payloads [][]byte, prepared Request) (Response, bool, error) {
+// decodeGeminiStream 把 Gemini 的流式分片合并成一条完整的原生响应，再交给完整响应解析。
+// 整条流没有给出结束原因说明流被截断，按可重试失败处理。
+func decodeGeminiStream(payloads [][]byte, prepared Request) (Response, bool, error) {
 	var responseID, modelVersion, finishReason string
 	var parts []json.RawMessage
 	var usage, promptFeedback json.RawMessage
@@ -471,7 +444,6 @@ func assembleGeminiStream(payloads [][]byte, prepared Request) (Response, bool, 
 			parts = sanitizeGeminiParts(parts, candidate.Content.Parts)
 		}
 	}
-	// 合并后的形状与非流式 generateContent 响应一致：文本分片成为并列的文本段，解析时按序拼接。
 	merged := map[string]any{
 		"responseId":   responseID,
 		"modelVersion": modelVersion,
@@ -495,4 +467,83 @@ func assembleGeminiStream(payloads [][]byte, prepared Request) (Response, bool, 
 		return response, true, fmt.Errorf("Gemini stream ended before completion")
 	}
 	return response, false, decodeErr
+}
+
+// listGeminiModels 分页读取 Gemini /v1beta/models 目录，返回不含渠道前缀的原生模型名与已知输入容量。
+func listGeminiModels(ctx context.Context, client *http.Client, config Config) ([]CatalogModel, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	baseURL := strings.TrimRight(config.BaseURL, "/")
+	httpClient := noRedirectClient(client)
+	models := []CatalogModel{}
+	seenPages := map[string]bool{}
+	seenModels := map[string]bool{}
+	pageToken := ""
+	for {
+		endpoint, err := url.Parse(baseURL + "/v1beta/models")
+		if err != nil {
+			return nil, err
+		}
+		query := endpoint.Query()
+		query.Set("pageSize", "1000")
+		if pageToken != "" {
+			query.Set("pageToken", pageToken)
+		}
+		endpoint.RawQuery = query.Encode()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("x-goog-api-key", config.APIKey)
+		request.Header.Set("User-Agent", "aether")
+		response, err := httpClient.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<20)+1))
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || readErr != nil || len(body) > 16<<20 {
+			return nil, fmt.Errorf("Gemini model catalog unavailable (HTTP %d)", response.StatusCode)
+		}
+		var page struct {
+			Models []struct {
+				Name            string `json:"name"`
+				DisplayName     string `json:"displayName"`
+				InputTokenLimit int64  `json:"inputTokenLimit"`
+			} `json:"models"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("decode Gemini model catalog: %w", err)
+		}
+		for _, entry := range page.Models {
+			name := strings.TrimPrefix(entry.Name, "models/")
+			if !strings.HasPrefix(name, "gemini-") || strings.ContainsAny(name, "/?#:") || len(name) > 155 || seenModels[name] {
+				continue
+			}
+			seenModels[name] = true
+			displayName := entry.DisplayName
+			if displayName == "" || utf8.RuneCountInString(displayName) > 180 {
+				displayName = name
+			}
+			model := CatalogModel{ID: name, Name: displayName}
+			if entry.InputTokenLimit > 0 {
+				limit := entry.InputTokenLimit
+				model.ContextLength = &limit
+			}
+			models = append(models, model)
+		}
+		pageToken = page.NextPageToken
+		if pageToken == "" {
+			break
+		}
+		if seenPages[pageToken] {
+			return nil, fmt.Errorf("Gemini model catalog repeated a page token")
+		}
+		seenPages[pageToken] = true
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("Gemini model catalog has no agent model candidates")
+	}
+	return models, nil
 }

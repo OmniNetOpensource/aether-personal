@@ -41,7 +41,8 @@ const apiMethods = new Map([
   ['/admin/login', 'POST'], ['/admin/logout', 'POST'],
   ['/admin/me', 'GET'], ['/admin/snapshot', 'GET'], ['/admin/timeline', 'GET'],
   ['/admin/runtime-settings', 'GET PUT'],
- ['/admin/services', 'GET'], ['/admin/quotas', 'GET'],
+  ['/admin/model-providers', 'GET POST'],
+  ['/admin/services', 'GET'], ['/admin/quotas', 'GET'],
 ].map(([path, methods]) => [path, new Set(methods.split(' '))]));
 function fail(response, status, message) {
   if (response.headersSent) return response.destroy();
@@ -51,8 +52,11 @@ function fail(response, status, message) {
 async function proxy(request, response, url) {
   const path = url.pathname.slice(4);
   const timelineMessage = /^\/admin\/timeline\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
-  const serviceConfig = /^\/admin\/services\/(ikun_gemini|ikun_claude|resend|serper|parallel|everyinfra|aliyun_oss|aliyun_fc)$/.test(path);
-  const methods = apiMethods.get(path) || (timelineMessage ? new Set(['GET']) : serviceConfig ? new Set(['PUT']) : null);
+  const serviceConfig = /^\/admin\/services\/(resend|serper|parallel|everyinfra|aliyun_oss|aliyun_fc)$/.test(path);
+  const modelProvider = /^\/admin\/model-providers\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
+  const methods =
+    apiMethods.get(path) ||
+    (timelineMessage ? new Set(['GET']) : serviceConfig ? new Set(['PUT']) : modelProvider ? new Set(['PUT', 'DELETE']) : null);
   // 时间线与消息全文可能超过缓冲上限，直接流式转发。
   const streamed = timelineMessage || path === '/admin/timeline';
   if (!methods) return fail(response, 404, 'Not found');

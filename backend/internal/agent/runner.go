@@ -94,7 +94,7 @@ func (r *Runner) notifyChat() {
 var errNewInput = errors.New("superseded by new input")
 
 // modelRetry 是同一次回复跨轮共享的重试状态：十分钟预算从第一次尝试开始计时，覆盖上下文准备、请求与退避，
-// 共可再试 3 次，其中 ikun Claude 空截断最多补试一次。回复成功或被新输入取代后清零。
+// 共可再试 3 次，其中 Claude 空截断最多补试一次。回复成功或被新输入取代后清零。
 type modelRetry struct {
 	budget                  context.Context
 	cancel                  context.CancelFunc

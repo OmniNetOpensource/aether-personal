@@ -12,8 +12,6 @@ import {
 import { Empty } from './ui.js';
 
 const descriptions: Record<string, string> = {
-  ikun_gemini: '通过 ikun 使用 Gemini 原生模型接口。',
-  ikun_claude: '通过 ikun 使用 Claude 处理 Main 对话与上下文压缩，需要 Claude 专用 Key。',
   resend: '发送正式环境的登录验证码邮件。',
   serper: 'Google 搜索。',
   parallel: '普通网页与 Reddit 正文读取。',

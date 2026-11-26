@@ -11,6 +11,7 @@ import {
   type Timeline,
   type TimelineItem,
 } from './api.js';
+import { ModelProvidersPage } from './ModelProviders.js';
 import { RuntimeSettingsPage } from './RuntimeSettings.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
 import { TimelinePage } from './Timeline.js';
@@ -28,7 +29,7 @@ const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '' };
 
 const tabs: Record<Tab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
-  settings: ['配置', '管理主动压缩提醒线、热压缩触发线和服务凭证。'],
+  settings: ['配置', '管理主动压缩提醒线、热压缩触发线、模型供应商和服务凭证。'],
 };
 const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
 
@@ -50,6 +51,7 @@ export function AdminApp() {
   const [toast, setToast] = useState('');
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [providersLoading, setProvidersLoading] = useState(false);
   const [serviceLoading, setServiceLoading] = useState(false);
 
   const controller = useRef<AbortController | null>(null);
@@ -297,9 +299,13 @@ export function AdminApp() {
   }
 
   const onSettingsUpdated = useCallback((text: string) => setUpdatedText(text), []);
-  // 运行参数与凭证各自报告加载；刷新按钮等到两段都结束，避免先完成的一段把状态清掉。
+  // 运行参数、模型供应商与服务凭证各自报告加载；刷新按钮等到全部结束再恢复。
   const onRuntimeLoading = useCallback((loading: boolean) => {
     setRuntimeLoading(loading);
+    if (!loading) setLoadError('');
+  }, []);
+  const onProvidersLoading = useCallback((loading: boolean) => {
+    setProvidersLoading(loading);
     if (!loading) setLoadError('');
   }, []);
   const onServiceLoading = useCallback((loading: boolean) => {
@@ -329,7 +335,7 @@ export function AdminApp() {
     );
 
   const settingsPage = tab === 'settings';
-  const pageBusy = settingsPage ? runtimeLoading || serviceLoading : refreshing;
+  const pageBusy = settingsPage ? runtimeLoading || providersLoading || serviceLoading : refreshing;
   const subagentOptions = filters.user === query.user ? (snapshot?.subagents?.items ?? []) : [];
 
   return (
@@ -475,6 +481,15 @@ export function AdminApp() {
                   onLoadingChange={onRuntimeLoading}
                   notify={notify}
                 />
+                <div className="settings-services">
+                  <ModelProvidersPage
+                    refreshKey={settingsRefreshKey}
+                    onUpdated={onSettingsUpdated}
+                    onAccessLost={accessLost}
+                    onLoadingChange={onProvidersLoading}
+                    notify={notify}
+                  />
+                </div>
                 <div className="settings-services">
                   <ServiceSettingsPage
                     refreshKey={settingsRefreshKey}

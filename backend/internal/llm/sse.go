@@ -1,6 +1,6 @@
-// 本文件负责各渠道共用的 SSE 接收：逐块读取供应商的事件流，合并每个事件的载荷并限制累计响应大小。
+// 本文件负责各协议共用的 SSE 接收：逐块读取事件流，合并每个事件的载荷并限制累计响应大小。
 
-package providers
+package llm
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// MaxResponseBytes 是流式分片累计的上限，与此前一次性读取的 8 MiB 上限一致，超出按无效响应处理。
+// MaxResponseBytes 是流式分片累计的上限（8 MiB），超出按无效响应处理。
 const MaxResponseBytes = 8 << 20
 
 // ReadSSEPayloads 逐行读取 SSE 事件流，合并每个事件的 data 行并返回全部分片与原始字节。

@@ -31,7 +31,7 @@
 | 用户删除 | 仅管理员可删除，用户不能自行删除 | [01](wiki/01-overview.md#项目定位) |
 | 管理后台 | 2026-10-26 纳入本仓库 `admin/`，独立运行与部署；2026-11-03 改用 TanStack Start SPA；后续合并为「运行过程」与「配置」两页（全局运行参数与服务凭证同页展示）；2026-11-11 修复 CSP 以允许加载私有 OSS 时间线截图、识别 ikun Claude 加密推理、关联压缩摘要调用详情并清理废弃的 `/admin/calls` 接口与冗余快照聚合；2026-11-12 运行过程页支持查看各 Subagent 独立轨迹，模型选择移至 App；2026-11-17 移除 `model_calls` 表（`00059`）与请求详情弹窗，运行过程时间线直接展示消息轨迹 | [08](wiki/08-admin-observability.md) |
 | Agent 运行过程 | 2026-10-30 新增“运行过程”页；按时间降序（最新在上）显示输入、推理、工具调用与结果（含按需签名的截图）、压缩摘要、定时与闲置触发节点、Subagent 回报和不可见指令，支持在 Main 与各后台 Subagent 间切换与一键跳转，长内容截断后按需加载；2026-11-17 随 `model_calls` 移除不再展示请求/响应 JSON 详情；2026-11-25 基于 `steps`（含新增的 `cached_input_tokens`）恢复顶部 5 卡用量汇总（步骤数、输入 Token、缓存命中率、输出 Token、费用）与时间线单步 Token/缓存/费用展示 | [08](wiki/08-admin-observability.md#agent-运行过程2026-10-30) |
-| API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示九组服务中的可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
+| API 额度面板 | 2026-10-30 新增：在配置页服务卡片显示可查剩余额度，后端用已保存 Key 实时查询供应商；查不到（如 Parallel、阿里云 OSS/FC 按量账单）如实标注原因，不估算；2026-11-27 随 `ikun` 移除取消 New API 专用额度查询 | [08](wiki/08-admin-observability.md#api-额度面板2026-10-30) |
 | Main Agent | 逻辑概念，不对应常驻进程或容器 | [01](wiki/01-overview.md#main-是逻辑概念) |
 | 任务（已删除） | 2026-11-13 整体移除：`tasks` 表（`00058`）、三个任务工具、收尾提醒轮以及前端任务进度胶囊与浮层全部删除；理由是每条简单请求先登记再改状态的 2~3 轮工具调用开销过高、影响响应速度与日常体感，多目标并行直接交由上下文与 `spawn_subagent` 处理。此前 2026-11-06 新增、2026-11-07 增设收尾提醒、2026-11-12 新增前端展示及 `00055` 放开并发的历史记录保留供追溯 | [11](wiki/11-tasks.md) |
 | 仓库组织 | 同一仓库：`backend/`、`frontend/`、`admin/`、`infra/`、`docs/` | [01](wiki/01-overview.md#工程组织) |
@@ -53,7 +53,7 @@
 | Go 模块路径 | `github.com/OmniNetOpensource/aether-personal/backend` | [01](wiki/01-overview.md#技术栈) |
 | 数据库访问层 | `pgx v5.11.0 + sqlc v1.31.1` | [01](wiki/01-overview.md#技术栈) |
 | 配置来源 | 基础设施、加密主密钥与 `OPENROUTER_API_KEY` 由部署端提供。个人模型选择、全局运行参数及其他服务凭证保存在数据库 | [01](wiki/01-overview.md#配置) |
-| 服务凭证 | 2026-10-30 起在看板统一管理服务凭证（现含 OpenRouter、ikun Gemini、ikun Claude、Resend、Serper、Parallel、EveryInfra、阿里云 OSS、阿里云 FC 共九组），AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
+| 服务凭证 | 2026-10-30 起在看板统一管理服务凭证，AES-GCM 加密存库、完整 Key 不回显、下次请求生效、不回退旧环境变量；2026-11-27 移除 `ikun_gemini` / `ikun_claude`（`00071`），现含 OpenRouter（环境变量只读展示）、Resend、Serper、Parallel、EveryInfra、阿里云 OSS、阿里云 FC 七组，自定义模型供应商独立由 `model_providers` 管理 | [08](wiki/08-admin-observability.md#服务凭证管理2026-10-30) |
 | 健康检查 | `GET /healthz`，同时探测 PostgreSQL 与 Redis 连通性，供 Caddy 主动健康检查在单容器重启或异常时自动切流 | [01](wiki/01-overview.md#后端骨架-已实现) |
 | 监听端口 | `PORT`，默认 `8080` | [01](wiki/01-overview.md#配置) |
 | 本地 dev 基础设施 | Docker Compose，PostgreSQL `${POSTGRES_PORT:-5432}` 与纯内存 Redis `${REDIS_PORT:-6379}` | [01](wiki/01-overview.md#后端骨架-已实现) |
@@ -74,7 +74,7 @@
 | --- | --- | --- |
 | 数据库 | PostgreSQL 18（镜像暂留 `pgvector/pgvector:pg18`，向量扩展删除后换官方 `postgres:18`），主键 `uuidv7()` | [02](wiki/02-data-model.md#通用规则) |
 | 消息列表 | 只有 Agent 拥有消息列表，通信消息与上下文共用 `messages` 表；不建 `agents`、`runs`、`events`、`compactions` 表 | [02](wiki/02-data-model.md) |
-| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`oauth_clients`、`oauth_authorization_codes`、`oauth_tokens`、`memory_files`、`schedules`、`sandbox_workspaces`、`user_model_settings`、`model_settings`、`service_settings`、`admin_sessions`（`model_calls` 已于 2026-11-17 由 `00059` 移除） | [02](wiki/02-data-model.md#表关系) |
+| 表 | `users`、`subagents`、`messages`、`steps`、`login_codes`、`sessions`、`oauth_clients`、`oauth_authorization_codes`、`oauth_tokens`、`memory_files`、`schedules`、`sandbox_workspaces`、`user_model_settings`、`model_settings`、`model_providers`、`service_settings`、`admin_sessions`（`model_calls` 已于 2026-11-17 由 `00059` 移除） | [02](wiki/02-data-model.md#表关系) |
 | 固定取值字段 | `text` + `CHECK`，不用枚举 | [02](wiki/02-data-model.md#通用规则) |
 | 排序 | 全局序列 `sequence`，所有消息入库即分配、不能为空；2026-11-02 去掉待读（原为空即待读、下次调用模型前补号），由 `00026` 补号后改为非空 | [02](wiki/02-data-model.md#排序规则) |
 | 外键 | 一律 `ON DELETE CASCADE` | [02](wiki/02-data-model.md#外键) |
@@ -143,8 +143,8 @@
 | 数据库连接池上限 | 单容器环境变量 `DATABASE_MAX_CONNS`，默认 `20`；不再占用池外 `LISTEN` 长连接，也不放进 `DATABASE_URL` 以免 goose 迁移失败 | [05](wiki/05-main-runtime.md#运行循环-已实现) |
 | Main 架构 | 2026-10-23 用户确认全面采用 B：Main 与 Subagent 共用执行工具，Main 自行决定直接执行或派发；消息与派发权限保持角色区分，原 A/B 作为历史记录 | [06](wiki/06-main-role-experiment.md) |
 | Main 沟通方式 | 2026-10-30 改为正文沟通：耗时任务动手前和每几轮工具后用正文汇报进度，完成后以正文发送结果；2026-11-02 起提醒改为组装时插入、不落库：从最近一条用户消息起，每 4 轮没有可见正文的工具调用插一条不可见 user 提醒，写出正文或用户新消息即重新计数，不设上限（原为连续 5 轮、同一次沉默最多 3 次）。不写正文即沉默 | [05](wiki/05-main-runtime.md#main-如何回复用户) |
-| 个人模型 | 2026-11-12 起在 App 按账号选择 Main、Subagent 和压缩模型（`00057`）。默认 `openrouter/free`。App 列出 OpenRouter 的免费与付费模型及已配置的 ikun Gemini 和 ikun Claude 目录 | [05](wiki/05-main-runtime.md#app-模型设置) |
-| ikun Gemini 与 Claude | 接入 ikun Gemini 原生协议（`ikun:gemini-*`）与 ikun Claude 原生 Messages 协议（`ikun:claude-*`），保留 OpenRouter；原生协议用于 App 中的 ikun 模型，凭证由看板加密管理；2026-11-12 取消目录层对容量、专用模型黑名单与模态的过度拦截，放行 Sonnet 等全量模型 | [08](wiki/08-admin-observability.md#ikun-gemini2026-10-30) |
+| 个人模型 | 2026-11-12 起在 App 按账号选择 Main 和 Subagent 模型（`00057`，压缩沿用发起步骤模型）。默认 `openrouter/free`。App 并行拉取内置 OpenRouter 与看板已配置的自定义模型供应商目录 | [05](wiki/05-main-runtime.md#app-模型设置) |
+| 模型协议包与自定义供应商 | 2026-11-27 彻底删除 `ikun` 专属配置（`00071`），将协议层重构成与供应商无关的 `backend/internal/llm/`（支持 OpenAI 兼容、Gemini 原生、Claude 原生三种协议，调用方只传入 `llm.Config`）；保留 OpenRouter 为内置默认渠道（`OPENROUTER_API_KEY` + `openrouter/free`），并在看板新增「自定义模型供应商」列表（`model_providers` 表）自由增删改名称、协议、Base URL 与加密 API Key；用户选定自定义模型以 `provider:<uuid>:<upstream_model>` 存储，重命名供应商不影响已选模型 | [08](wiki/08-admin-observability.md#通用模型协议包与自定义供应商2026-11-27) |
 | 模型调用方式 | 2026-10-30 改为供应商→后端流式（OpenRouter `stream`、Gemini `:streamGenerateContent`），后端拼完整条回复后才落库并一次性推前端；断流按可重试处理、用量拿不到记空 | [05](wiki/05-main-runtime.md#模型调用流式接收整条推送) |
 | 系统提示词 | 每次请求将代码里的指令作为第一条不可见 user 消息注入，且不落库。Main 的正文作为用户可见消息，耗时任务主动汇报。2026-11-13 起，Main 与后台 Subagent 共用表达指令，像熟人一样说话，直接讲判断、批评与分歧，把敏感话题和有用细节讲透。判断的力度以证据为准，拿不准就明说；2026-11-20 起明确“先搜集齐全上下文（查清对话/记忆/历史/附件并深入一手资料调研）→ 再确保明确需求（能查的自己查，关键歧义先问清不硬猜）→ 最后在约束范围内收敛给出最正确的那个结果（不抛回模棱两可的选择题）”三步纪律 | [05](wiki/05-main-runtime.md#系统提示词-已实现) |
 | 请求组装与缓存 | 2026-11-02 先确认合并组装（已结束对话并成一条 user 消息），同日改为原生组装：指令注入后接上一个 compact 以来的全部消息原文（user/assistant 原样、tool 靠 tool_call_id 对应），前缀只追加、不改写。同日运行循环简化后：工具回执紧跟其 assistant 消息、按调用顺序排列；每条用户本人消息后插一条不可见 user 当前时间，取该消息的 `created_at`；时间与进度提醒都在组装时由消息算出、不落库，同一段历史每次组装逐字相同。发出前检查工具回执齐全（缺失在内存补中断回执）且最后一条为 user 或 tool；2026-11-08 删除该检查，由组装前补跑工具、只在还有活时组装来保证。理由是原生只追加同样利于前缀缓存，且省去合并转换层；压缩是唯一开启新世代的动作 | [05](wiki/05-main-runtime.md#请求组装规则2026-11-02) |

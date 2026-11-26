@@ -1,39 +1,38 @@
-// 本文件适配 OpenRouter 渠道：设置 Gemini 的默认推理强度，组装流式请求，并保留响应中的正文、推理与工具调用供保存和续接。
+// 本文件实现 OpenAI Chat Completions 兼容协议：按传入配置组装流式请求、解码响应（含推理与费用扩展）并读取 /models 目录。
 
-package providers
+package llm
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/shopspring/decimal"
 )
 
-// openRouterProvider 承接除已认领的 ikun 模型之外的全部模型，是注册表里的兜底渠道。
-type openRouterProvider struct{}
-
-// Matches 恒为真：注册表按顺序询问，轮到这里的模型都归 OpenRouter。
-func (openRouterProvider) Matches(string) bool { return true }
-
-// Service 返回看板中保存 OpenRouter 凭证的服务名。
-func (openRouterProvider) Service() string { return services.OpenRouter }
-
-// PrepareRequest 把统一请求序列化为 OpenRouter 的流式聊天请求，并剥掉只属于其他渠道的原生协议字段。
-func (openRouterProvider) PrepareRequest(ctx context.Context, credentials services.Settings, prepared Request) (OutgoingRequest, error) {
-	// 要求流式返回，并在末尾分片带上用量；用量拿不到时记空，不阻断回复。
+// prepareOpenAIRequest 将统一请求序列化为流式 Chat Completions 请求，并剥离属于其他原生协议的历史元数据。
+func prepareOpenAIRequest(ctx context.Context, config Config, prepared Request) (OutgoingRequest, error) {
 	prepared.Stream = true
 	prepared.StreamOptions = map[string]bool{"include_usage": true}
-	// 普通 Gemini 请求明确使用高推理并返回思考；压缩已经指定低强度与隐藏推理，沿用其设置。
-	if strings.HasPrefix(prepared.Model, "google/gemini-") && prepared.Reasoning == nil {
-		prepared.Reasoning = map[string]any{"effort": "high", "exclude": false}
+	if !config.SendSessionID {
+		prepared.SessionID = ""
 	}
-	// 从 ikun 原生渠道切回 OpenRouter 时不向其他供应商泄漏原生协议元数据。
+	if config.EnableReasoning {
+		if strings.HasPrefix(prepared.Model, "google/gemini-") && prepared.Reasoning == nil {
+			prepared.Reasoning = map[string]any{"effort": "high", "exclude": false}
+		}
+	} else {
+		prepared.Reasoning = nil
+	}
+	// 从原生 Gemini / Claude 切到 OpenAI 兼容协议时不泄漏原生元数据字段。
 	messages := make([]json.RawMessage, len(prepared.Messages))
 	copy(messages, prepared.Messages)
 	for index, raw := range messages {
@@ -53,22 +52,18 @@ func (openRouterProvider) PrepareRequest(ctx context.Context, credentials servic
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
+	endpoint := strings.TrimRight(config.BaseURL, "/") + "/chat/completions"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return OutgoingRequest{}, err
 	}
-	request.Header.Set("Authorization", "Bearer "+credentials.APIKey)
+	request.Header.Set("Authorization", "Bearer "+config.APIKey)
 	request.Header.Set("Content-Type", "application/json")
-	return OutgoingRequest{Request: request, Body: body}, nil
+	return OutgoingRequest{Request: request, Body: body, PreventRedirect: true}, nil
 }
 
-// DecodeStream 把 OpenRouter 的流式分片拼成一条完整响应。
-func (openRouterProvider) DecodeStream(payloads [][]byte, _ Request) (Response, bool, error) {
-	return assembleOpenRouterStream(payloads)
-}
-
-// openRouterStreamChunk 接收正文、推理和工具调用的流式分片，用量通常只在末尾分片出现。
-type openRouterStreamChunk struct {
+// openAIStreamChunk 接收正文、推理和工具调用的流式分片，用量通常只在末尾分片出现。
+type openAIStreamChunk struct {
 	ID      string `json:"id"`
 	Model   string `json:"model"`
 	Choices []struct {
@@ -97,16 +92,16 @@ type openRouterStreamChunk struct {
 	} `json:"usage"`
 }
 
-// streamToolCall 是按序号累积中的一条工具调用：名称与 ID 只在首个分片出现，参数靠后续分片逐段拼接。
+// streamToolCall 按序号累积一条工具调用：名称与 ID 只在首个分片出现，参数靠后续分片逐段拼接。
 type streamToolCall struct {
 	id        string
 	name      string
 	arguments strings.Builder
 }
 
-// assembleOpenRouterStream 把 OpenRouter 的流式分片拼成与非流式相同的完整响应。
-// 没收到 [DONE] 或结束原因说明流被截断，按可重试失败处理；分片本身不是合法 JSON 时按无效响应处理。
-func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
+// decodeOpenAIStream 把 OpenAI 兼容的 SSE 分片拼成完整响应。
+// 没收到 [DONE] 或结束原因说明流被截断，按可重试失败处理；分片不是合法 JSON 时按无效响应处理。
+func decodeOpenAIStream(payloads [][]byte) (Response, bool, error) {
 	var response Response
 	var content strings.Builder
 	var reasoning strings.Builder
@@ -119,7 +114,7 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 			sawDone = true
 			continue
 		}
-		var chunk openRouterStreamChunk
+		var chunk openAIStreamChunk
 		if err := json.Unmarshal(payload, &chunk); err != nil {
 			return response, false, fmt.Errorf("decode model stream chunk: %w", err)
 		}
@@ -182,7 +177,7 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 			"function": map[string]string{"name": call.name, "arguments": call.arguments.String()},
 		})
 	}
-	// 推理与正文一起落进助手消息；下一轮原样回传，已有看板可直接读取文本或加密状态。
+	// 推理与正文一起落进助手消息；下一轮原样回传，看板可直接读取文本或加密状态。
 	messageFields := map[string]any{"role": "assistant", "content": content.String(), "tool_calls": toolCalls}
 	if reasoning.Len() > 0 {
 		messageFields["reasoning"] = reasoning.String()
@@ -201,7 +196,7 @@ func assembleOpenRouterStream(payloads [][]byte) (Response, bool, error) {
 	return response, false, nil
 }
 
-// streamContentText 提取一个分片的正文增量：通常是字符串，少数供应商用分段数组时拼接其中的文本段。
+// streamContentText 提取一个分片的正文增量：通常是字符串，少数兼容端用分段数组时拼接其中的文本段。
 func streamContentText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -224,4 +219,69 @@ func streamContentText(raw json.RawMessage) string {
 		}
 	}
 	return combined.String()
+}
+
+// listOpenAIModels 读取 OpenAI 兼容端点的 /models 目录；若条目声明了 supported_parameters 则仅保留支持 tools 的模型。
+func listOpenAIModels(ctx context.Context, client *http.Client, config Config) ([]CatalogModel, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	endpoint := strings.TrimRight(config.BaseURL, "/") + "/models"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+config.APIKey)
+	httpClient := noRedirectClient(client)
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("model catalog returned HTTP %d", response.StatusCode)
+	}
+	const maxCatalogSize = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxCatalogSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxCatalogSize {
+		return nil, errors.New("model catalog is too large")
+	}
+	var catalog struct {
+		Data []struct {
+			ID                  string   `json:"id"`
+			Name                string   `json:"name"`
+			ContextLength       int64    `json:"context_length"`
+			SupportedParameters []string `json:"supported_parameters"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var models []CatalogModel
+	for _, entry := range catalog.Data {
+		if entry.ID == "" || len(entry.ID) > 160 || seen[entry.ID] {
+			continue
+		}
+		if len(entry.SupportedParameters) > 0 && !slices.Contains(entry.SupportedParameters, "tools") {
+			continue
+		}
+		seen[entry.ID] = true
+		name := entry.Name
+		if name == "" {
+			name = entry.ID
+		}
+		model := CatalogModel{ID: entry.ID, Name: name}
+		if entry.ContextLength > 0 {
+			length := entry.ContextLength
+			model.ContextLength = &length
+		}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		return nil, errors.New("model catalog has no model candidates")
+	}
+	return models, nil
 }

@@ -151,6 +151,19 @@ export interface RuntimeSettings {
   version: number;
 }
 
+export type ModelProviderProtocol = 'openai' | 'gemini' | 'claude';
+
+export interface ModelProvider {
+  id: string;
+  name: string;
+  protocol: ModelProviderProtocol;
+  base_url: string;
+  status: string;
+  key_suffix: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ServiceItem {
   id: string;
   name: string;
@@ -196,8 +209,11 @@ export const formatMoney = (value: string | number | null | undefined, compact =
     maximumFractionDigits: digits[1],
   })}`;
 };
-export const shortModel = (value: string | null | undefined) =>
-  value?.split('/').slice(1).join('/') || value || '未知';
+export const shortModel = (value: string | null | undefined) => {
+  if (!value) return '未知';
+  const withoutProvider = value.replace(/^provider:[0-9a-f-]+:/i, '');
+  return withoutProvider.split('/').slice(1).join('/') || withoutProvider;
+};
 
 // stepUsageMeta 把单步模型名、输入/缓存/输出 Token 与费用整理成时间线标题行摘要。
 export function stepUsageMeta(usage: TimelineUsage): string {

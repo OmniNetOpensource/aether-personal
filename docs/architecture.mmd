@@ -59,7 +59,7 @@ flowchart TD
     end
 
     subgraph L3["第三层：外部服务"]
-        MODEL["App 模型供应商：OpenRouter · ikun Gemini · ikun Claude"]
+        MODEL["App 模型供应商：内置 OpenRouter · 看板自定义（OpenAI 兼容 / Gemini / Claude）"]
         EXTERNAL["联网服务：Serper · Parallel · EveryInfra · Resend"]
         OSS["阿里云私有 OSS：聊天图片与工作区文件"]
         SANDBOX["阿里云 FC Sandbox + AgenticFS<br/>持久 /mnt/workspace · AIO MCP · VNC"]

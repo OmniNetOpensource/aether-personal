@@ -146,7 +146,15 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 
 本轮已验证 `00007` / `00008` 的迁移、回滚与再执行；管理员版本冲突409、未知模型400、普通账号403；Main 与 Subagent 的真实独立模型请求，以及 Main 从 Minimax 切换到 DeepSeek 后后续请求使用新模型。Gemini 的真实请求已验证输出上限、结果发送与私有结束标记后回到空闲。较小模型目录上限4096已验证自动缩小。配置已验证后端重启后保留，页面已完成应用操作验收。未新增测试文件，未提交或推送。
 
-## ikun Gemini（2026-10-30）
+## 通用模型协议包与自定义供应商（2026-11-27）
+
+2026-11-27，用户要求彻底删除所有 `ikun` 专属配置，改用与具体供应商无关、只关注模型协议的 Go 包，让不同供应商只是传入不同的配置。经确认：
+
+- **协议层解耦（`backend/internal/llm/`）**：删除旧 `backend/internal/agent/providers/`、`ikun_gemini_models.go` 与 `ikun_claude_models.go`。新包 `internal/llm` 不依赖 `services`、`database` 或 `agent`，只按模型协议族实现 `openai`（Chat Completions 兼容）、`gemini`（原生 `generateContent`）与 `claude`（原生 Messages）三套请求构造、SSE 流式解码与模型目录拉取，调用方只需传入 `llm.Config{Protocol, BaseURL, APIKey, ...}`。
+- **保留内置 OpenRouter + 看板自由增删自定义供应商**：内置 OpenRouter 继续使用部署环境变量 `OPENROUTER_API_KEY` 与 `openrouter/free` 默认路由（保留其状态与额度卡片），底层同样构造为一份 `llm.Config` 交由 `internal/llm` 处理。管理看板「配置」页新增「自定义模型供应商」管理区，经 `GET/POST /admin/model-providers` 与 `PUT/DELETE /admin/model-providers/{id}` 读写新表 `model_providers`（迁移 `00071_model_providers.sql`），自由增删改名称、协议类型、Base URL 与加密 API Key（以 `"model_provider:" + id` 作为 AES-256-GCM AAD 加密存储，完整 Key 不回显）。
+- **模型选择与清理**：自定义供应商模型在 `user_model_settings` 和 `steps.model` 中编码为 `provider:<uuid>:<upstream_model>`，以不可变 UUID 隔离重名与改名影响；迁移 `00071` 删除 `service_settings` 中的 `ikun_gemini` / `ikun_claude` 记录并收紧 `CHECK` 约束，将旧的 `ikun:%` 选择重置为 `openrouter/free`（Subagent 置空跟随 Main），同步移除 `ikunQuota()` 与 `GEMINI_*_IKUNCODE` 导入配置。
+
+## ikun Gemini（2026-10-30，已于 2026-11-27 移除，历史记录）
 
 用户要求把 Aether 的 ikun 接入模型配置，随后明确选择 Gemini。实现采用 Aether 的 Gemini 原生协议与环境变量命名，保留 OpenRouter。选择理由是让 Main 在同一个配置页选择渠道，无需把 Gemini 强行转换为 Chat Completions 服务。
 

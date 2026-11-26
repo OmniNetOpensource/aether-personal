@@ -38,7 +38,7 @@
 - 数据库与信号协调：PostgreSQL 18 + pgvector（保存全部持久状态与租约栅栏代数，主键 `uuidv7()`）；Redis 8（纯内存无持久化，传递跨实例唤醒队列、用户临时租约、思考打断与聊天推送广播，并以 `oss://` 为键共享图片旁路缓存）。
 - 迁移：goose（`go tool goose`，版本固定在 `go.mod`）。
 - 数据库访问：sqlc `v1.31.1`（单独安装），手写 SQL 在 `backend/db/queries/`，生成代码在 `backend/internal/database/` 并提交进仓库，不要手改。
-- 模型：OpenRouter、ikun Gemini 原生协议与 ikun Claude 原生 Messages 协议（上下文压缩沿用发起步骤的模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（配 Redis 共享图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
+- 模型：内置 OpenRouter（环境变量 `OPENROUTER_API_KEY`）与管理看板配置的自定义模型供应商（`model_providers` 表），底层共用与供应商无关的 `backend/internal/llm/` 协议包（OpenAI 兼容、Gemini 原生、Claude 原生 Messages，上下文压缩沿用发起步骤的模型）；邮件：Resend（直接用 `net/http` 调用）；存储与沙箱：阿里云私有 OSS（配 Redis 共享图片缓存）、阿里云 FC Agent Sandbox + AgenticFS 持久工作区。
 - 前端：React + React DOM + TypeScript，纯 Web 应用，移动端使用 PWA；工程位于 `frontend/`，构建输出 `frontend/build/web`。
 
 ## 常用命令（在 `backend/` 下）
@@ -79,7 +79,7 @@ SQL
 
 ## 约定
 
-- 基础设施启动配置与 `OPENROUTER_API_KEY` 来自环境变量。用户在 App 保存个人模型选择，管理员在看板保存全局运行参数和其他服务凭证。`SERVICE_ENCRYPTION_KEY` 由部署端提供并单独备份；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。缺少服务 Key 时允许进入看板补齐，调用该服务时报未配置。
+- 基础设施启动配置与 `OPENROUTER_API_KEY` 来自环境变量。用户在 App 保存个人模型选择，管理员在看板保存全局运行参数、自定义模型供应商和其他服务凭证。`SERVICE_ENCRYPTION_KEY` 由部署端提供并单独备份；`APP_ENV` 必须为 `dev` 或 `prod`，无默认值。缺少服务 Key 时允许进入看板补齐，调用该服务时报未配置。
 - 迁移文件按 `00001_...sql` 顺序编号，包含 Up 与 Down；新增迁移后不在本地执行、回滚或再执行来验证。
 - 表结构：固定取值的字段用 `text` + `CHECK`，不用 enum；外键一律 `ON DELETE CASCADE`。
 - sqlc 生成类型：不能为空的列用普通类型，能为空的列加 `*`（`nil` 表示空）；UUID 用 `google/uuid`，时间用 `time.Time`，`numeric` 用 `shopspring/decimal`。

@@ -37,7 +37,7 @@ pnpm start
 | `src/AdminApp.tsx` | 管理员登录、侧边栏外壳、筛选、自动刷新与页面切换编排 |
 | `src/api.ts` | 管理接口类型、统一请求与全看板共用的格式化工具 |
 | `src/Overview.tsx`、`src/Calls.tsx`、`src/Timeline.tsx` | 运行概览、模型调用（含详情弹窗）与运行过程三个观测页 |
-| `src/RuntimeSettings.tsx`、`src/ServiceSettings.tsx` | 配置页的全局运行参数与服务凭证 |
+| `src/RuntimeSettings.tsx`、`src/ModelProviders.tsx`、`src/ServiceSettings.tsx` | 配置页的全局运行参数、自定义模型供应商与服务凭证 |
 | `src/ui.tsx`、`src/style.css` | 共用小组件（徽章、面板、复制 ID、折叠长文本）与全局样式 |
 | `server.mjs` | 生产入口：托管 `build/web` 静态产物，按白名单流式／缓冲代理 `/api` 到 Go 后端，并统一安全响应头 |
 | `public/app-icon.png` | 产品图标，构建时复制进静态产物 |
@@ -66,6 +66,6 @@ pnpm start
 
 ## 服务配置
 
-OpenRouter 由部署环境的 `OPENROUTER_API_KEY` 配置。看板显示配置状态和额度，其余服务的凭证在「配置」页保存。填写新 Key 替换，留空保留，点击“清除 Key”后续请求停止使用该服务。Gemini 地址默认 `https://api.ikuncode.cc`，只需填写 Key；Resend 同时填写发件人。保存不请求供应商，因此“已保存 · 未验证”不代表额度、权限或可用性通过验证。
+OpenRouter 由部署环境的 `OPENROUTER_API_KEY` 配置，看板显示配置状态和额度。其他模型供应商在「配置」页的「自定义模型供应商」自由增删改（名称、协议类型 OpenAI 兼容 / Gemini 原生 / Claude 原生、Base URL 与 API Key），其余第三方服务凭证在下方服务卡片保存。填写新 Key 替换，留空保留，点击“清除 Key”后续请求停止使用该服务；Resend 同时填写发件人。保存不请求供应商，因此“已保存 · 未验证”不代表额度、权限或可用性通过验证。
 
 后端先执行全部迁移并配置 `SERVICE_ENCRYPTION_KEY`，即使没有业务 Key 也能进入看板。Key 只以密文进入数据库，浏览器仅收到末尾四位和更新时间。现有 `.env` 使用 `make -C backend import-services` 一次性迁移，之后从看板维护。主密钥需单独备份，配置语义见 [架构 Wiki](../docs/wiki/08-admin-observability.md#服务凭证管理2026-10-30)。

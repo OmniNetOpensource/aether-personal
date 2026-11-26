@@ -5,6 +5,7 @@ package modelsettings
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/google/uuid"
@@ -13,6 +14,31 @@ import (
 
 // DefaultModel 由 OpenRouter 按请求能力从免费模型中路由。
 const DefaultModel = "openrouter/free"
+
+// providerModelPrefix 标识绑定到看板自定义模型供应商的模型引用，格式为 provider:<uuid>:<upstream_model>。
+const providerModelPrefix = "provider:"
+
+// EncodeProviderModel 将自定义供应商 ID 与上游真实模型名编码为稳定的选择标识，重命名供应商不影响已保存选择。
+func EncodeProviderModel(providerID uuid.UUID, upstreamModel string) string {
+	return providerModelPrefix + providerID.String() + ":" + upstreamModel
+}
+
+// ParseProviderModel 解析自定义供应商模型引用；未带 provider: 前缀时返回 ok=false，表示走内置 OpenRouter。
+func ParseProviderModel(model string) (uuid.UUID, string, bool) {
+	rest, found := strings.CutPrefix(model, providerModelPrefix)
+	if !found {
+		return uuid.Nil, "", false
+	}
+	rawID, upstreamModel, found := strings.Cut(rest, ":")
+	if !found || upstreamModel == "" {
+		return uuid.Nil, "", false
+	}
+	providerID, err := uuid.Parse(rawID)
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	return providerID, upstreamModel, true
+}
 
 // Selection 是账号选择的模型 ID 和写入版本。Subagent 留空跟随 Main。
 type Selection struct {

@@ -81,8 +81,6 @@ func (s *server) fetchServiceQuota(ctx context.Context, definition services.Defi
 	switch definition.ID {
 	case services.OpenRouter:
 		return s.openRouterQuota(ctx, quota, credentials.APIKey)
-	case services.IkunGemini, services.IkunClaude:
-		return s.ikunQuota(ctx, quota, credentials)
 	case services.Resend:
 		return s.resendQuota(ctx, quota, credentials.APIKey)
 	case services.Serper:
@@ -176,75 +174,6 @@ func (s *server) openRouterQuota(ctx context.Context, quota serviceQuota, apiKey
 	quota.Status, quota.Unit = "ok", "USD"
 	quota.Remaining, quota.Limit = keyInfo.Data.LimitRemaining, keyInfo.Data.Limit
 	quota.Detail = "这把 Key 在消费上限内还能使用的金额"
-	return quota
-}
-
-// ikunQuota 读取 ikun（New API）的令牌额度，并按站点公开的换算单位换成它展示的计价单位。
-func (s *server) ikunQuota(ctx context.Context, quota serviceQuota, credentials services.Settings) serviceQuota {
-	baseURL := strings.TrimRight(credentials.BaseURL, "/")
-	var usage struct {
-		Code bool `json:"code"`
-		Data struct {
-			TotalGranted   float64 `json:"total_granted"`
-			TotalUsed      float64 `json:"total_used"`
-			TotalAvailable float64 `json:"total_available"`
-			UnlimitedQuota bool    `json:"unlimited_quota"`
-			UserQuota      *struct {
-				TotalAvailable float64 `json:"total_available"`
-				TotalUsed      float64 `json:"total_used"`
-			} `json:"user_quota"`
-		} `json:"data"`
-	}
-	if err := s.getQuotaJSON(ctx, baseURL+"/api/usage/token/", map[string]string{"Authorization": "Bearer " + credentials.APIKey}, &usage); err != nil {
-		return quotaFailure(quota, err)
-	}
-	if !usage.Code {
-		quota.Detail = "供应商拒绝查询，Key 可能已失效"
-		return quota
-	}
-	available, used, granted := usage.Data.TotalAvailable, usage.Data.TotalUsed, usage.Data.TotalGranted
-	if usage.Data.UserQuota != nil {
-		// 令牌允许查账户额度时，真正能花的是令牌剩余额度与账户余额中更小的那个。
-		available, used = usage.Data.UserQuota.TotalAvailable, usage.Data.UserQuota.TotalUsed
-		if !usage.Data.UnlimitedQuota {
-			available = min(available, usage.Data.TotalAvailable)
-		}
-		granted = available + used
-	} else if usage.Data.UnlimitedQuota {
-		quota.Status = "unlimited"
-		quota.Detail = "这把 Key 本身不限额，且未开放账户额度查询；账户余额请在 ikun 控制台查看"
-		return quota
-	}
-	var siteStatus struct {
-		Data struct {
-			QuotaPerUnit     float64 `json:"quota_per_unit"`
-			QuotaDisplayType string  `json:"quota_display_type"`
-			USDExchangeRate  float64 `json:"usd_exchange_rate"`
-		} `json:"data"`
-	}
-	if err := s.getQuotaJSON(ctx, baseURL+"/api/status", nil, &siteStatus); err != nil {
-		return quotaFailure(quota, err)
-	}
-	if siteStatus.Data.QuotaPerUnit <= 0 {
-		quota.Detail = "供应商未返回额度换算单位，无法换算余额"
-		return quota
-	}
-	convert, unit := func(units float64) float64 { return units / siteStatus.Data.QuotaPerUnit }, "USD"
-	switch siteStatus.Data.QuotaDisplayType {
-	case "CNY":
-		rate := siteStatus.Data.USDExchangeRate
-		if rate <= 0 {
-			rate = 1
-		}
-		convert, unit = func(units float64) float64 { return units / siteStatus.Data.QuotaPerUnit * rate }, "CNY"
-	case "TOKENS":
-		convert, unit = func(units float64) float64 { return units }, "Token"
-	}
-	quota.Status, quota.Unit = "ok", unit
-	quota.Remaining = numberPointer(convert(available))
-	quota.Used = numberPointer(convert(used))
-	quota.Limit = numberPointer(convert(granted))
-	quota.Detail = "ikun 令牌剩余额度，按站点计价单位换算"
 	return quota
 }
 

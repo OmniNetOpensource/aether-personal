@@ -11,17 +11,17 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/agent/providers"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
+	"github.com/OmniNetOpensource/aether-personal/backend/internal/llm"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-// chatResponse 与 modelRequest 是 providers 统一响应与请求的别名：Agent 内部沿用这两个名字，渠道差异不进本包。
-type chatResponse = providers.Response
+// chatResponse 与 modelRequest 是 llm 统一响应与请求的别名：Agent 内部沿用这两个名字，协议差异不进本包。
+type chatResponse = llm.Response
 
 // modelRequest 见 chatResponse 的说明。
-type modelRequest = providers.Request
+type modelRequest = llm.Request
 
 // sendRequest 是请求阶段的入口：发请求前先校验租约与是否有更新的 Main 输入，随后固定输入边界并插入占位；
 // 请求一旦发出不再因新输入中途取消，期间到达的新消息排在占位之后留给下一轮处理。
@@ -63,9 +63,9 @@ func (r *Runner) sendRequest(ctx, budget context.Context, stepID uuid.UUID, requ
 	return replyID, response, false, nil
 }
 
-// sendModelRequest 发送一次已组装好的模型请求并返回结果：渠道由 providers 按模型名自动选择，返回前清理供应商可能回传的负数用量。
+// sendModelRequest 发送一次已组装好的模型请求并返回结果：先按模型标识解析出供应商配置，再交由协议无关的 llm 包发包和解码。
 func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, purpose string) (response chatResponse, retryable bool, err error) {
-	// 先过滤请求中的文本，再展开图片并转换为渠道协议。普通请求与压缩请求共用这条路径。
+	// 先过滤请求中的文本，再展开图片并转换为对应协议。普通请求与压缩请求共用这条路径。
 	filtered, err := filterModelMessages(prepared.Messages)
 	if err != nil {
 		return response, false, err
@@ -75,12 +75,12 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 		return response, false, err
 	}
 	prepared.Messages = resolved
-	provider := providers.ForModel(prepared.Model)
-	credentials, err := r.services.Load(ctx, provider.Service())
+	llmConfig, upstreamModel, err := r.services.ResolveModelConfig(ctx, prepared.Model)
 	if err != nil {
 		return response, false, err
 	}
-	outgoing, err := provider.PrepareRequest(ctx, credentials, prepared)
+	prepared.Model = upstreamModel
+	outgoing, err := llm.PrepareRequest(ctx, llmConfig, prepared)
 	if err != nil {
 		return response, false, err
 	}
@@ -96,9 +96,9 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 	}
 	defer httpResponse.Body.Close()
 	if httpResponse.StatusCode != http.StatusOK {
-		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, providers.MaxResponseBytes+1))
-		if len(responseBody) > providers.MaxResponseBytes {
-			responseBody = responseBody[:providers.MaxResponseBytes]
+		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, llm.MaxResponseBytes+1))
+		if len(responseBody) > llm.MaxResponseBytes {
+			responseBody = responseBody[:llm.MaxResponseBytes]
 		}
 		if err != nil {
 			return response, true, err
@@ -106,7 +106,7 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 		retryable := httpResponse.StatusCode == http.StatusTooManyRequests || httpResponse.StatusCode >= 500
 		return response, retryable, fmt.Errorf("model provider returned %d: %.500s", httpResponse.StatusCode, responseBody)
 	}
-	payloads, _, truncated, readErr := providers.ReadSSEPayloads(httpResponse.Body)
+	payloads, _, truncated, readErr := llm.ReadSSEPayloads(httpResponse.Body)
 	if truncated {
 		return response, false, fmt.Errorf("model response exceeds 8 MiB")
 	}
@@ -115,7 +115,7 @@ func (r *Runner) sendModelRequest(ctx context.Context, prepared modelRequest, pu
 	}
 	var incomplete bool
 	var decodeErr error
-	response, incomplete, decodeErr = provider.DecodeStream(payloads, prepared)
+	response, incomplete, decodeErr = llm.DecodeStream(llmConfig.Protocol, payloads, prepared)
 	if response.Usage.PromptTokens != nil && *response.Usage.PromptTokens < 0 {
 		response.Usage.PromptTokens = nil
 	}
