@@ -9,6 +9,6 @@
     "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
   },
   "devDependencies": {
-    "wrangler": "4.152.0"
+    "wrangler": "4.166.0"
   }
 }
