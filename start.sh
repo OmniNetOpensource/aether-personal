@@ -28,7 +28,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command in go node npm docker make curl lsof; do
+for command in go node pnpm docker make curl lsof; do
   command -v "$command" >/dev/null || fail "未安装 $command。"
 done
 [[ -f "$project_dir/backend/.env" ]] || fail "请先从 backend/.env.example 创建 backend/.env 并填写密钥。"
@@ -119,7 +119,7 @@ cd "$project_dir"
 printf '\n[1/5] 安装依赖并构建聊天前端……\n'
 make frontend
 printf '\n[2/5] 安装依赖并构建管理看板……\n'
-(cd "$admin_dir" && npm ci && npm run build)
+(cd "$admin_dir" && pnpm install --frozen-lockfile && pnpm run build)
 printf '\n[3/5] 启动数据库并执行迁移……\n'
 make -C backend db-up
 make -C backend migrate

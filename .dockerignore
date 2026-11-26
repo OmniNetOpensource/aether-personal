@@ -1,6 +1,7 @@
 .git
 .local
 **/node_modules
+**/.pnpm-store
 **/.env
 **/.env.*
 **/.dev.vars*

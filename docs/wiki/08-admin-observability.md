@@ -251,8 +251,8 @@ go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-b
 
 用户要求「看板也用 TanStack Start」，随后澄清范围：只把 `admin/` 改造成 TanStack Start，其他不变。据此：
 
-- `admin/` 从零依赖的原生三件套（`public/app.js` 命令式 DOM + CSS + HTML）改为与聊天端同款的 TanStack Start + React + TypeScript：文件路由与 SPA 模式，构建时预渲染 HTML 外壳，管理员登录与数据都在浏览器中恢复。依赖版本与 `frontend/` 对齐并固定在 `admin/package-lock.json`，Node.js 最低版本随之升到 22.12.0。
+- `admin/` 从零依赖的原生三件套（`public/app.js` 命令式 DOM + CSS + HTML）改为与聊天端同款的 TanStack Start + React + TypeScript：文件路由与 SPA 模式，构建时预渲染 HTML 外壳，管理员登录与数据都在浏览器中恢复。依赖版本与 `frontend/` 对齐并固定在 `admin/pnpm-lock.yaml`（2026-11-25 起由 `package-lock.json` 切换为 pnpm 10），Node.js 最低版本随之升到 22.12.0。
 - 五个页面（运行概览、模型调用、运行过程、模型配置、服务配置）、管理员密码登录与独立管理会话、筛选与 15 秒自动刷新、调用详情的请求／响应 JSON、时间线展开状态与全文保留、ID 复制等行为逐项对齐改造前；样式沿用原 CSS（移入 `src/style.css`），配色与布局不变。页面按职责拆成 `AdminApp` 与各页组件，接口类型集中在 `src/api.ts`，替代原先无类型的裸 JSON 拼 DOM。
 - 运行与部署形态不变：仍是独立目录、独立 Node 服务与独立域名。`server.mjs` 继续用 Node 内置 HTTP 托管静态产物并按固定白名单代理 `/api`（含大响应流式转发与安全响应头），只是静态目录从 `public/` 换成构建产物 `build/web/`，未知无扩展名路径回退预渲染的 `index.html`。Start 外壳含内联脚本数据，CSP 的 `script-src` 因此放行 `'unsafe-inline'`，其余指令不变。顺带补上代理白名单遗漏的 `aliyun_oss` 服务保存路径（页面早有 OSS 卡片，此前经代理保存会 404）。
-- 生产镜像 `infra/prod/Dockerfile.admin` 改为多阶段构建：构建阶段 `npm ci && npm run build`，运行阶段只带 `server.mjs` 与 `build/web`，仍以非 root 的 node 用户运行。根目录 `make admin` 与 `start.sh` 增加看板构建步骤，发布脚本在快照中先 `npm ci` 再做看板类型检查。
+- 生产镜像 `infra/prod/Dockerfile.admin` 改为多阶段构建：构建阶段 `pnpm install --frozen-lockfile && pnpm run build`（2026-11-25 起由 npm 切换为 pnpm），运行阶段只带 `server.mjs` 与 `build/web`，仍以非 root 的 node 用户运行。根目录 `make admin` 与 `start.sh` 增加看板构建步骤。
 - 不采用 SSR、也不并入 `frontend/`：看板数据都在管理员登录后经 `/admin/*` 读取，无服务端直出需求；并入聊天应用会打破管理员入口与聊天入口的隔离。曾一度误按「并入 frontend 改成用户看板」动手（新增 `/me/*` 接口与 `/dashboard` 页、删除 `admin/`），已在本次改造开始前全部撤销，后端 `/admin/*` 接口与管理员能力未受影响。

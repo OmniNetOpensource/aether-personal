@@ -137,7 +137,7 @@ def main():
         if current_main[0] != revision:
             print("main 已推进到后续提交，跳过本次过时发布。")
             return
-    commands = ("ssh",) if args.rotate_backups else ("git", "docker", "npm", "npx", "go", "make", "tar", "gzip", "curl", "ssh", "scp")
+    commands = ("ssh",) if args.rotate_backups else ("git", "docker", "pnpm", "go", "make", "tar", "gzip", "curl", "ssh", "scp")
     for command in commands:
         if not shutil.which(command):
             raise RuntimeError(f"缺少命令：{command}")
@@ -193,11 +193,11 @@ def main():
             installer = (ROOT / "scripts/install-release.sh").read_text()
             remote(ssh, ["sudo", "-n", "bash", "-s", "--", "--check", "0", args.resume or ""], stdin=installer)
             edge = ROOT / "infra/cloudflare"
-            run(["npm", "ci"], cwd=edge)
+            run(["pnpm", "install", "--frozen-lockfile"], cwd=edge)
             if not args.ci:
-                run(["npx", "--no-install", "wrangler", "whoami"], cwd=edge)
+                run(["pnpm", "exec", "wrangler", "whoami"], cwd=edge)
             # 直接读取部署记录验证发布权限；CI 无需额外授予 Token 读取用户资料的权限。
-            run(["npx", "--no-install", "wrangler", "deployments", "list", "--json"], cwd=edge, quiet=True)
+            run(["pnpm", "exec", "wrangler", "deployments", "list", "--json"], cwd=edge, quiet=True)
             if args.check:
                 print("发布预检通过；未构建或修改生产。")
                 return
@@ -251,7 +251,7 @@ def main():
             run(["go", "build", "./..."], cwd=snapshot / "backend")
             run(["go", "vet", "./..."], cwd=snapshot / "backend")
             run(["make", "edge-dry-run"], cwd=snapshot)
-            # 看板 Docker 构建中的 npm run build 已包含类型与服务脚本检查，不在宿主机重复安装。
+            # 看板 Docker 构建中的 pnpm run build 已包含类型与服务脚本检查，不在宿主机重复安装。
             cache_root = os.environ.get("PUBLISH_BUILD_CACHE")
             for service in ("backend", "admin"):
                 command = ["docker", "buildx", "build", "--load", "--platform", "linux/amd64", "-f", f"infra/prod/Dockerfile.{service}",
@@ -315,13 +315,13 @@ def main():
 
         # 后端健康后才更新 Worker；失败保留可恢复目录，不自动回退已迁移的数据库。
         edge = snapshot / "infra/cloudflare"
-        output = run(["npx", "--no-install", "wrangler", "deploy", "--no-autoconfig", "--message", f"Release {release_id}"], cwd=edge)
+        output = run(["pnpm", "exec", "wrangler", "deploy", "--no-autoconfig", "--message", f"Release {release_id}"], cwd=edge)
         version = re.search(r"Current Version ID:\s*([a-f0-9-]{36})", output)
         if not version:
             raise RuntimeError("Cloudflare 未返回版本编号，请检查发布日志")
         manifest["worker_version"] = version.group(1)
         (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        deployments = json.loads(run(["npx", "--no-install", "wrangler", "deployments", "list", "--json"], cwd=edge, quiet=True))
+        deployments = json.loads(run(["pnpm", "exec", "wrangler", "deployments", "list", "--json"], cwd=edge, quiet=True))
         (release_dir / "cloudflare-deployments.json").write_text(json.dumps(deployments, indent=2) + "\n")
         latest = max(deployments, key=lambda item: item["created_on"])
         if latest["versions"] != [{"version_id": manifest["worker_version"], "percentage": 100}]:

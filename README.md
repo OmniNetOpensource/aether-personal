@@ -80,7 +80,7 @@ sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有�
 
 ## 本地开发
 
-需要 Go `1.27.2`、Docker，以及 Node.js `>=22.12.0`（建议 Node 24）。前端依赖固定在 `frontend/package-lock.json`，不再需要 Flutter SDK。
+需要 Go `1.27.2`、Docker，以及 Node.js `>=22.12.0`（建议 Node 24）与 pnpm `10`。前端依赖固定在 `frontend/pnpm-lock.yaml`，不再需要 Flutter SDK。
 
 首次准备基础配置与管理员登录：
 

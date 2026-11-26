@@ -2,6 +2,9 @@
 .DS_Store
 /.local/
 
+# 本地 pnpm 相对路径 store（当本机配置相对 store-dir 时产生）
+.pnpm-store/
+
 # 本地临时文件
 /tmp/
 

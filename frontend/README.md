@@ -4,7 +4,7 @@ Rsbuild + React + TypeScript 实现邮箱登录、Main 聊天与只读记忆浏�
 
 ## 本地运行
 
-需要 Node.js `>=22.12.0`，建议 Node 24。在仓库根目录执行：
+需要 Node.js `>=22.12.0`（建议 Node 24）与 pnpm `10`。在仓库根目录执行：
 
 ```sh
 make dev
@@ -15,20 +15,20 @@ make dev
 仅开发前端时，先启动 `8080` 端口的后端，再在 `frontend/` 执行：
 
 ```sh
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
-打开命令输出的地址，默认是 `localhost:3000`。Rsbuild 提供 React 热更新，并将 `/ws`、`/sandbox/desktop`、`/model-settings`、`/memory-files`、`/images` 与 `/files` 代理至本地后端：页面打开即建立 WebSocket，收到后端 `ready` 事件前显示 loading，登录、历史与收发都走这条连接。端口已占用时可使用 `npm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
+打开命令输出的地址，默认是 `localhost:3000`。Rsbuild 提供 React 热更新，并将 `/ws`、`/sandbox/desktop`、`/model-settings`、`/memory-files`、`/images` 与 `/files` 代理至本地后端：页面打开即建立 WebSocket，收到后端 `ready` 事件前显示 loading，登录、历史与收发都走这条连接。端口已占用时可使用 `pnpm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
 
 构建与类型检查：
 
 ```sh
-npm run check
-npm run build
+pnpm run check
+pnpm run build
 ```
 
-`npm run build` 会先执行 Rsbuild 静态打包，再检查 TypeScript 类型并生成 PWA 图标与 Service Worker。唯一部署目录是 `frontend/build/web`，继续兼容后端 `FRONTEND_DIR` 和 Cloudflare Static Assets。页面固定访问同源 API，前端不包含供应商密钥。依赖固定在 `package-lock.json`。
+`pnpm run build` 会先执行 Rsbuild 静态打包，再检查 TypeScript 类型并生成 PWA 图标与 Service Worker。唯一部署目录是 `frontend/build/web`，继续兼容后端 `FRONTEND_DIR` 和 Cloudflare Static Assets。页面固定访问同源 API，前端不包含供应商密钥。依赖固定在 `pnpm-lock.yaml`。
 
 ## 移动端安装
 

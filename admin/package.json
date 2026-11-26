@@ -5,7 +5,7 @@
   "type": "module",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
-    "build": "rsbuild build --config web.config.ts && npm run check",
+    "build": "rsbuild build --config web.config.ts && pnpm run check",
     "dev": "rsbuild dev --config web.config.ts",
     "check": "tsc --noEmit && node --check server.mjs",
     "start": "node --env-file-if-exists=.env server.mjs"

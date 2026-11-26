@@ -40,15 +40,20 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: '10.32.1'
+
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.node-version'
-          cache: npm
+          cache: pnpm
           cache-dependency-path: |
-            frontend/package-lock.json
-            admin/package-lock.json
-            infra/cloudflare/package-lock.json
+            frontend/pnpm-lock.yaml
+            admin/pnpm-lock.yaml
+            infra/cloudflare/pnpm-lock.yaml
 
       # 独立 BuildKit builder 可导出中间构建层，临时 runner 从前一次提交恢复缓存。
       - name: Set up Docker Buildx

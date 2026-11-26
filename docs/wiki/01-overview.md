@@ -81,7 +81,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 按路径挂载聊天主页或按需分包的 `/memories` 页面；聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑；移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
 
-依赖固定在 `frontend/package-lock.json`，Node.js 最低版本为 `22.12.0`。`npm run build` 先由 Rsbuild 打包静态资源，再执行类型检查并生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录（不再产生 `frontend/build/server`）。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本为 `22.12.0`。`pnpm run build` 先由 Rsbuild 打包静态资源，再执行类型检查并生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录（不再产生 `frontend/build/server`）。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 

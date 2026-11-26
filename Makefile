@@ -10,16 +10,16 @@ publish-check:
 	python3 scripts/publish.py --check
 
 edge-check:
-	cd infra/cloudflare && npm ci && npm run check
+	cd infra/cloudflare && pnpm install --frozen-lockfile && pnpm run check
 
 edge-dry-run: frontend edge-check
-	cd infra/cloudflare && npm run dry-run
+	cd infra/cloudflare && pnpm run dry-run
 
 edge-dev:
-	cd infra/cloudflare && npm run dev
+	cd infra/cloudflare && pnpm run dev
 
 edge-deploy: edge-dry-run
-	cd infra/cloudflare && npm run deploy
+	cd infra/cloudflare && pnpm run deploy
 
 prod-build:
 	$(PROD_COMPOSE) build
@@ -43,8 +43,8 @@ prod-backup:
 	sh scripts/backup-prod.sh
 
 frontend:
-	cd frontend && npm ci
-	cd frontend && npm run build
+	cd frontend && pnpm install --frozen-lockfile
+	cd frontend && pnpm run build
 
 dev: frontend
 	$(MAKE) -C backend db-up
@@ -52,10 +52,10 @@ dev: frontend
 	$(MAKE) -C backend run
 
 admin:
-	cd admin && npm ci && npm run build && npm start
+	cd admin && pnpm install --frozen-lockfile && pnpm run build && pnpm start
 
 check:
 	cd backend && go build ./... && go vet ./...
-	cd frontend && npm run check
-	cd admin && npm run check
-	cd infra/cloudflare && npm run check
+	cd frontend && pnpm run check
+	cd admin && pnpm run check
+	cd infra/cloudflare && pnpm run check

@@ -22,7 +22,7 @@ const upstreams = (process.env.API_UPSTREAM || 'http://127.0.0.1:8080')
 if (upstreams.length === 0) throw new Error('API_UPSTREAM must contain at least one origin');
 let nextUpstream = 0;
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
-// 静态产物来自 `npm run build` 的 build/web；带哈希的资源文件名由 Rsbuild 生成，这里按扩展名给类型。
+// 静态产物来自 `pnpm run build` 的 build/web；带哈希的资源文件名由 Rsbuild 生成，这里按扩展名给类型。
 const staticRoot = new URL('./build/web/', import.meta.url);
 const contentTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],

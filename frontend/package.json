@@ -7,7 +7,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "rsbuild build --config web.config.ts && npm run check && node scripts/build-pwa.mjs",
+    "build": "rsbuild build --config web.config.ts && pnpm run check && node scripts/build-pwa.mjs",
     "dev": "rsbuild dev --config web.config.ts",
     "check": "tsc --noEmit",
     "format": "prettier --write src scripts *.ts *.json public/manifest.webmanifest"

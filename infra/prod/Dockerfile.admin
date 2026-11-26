@@ -1,10 +1,11 @@
 # 本文件构建管理看板镜像：先用 TanStack Start 生成静态产物，再由独立 Node 服务托管并代理管理 API。
 FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 WORKDIR /app/admin
-COPY admin/package.json admin/package-lock.json ./
-RUN npm ci
+RUN npm install -g pnpm@10.32.1
+COPY admin/package.json admin/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY admin/ ./
-RUN npm run build
+RUN pnpm run build
 
 FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 WORKDIR /app

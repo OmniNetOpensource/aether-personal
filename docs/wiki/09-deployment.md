@@ -26,7 +26,7 @@ make edge-dry-run
 
 `frontend/build/web` 是 TanStack Start SPA 模式生成的静态资源目录，包含预渲染的 `index.html`。`frontend/build/server` 只供构建时预渲染使用，不上传到静态托管，也不作为生产 Node 服务启动。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
-`infra/cloudflare/package-lock.json` 固定部署工具依赖。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
+`infra/cloudflare/pnpm-lock.yaml` 与 `infra/cloudflare/pnpm-workspace.yaml` 固定部署工具依赖与构建白名单。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
 
 PWA 的 `sw.js`、清单与图标包含在同一产物中，无需额外服务。站点需要 HTTPS。Service Worker 使用当前构建的静态资源清单，不缓存 API 或认证数据；缓存入口为 `/`。联网打开页面优先读取当前部署。活跃页面会定期检查更新，回到前台或重新联网时也会检查。新版静态资源下载完成后自动刷新受控页面，文本草稿从当前标签页的会话存储恢复。iOS 在 Safari 分享菜单中安装，Android 使用浏览器安装入口。反向代理不能把缺失的 `sw.js` 或清单回退为 HTML，也不能对 `sw.js` 配置长期不可变缓存。
 
@@ -73,11 +73,11 @@ make prod-status
 
 ## 连接 Cloudflare
 
-在本机 `infra/cloudflare` 下执行 `npx wrangler login`，使用有权管理 `forkicks.fun` 的账号。将服务器 `ORIGIN_AUTH_SECRET` 的相同值通过交互提示保存到 Worker Secret：
+在本机 `infra/cloudflare` 下执行 `pnpm exec wrangler login`，使用有权管理 `forkicks.fun` 的账号。将服务器 `ORIGIN_AUTH_SECRET` 的相同值通过交互提示保存到 Worker Secret：
 
 ```sh
 cd infra/cloudflare
-npx wrangler secret put ORIGIN_AUTH_SECRET
+pnpm exec wrangler secret put ORIGIN_AUTH_SECRET
 ```
 
 Worker 覆盖浏览器传来的 `X-Aether-Origin-Key`，只向固定源站发送真实凭证。Caddy 验证凭证并在转发 Go 前移除此头。源站拒绝直接访问，`/admin` 在源站始终返回 404。管理看板通过内部网络调用 Go 管理接口。
@@ -136,7 +136,7 @@ chmod 600 .local/publish.json
 
 `ssh_host` 填 SSH alias 或 `user@host`，`ssh_config` 填本机 SSH 配置路径。示例使用被 Git 忽略的 `.local/publish.ssh`；使用默认 `~/.ssh/config` 时删除 `ssh_config` 字段。`public_url` 填与 Wrangler 配置一致的 HTTPS 聊天站点。其他 fork 需要同时修改自己的域名和 Wrangler 配置。
 
-本机需要 Python 3、Go、Docker、Node.js、npm、Git、OpenSSH、tar、gzip 和 curl。先在 `infra/cloudflare/` 使用 `npx wrangler login` 完成已有 Cloudflare 账号的登录。如果本机联网需要代理，在运行命令的环境中设置 `HTTPS_PROXY`、`HTTP_PROXY`；SSH 的代理单独在 SSH 配置中指定。
+本机需要 Python 3、Go、Docker、Node.js、pnpm、Git、OpenSSH、tar、gzip 和 curl。先在 `infra/cloudflare/` 使用 `pnpm exec wrangler login` 完成已有 Cloudflare 账号的登录。如果本机联网需要代理，在运行命令的环境中设置 `HTTPS_PROXY`、`HTTP_PROXY`；SSH 的代理单独在 SSH 配置中指定。
 
 配置完成后检查接入：
 
@@ -200,11 +200,11 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 
 2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。
 
-工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。Node 固定为 `24.22.1`，与现有 Docker 构建镜像一致，避免工具链随 runner 更新而变化。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
+工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。Node 固定为 `24.22.1`、pnpm 固定为 `10.32.1`，与现有 Docker 构建镜像一致，避免工具链随 runner 更新而变化。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
 
 Actions 使用独立 Buildx builder，将后端与看板的中间构建层分别导出到本地 OCI 缓存，再由 Actions Cache 按提交保存；新 runner 优先恢复最近一次提交的缓存。每次导出后替换原缓存目录，避免历史层持续累积。缓存只包含公开源码的构建层，不包含生产配置或数据库备份。本机发布默认沿用本机 Docker 缓存；设置绝对路径环境变量 `PUBLISH_BUILD_CACHE` 时也可导入和导出同样的缓存。
 
-后端镜像将只支持 PostgreSQL 的 goose 提前到应用源码之前编译，应用代码变化不会使迁移工具的构建层失效；三个 Go 可执行文件去掉调试符号，减少镜像传输量。看板的 `npm run build` 已包含检查，发布脚本不再在宿主机重复安装和检查。Actions 安装 pigz 并行压缩镜像，本机缺少 pigz 时回退 gzip，两者仍生成相同格式的发布包。外部命令输出会记录耗时与退出码，便于区分构建、传输和主机安装耗时。
+后端镜像将只支持 PostgreSQL 的 goose 提前到应用源码之前编译，应用代码变化不会使迁移工具的构建层失效；三个 Go 可执行文件去掉调试符号，减少镜像传输量。看板的 `pnpm run build` 已包含检查，发布脚本不再在宿主机重复安装和检查。Actions 安装 pigz 并行压缩镜像，本机缺少 pigz 时回退 gzip，两者仍生成相同格式的发布包。外部命令输出会记录耗时与退出码，便于区分构建、传输和主机安装耗时。
 
 发布顺序为检查与构建、上传、在线热备数据库、迁移与滚动更新双后端容器、下载并校验备份、发布 Cloudflare、核对公网文件和健康状态。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
 
