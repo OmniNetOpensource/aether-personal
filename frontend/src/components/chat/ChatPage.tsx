@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ChatController } from '../../lib/ChatController.js';
-import { NavLink } from '../../lib/navigation.js';
+import { Link } from '@tanstack/react-router';
 import type { MessageComposerHandle } from './MessageComposer.js';
 import { ChatMessageList } from './ChatMessageList.js';
 import { MessageComposer } from './MessageComposer.js';
@@ -114,13 +114,13 @@ export function ChatPage({ controller }: { controller: ChatController }) {
               >
                 模型设置
               </button>
-              <NavLink
+              <Link
                 to="/memories"
                 className="chat-account-models"
                 onClick={() => setAccountOpen(false)}
               >
                 查看记忆
-              </NavLink>
+              </Link>
               <button
                 type="button"
                 className="chat-account-logout"

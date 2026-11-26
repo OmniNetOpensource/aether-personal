@@ -1,27 +1,25 @@
-// 本文件配置 Rsbuild 构建与本地开发代理，生成纯静态 SPA 外壳并代理同源聊天、模型设置、记忆查看、远程 MCP 与 OAuth、图片文件及只读桌面连接。
+// 本文件配置 Vite+ 构建、TanStack Router 文件路由、本地开发代理，以及统一的格式化与静态检查规则。
 
-import { defineConfig } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
+import { defineConfig } from 'vite-plus';
+import { tanstackRouter } from '@tanstack/router-plugin/vite';
+import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  plugins: [pluginReact()],
-  source: {
-    entry: {
-      index: './src/main.tsx',
-    },
-  },
-  html: {
-    template: './index.html',
-    title: 'aether',
-  },
-  output: {
-    cleanDistPath: true,
-    distPath: { root: 'build/web' },
-    assetPrefix: '/',
+  plugins: [
+    // TanStack Router 插件必须在 React 插件之前运行，以完成文件路由生成与按路由自动拆包。
+    tanstackRouter({
+      target: 'react',
+      autoCodeSplitting: true,
+      semicolons: true,
+    }),
+    react(),
+  ],
+  build: {
+    outDir: 'build/web',
+    emptyOutDir: true,
   },
   server: {
     port: 3000,
-    historyApiFallback: true,
     proxy: {
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
       '/sandbox/desktop': { target: 'http://127.0.0.1:8080', ws: true },
@@ -37,6 +35,19 @@ export default defineConfig({
       '/oauth/connections': { target: 'http://127.0.0.1:8080' },
       '/images': { target: 'http://127.0.0.1:8080' },
       '/files': { target: 'http://127.0.0.1:8080' },
+    },
+  },
+  fmt: {
+    singleQuote: true,
+    printWidth: 100,
+    ignorePatterns: ['build/**', 'src/routeTree.gen.ts', 'README.md'],
+  },
+  lint: {
+    ignorePatterns: ['build/**', 'src/routeTree.gen.ts', 'README.md'],
+    plugins: ['typescript', 'react'],
+    options: {
+      typeAware: true,
+      typeCheck: true,
     },
   },
 });

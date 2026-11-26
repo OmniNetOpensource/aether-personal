@@ -10,7 +10,7 @@
 | --- | --- |
 | 项目名称 | `aether-personal` |
 | 产品名称 | `aether` |
-| 前端 | Rsbuild + React + TypeScript；纯静态 SPA 部署，移动端使用 PWA |
+| 前端 | Vite+ + TanStack Router + React + TypeScript；纯静态 SPA 部署，移动端使用 PWA |
 | 后端 | Go |
 | 部署方式 | 通用 Docker Compose；维护者 Web 使用 Cloudflare，阿里云新加坡单机运行双对等后端容器（`api-1`、`api-2`）、纯内存 Redis 8 与 PostgreSQL 18；通过 `make publish` 零停机滚动更新 |
 | Go 版本 | `1.27.2` |
@@ -59,7 +59,7 @@
 | --- | --- |
 | `backend/` | Go 后端 |
 | `frontend/` | React Web/PWA 工程 |
-| `admin/` | TanStack Start 管理看板与 Node 同源代理，独立运行 |
+| `admin/` | Vite+ + TanStack Router 管理看板与 Node 同源代理，独立运行 |
 | `infra/` | dev/prod 环境和部署配置 |
 | `docs/` | 架构图、架构 Wiki 与决策总览 |
 
@@ -77,11 +77,11 @@
 
 sqlc 配置为 `backend/sqlc.yaml`。生成的代码会提交进仓库，只有修改 `backend/db/queries/` 中的 SQL 时才需要安装 [sqlc](https://docs.sqlc.dev/en/latest/overview/install.html) `v1.31.1`，然后在 `backend/` 下执行 `sqlc generate`。
 
-前端工程位于 `frontend/`，由 Rsbuild 构建纯静态 SPA，React 渲染标准 DOM。Web 与移动 PWA 共用 SPA 静态产物 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和自动更新；聊天需要联网。见 [前端说明](frontend/README.md)。
+前端工程位于 `frontend/`，由 Vite+ + TanStack Router 构建纯静态 SPA，React 渲染标准 DOM。Web 与移动 PWA 共用 SPA 静态产物 `frontend/build/web`，由 Go 同源提供，或通过 Cloudflare 分发并代理 WebSocket。PWA 提供安装入口、离线应用外壳和自动更新；聊天需要联网。见 [前端说明](frontend/README.md)。
 
 ## 本地开发
 
-需要 Go `1.27.2`、Docker，以及 Node.js `>=22.12.0`（建议 Node 24）与 pnpm `10`。前端依赖固定在 `frontend/pnpm-lock.yaml`，不再需要 Flutter SDK。
+需要 Go `1.27.2`、Docker，以及 Node.js `22.18+` / `24.11+`（建议 Node 24）与 pnpm `10`。前端依赖固定在 `frontend/pnpm-lock.yaml`，不再需要 Flutter SDK。
 
 首次准备基础配置与管理员登录：
 
@@ -147,6 +147,6 @@ make db-down   # 停止本地容器
 
 ## 管理看板（开发中）
 
-看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板采用 TanStack Start + React + TypeScript 的 SPA，需要 Node.js 22.12 或更新版本；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
+看板代码位于本仓库的 [`admin/`](admin/README.md)，在仓库根目录运行 `make admin`（自动安装依赖、构建并启动），打开 [管理看板](http://127.0.0.1:5174)。看板采用 Vite+ + TanStack Router + React + TypeScript 的纯静态 SPA，需要 Node.js `22.18+` / `24.11+`（建议 Node 24）；构建产物由本目录的 Node 服务托管并代理管理 API。在本仓库根目录执行 `python3 scripts/set-admin-password.py` 设置管理员密码，后端执行 `make migrate` 并重启。看板只需输入密码，聊天继续使用邮箱验证码。也可执行 `./start.sh` 统一启动聊天前后端与看板。
 
 看板合并为「运行过程」与「配置」两页：可按用户、Agent（Main 或任一后台 Subagent）、时间范围查看输入、推理、工具调用与截图、压缩摘要和单步用量；「配置」页管理主动压缩提醒线、热压缩触发线、自定义模型供应商、服务凭证和额度。部署与统计口径见 [管理看板说明](docs/wiki/08-admin-observability.md)。

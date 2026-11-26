@@ -5,7 +5,7 @@ import { AuthError } from '../../lib/api.js';
 import { fetchMemoryFileContent, fetchMemoryFiles } from '../../lib/memories.js';
 import type { MemoryFileDetail, MemoryFileSummary } from '../../lib/memories.js';
 import { formatFileSize } from '../../lib/messageAttachments.js';
-import { NavLink } from '../../lib/navigation.js';
+import { Link } from '@tanstack/react-router';
 import { fetchOAuthConnections, revokeOAuthConnection } from '../../lib/oauth.js';
 import type { OAuthConnectionSummary } from '../../lib/oauth.js';
 import { readSession } from '../../lib/platform.js';
@@ -162,9 +162,9 @@ export function MemoriesPage() {
                 : pageError}
             </p>
             {status === 'unauthenticated' ? (
-              <NavLink to="/" className="memories-primary-action">
+              <Link to="/" className="memories-primary-action">
                 返回登录 / 对话
-              </NavLink>
+              </Link>
             ) : (
               <button
                 type="button"
@@ -282,9 +282,9 @@ export function MemoriesPage() {
                   <p>
                     当你和 aether 沟通长期偏好、常用规范或项目背景时，aether 会自动整理并保存在这里。
                   </p>
-                  <NavLink to="/" className="memories-primary-action">
+                  <Link to="/" className="memories-primary-action">
                     回到对话
-                  </NavLink>
+                  </Link>
                 </section>
               </div>
             ) : !activePath ? (
@@ -370,9 +370,9 @@ function MemoriesTitleBar({
             文件
           </button>
         )}
-        <NavLink to="/" className="memories-back-link">
+        <Link to="/" className="memories-back-link">
           ‹ 返回对话
-        </NavLink>
+        </Link>
         <span className="memories-workspace-name">只读记忆</span>
         {email && (
           <span className="memories-workspace-email" title={email}>

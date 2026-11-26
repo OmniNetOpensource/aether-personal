@@ -104,7 +104,7 @@ In-App Browser 已验证只剩三个导航入口、旧日志显示未记录、�
 
 时间是 RFC3339 UTC 半开区间，默认 24 小时、最大 31 天；列表每页最多 100。模型调用支持游标分页。快照使用只读 repeatable-read 事务；读请求有超时。未认证、过期或使用聊天令牌时返回 401，所有响应 no-store。
 
-管理端默认 `127.0.0.1:5174`，服务端 `API_UPSTREAM` 本地默认 `http://127.0.0.1:8080`，生产支持逗号分隔多个对等后端源站（`http://api-1:8080,http://api-2:8080`），请求轮询分发并在单容器滚动重启连接失败时自动切换另一容器。页面自 2026-11-03 起为 TanStack Start SPA（见文末「看板改用 TanStack Start」），构建产物由 Node 内置 HTTP 服务托管，运行时无第三方依赖。`/api` 仅代理固定管理路径到固定上游，浏览器不持有数据库或供应商密钥。生产通过 HTTPS 反向代理独立部署；sessionStorage 只保留当前标签页会话。配额、封禁、删除用户、账单对账和角色管理不在本轮实现范围。
+管理端默认 `127.0.0.1:5174`，服务端 `API_UPSTREAM` 本地默认 `http://127.0.0.1:8080`，生产支持逗号分隔多个对等后端源站（`http://api-1:8080,http://api-2:8080`），请求轮询分发并在单容器滚动重启连接失败时自动切换另一容器。页面自 2026-11-27 起随聊天端统一为 Vite+ + TanStack Router 纯静态 SPA（此前 2026-11-03 至 2026-11-26 为 Rsbuild + TanStack Start SPA，见文末历史记录），构建产物由 Node 内置 HTTP 服务托管，运行时无第三方依赖。`/api` 仅代理固定管理路径到固定上游，浏览器不持有数据库或供应商密钥。生产通过 HTTPS 反向代理独立部署；sessionStorage 只保留当前标签页会话。配额、封禁、删除用户、账单对账和角色管理不在本轮实现范围。
 
 ## 密码登录验证（2026-10-26）
 
@@ -264,3 +264,11 @@ go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-b
 - 运行与部署形态不变：仍是独立目录、独立 Node 服务与独立域名。`server.mjs` 继续用 Node 内置 HTTP 托管静态产物并按固定白名单代理 `/api`（含大响应流式转发与安全响应头），只是静态目录从 `public/` 换成构建产物 `build/web/`，未知无扩展名路径回退预渲染的 `index.html`。Start 外壳含内联脚本数据，CSP 的 `script-src` 因此放行 `'unsafe-inline'`，其余指令不变。顺带补上代理白名单遗漏的 `aliyun_oss` 服务保存路径（页面早有 OSS 卡片，此前经代理保存会 404）。
 - 生产镜像 `infra/prod/Dockerfile.admin` 改为多阶段构建：构建阶段 `pnpm install --frozen-lockfile && pnpm run build`（2026-11-25 起由 npm 切换为 pnpm），运行阶段只带 `server.mjs` 与 `build/web`，仍以非 root 的 node 用户运行。根目录 `make admin` 与 `start.sh` 增加看板构建步骤。
 - 不采用 SSR、也不并入 `frontend/`：看板数据都在管理员登录后经 `/admin/*` 读取，无服务端直出需求；并入聊天应用会打破管理员入口与聊天入口的隔离。曾一度误按「并入 frontend 改成用户看板」动手（新增 `/me/*` 接口与 `/dashboard` 页、删除 `admin/`），已在本次改造开始前全部撤销，后端 `/admin/*` 接口与管理员能力未受影响。
+
+### 随聊天端统一迁移至 Vite+ + TanStack Router（2026-11-27）
+
+2026-11-27，用户确认将 `frontend/` 与 `admin/` 一并从 Rsbuild 迁移至 **Vite+（`vite-plus`）+ TanStack Router** 纯静态 SPA：
+
+- 移除 `@rsbuild/*` 与 `@tanstack/react-start`，改用 `vite-plus`、`@vitejs/plugin-react` 与 `@tanstack/router-plugin/vite`（`vite.config.ts`），以标准 `index.html` + `src/main.tsx` 为入口，继续保留文件路由与自动生成的 `src/routeTree.gen.ts`。
+- 构建只输出单一静态目录 `build/web`（不再生成 `build/server` 或 `.tanstack/`）；`admin/server.mjs` 因不再需要承接 Start 预渲染出的内联脚本，CSP 的 `script-src` 收紧为 `'self'`（移除 `'unsafe-inline'`）。
+- 依赖版本与 `frontend/` 对齐并固定在 `admin/pnpm-lock.yaml`，Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`；`pnpm run check` 运行 `vp check --no-fmt && node --check server.mjs`，`pnpm run format` 运行 `vp fmt`。`infra/prod/Dockerfile.admin` 与独立部署形态保持不变。

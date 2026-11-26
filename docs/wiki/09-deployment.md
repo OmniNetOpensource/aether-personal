@@ -24,7 +24,7 @@
 make edge-dry-run
 ```
 
-`frontend/build/web` 是 TanStack Start SPA 模式生成的静态资源目录，包含预渲染的 `index.html`。`frontend/build/server` 只供构建时预渲染使用，不上传到静态托管，也不作为生产 Node 服务启动。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
+`frontend/build/web` 是 Vite+ + TanStack Router 纯静态构建生成的资源目录，包含入口 `index.html` 与带内容哈希的 JS/CSS/字体资源（不再生成 `frontend/build/server`）。页面固定使用当前域名访问 API，不再提供跨域 API 构建参数。Worker 只代理指定的用户 API、`/healthz`、聊天 `/ws`，不代理开发登录与管理 API。静态资源由 ASSETS 提供，缺失文件返回 404，不将脚本请求回退成 HTML。
 
 `infra/cloudflare/pnpm-lock.yaml` 与 `infra/cloudflare/pnpm-workspace.yaml` 固定部署工具依赖与构建白名单。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
 

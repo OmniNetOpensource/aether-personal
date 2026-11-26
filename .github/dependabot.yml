@@ -1,4 +1,5 @@
 # 本文件配置 GitHub Dependabot 每周检查 Go、前端与 Worker 的 pnpm、生产 Docker 镜像及 GitHub Actions 依赖更新，并将次版本/补丁更新按目录分组提 PR。
+# 注意：frontend 与 admin 中的 vite-plus 与 vite（@voidzero-dev/vite-plus-core 别名及 pnpm.overrides）必须同版匹配，升级 vite-plus 后需核对核心版本同步。
 version: 2
 updates:
   - package-ecosystem: "gomod"

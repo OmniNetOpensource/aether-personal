@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 export function PwaControls() {
   const [offlineUnavailable, setOfflineUnavailable] = useState(false);
   useEffect(() => {
-    if (process.env.NODE_ENV !== 'production' || !('serviceWorker' in navigator)) return;
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
     let disposed = false;
     let registration: ServiceWorkerRegistration | undefined;
     let checking = false;

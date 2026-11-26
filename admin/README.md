@@ -1,10 +1,10 @@
 # aether 管理看板
 
-本仓库 `admin/` 目录中的调用观测、全局运行参数与服务凭证配置后台，2026-11-03 起改用 TanStack Start + React + TypeScript（文件路由与 SPA 模式，和聊天客户端同款），构建出静态产物后仍由本目录的 Node 服务 `server.mjs` 托管，并把管理 API 按固定白名单代理到 Go 后端。看板独立于聊天客户端部署，通过管理员密码登录。
+本仓库 `admin/` 目录中的调用观测、全局运行参数与服务凭证配置后台，2026-11-27 起随聊天前端统一迁移为 Vite+ + TanStack Router + React + TypeScript 纯静态 SPA（取代此前 2026-11-03 引入的 Rsbuild + TanStack Start），构建出静态产物后仍由本目录的 Node 服务 `server.mjs` 托管，并把管理 API 按固定白名单代理到 Go 后端。看板独立于聊天客户端部署，通过管理员密码登录。
 
 ## 本地启动
 
-需要 Node.js 22.12 或更新版本与 pnpm 10，Go 后端已完成 model_calls 迁移并运行。
+需要 Node.js `22.18+` / `24.11+`（建议 Node 24）与 pnpm `10`，Go 后端已完成迁移并运行。
 
 ```sh
 cd admin
@@ -16,7 +16,7 @@ pnpm start
 
 以上命令从仓库根目录执行；也可直接在根目录运行 `make admin`（自动完成安装、构建与启动），或通过 `./start.sh` 统一启动聊天前后端与看板。
 
-仅开发看板页面时，先启动 8080 端口的后端，再在 `admin/` 执行 `pnpm run dev`，打开 http://127.0.0.1:5174 。Rsbuild 开发服务器把 `/api` 去掉前缀后代理到后端，本机热更新不经过 `server.mjs`；正式运行与部署仍以构建产物 + `server.mjs` 为准。
+仅开发看板页面时，先启动 8080 端口的后端，再在 `admin/` 执行 `pnpm run dev`，打开 http://127.0.0.1:5174 。Vite+ 开发服务器把 `/api` 去掉前缀后代理到后端，本机热更新不经过 `server.mjs`；正式运行与部署仍以构建产物 + `server.mjs` 为准。
 
 打开 http://127.0.0.1:5174 。仅输入管理员密码即可进入，无需邮箱或验证码。在仓库根目录执行 `python3 scripts/set-admin-password.py` 设置密码，完成迁移并重启 Go 后端。密码哈希只在后端 `.env` 的 `ADMIN_PASSWORD_HASH` 中配置，不放进看板前端。
 
@@ -31,9 +31,9 @@ pnpm start
 
 | 文件 | 职责 |
 | --- | --- |
-| `web.config.ts` | TanStack Start 与 Rsbuild 插件、SPA 外壳预渲染、开发代理及构建输出目录 |
-| `src/router.tsx`、`src/routeTree.gen.ts` | 路由器配置与自动生成的文件路由类型（不手改生成文件） |
-| `src/routes/__root.tsx`、`src/routes/index.tsx` | HTML 外壳、元信息、品牌图标与看板首页路由 |
+| `index.html`、`vite.config.ts` | SPA 入口 HTML 模板、Vite+ 构建、TanStack Router 文件路由插件、开发代理与格式化/检查规则 |
+| `src/main.tsx`、`src/routeTree.gen.ts` | 浏览器入口、TanStack Router 挂载与自动生成的文件路由类型（不手改生成文件） |
+| `src/routes/__root.tsx`、`src/routes/index.tsx` | 根路由出口与看板首页路由 |
 | `src/AdminApp.tsx` | 管理员登录、侧边栏外壳、筛选、自动刷新与页面切换编排 |
 | `src/api.ts` | 管理接口类型、统一请求与全看板共用的格式化工具 |
 | `src/Overview.tsx`、`src/Calls.tsx`、`src/Timeline.tsx` | 运行概览、模型调用（含详情弹窗）与运行过程三个观测页 |
@@ -42,7 +42,7 @@ pnpm start
 | `server.mjs` | 生产入口：托管 `build/web` 静态产物，按白名单流式／缓冲代理 `/api` 到 Go 后端，并统一安全响应头 |
 | `public/app-icon.png` | 产品图标，构建时复制进静态产物 |
 
-`pnpm run build` 先生成文件路由并构建，再做类型检查；唯一部署产物是 `build/web`，`build/server` 仅供构建时预渲染，不随服务部署。
+`pnpm run build` 先生成文件路由并执行 Vite+ 静态打包，再运行 `pnpm run check`；唯一部署产物是 `build/web`（不再生成 `build/server`）。
 
 ## 部署
 
@@ -58,7 +58,7 @@ pnpm start
 - 提供「运行过程」与「配置」两页。运行过程选择用户后按时间展示 Main 的输入、推理、工具调用与结果，长内容可加载全文。模型调用每页最多 50 条，可加载下一页；分页浏览时暂停自动刷新，刷新或更改筛选条件后恢复。配置页仅手动刷新。时间在界面按浏览器时区显示，请求使用 UTC。
 - 每条调用详情独立读取实际请求与响应 JSON，可格式化查看和选中文本。包含消息上下文与工具定义，不保存 HTTP 认证头。旧日志显示未记录。非 JSON 响应显示原始文本，超过模型客户端 8 MiB 接收上限时明确标记截断。
 
-验证：`pnpm run check`（TypeScript 类型检查 + `server.mjs` 语法检查）。不包含测试文件。
+验证：`pnpm run check`（`vp check --no-fmt` Oxlint + TypeScript 类型检查 + `server.mjs` 语法检查）；格式化：`pnpm run format`（`vp fmt`）。不包含测试文件。
 
 ## 全局运行参数
 

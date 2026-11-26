@@ -33,7 +33,7 @@ for command in go node pnpm docker make curl lsof; do
 done
 [[ -f "$project_dir/backend/.env" ]] || fail "请先从 backend/.env.example 创建 backend/.env 并填写密钥。"
 [[ -f "$admin_dir/server.mjs" ]] || fail "找不到管理看板：$admin_dir；可用 ADMIN_DIR 指定目录。"
-node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)' || fail "请使用 Node.js 22.12 或更新版本（建议 Node 24）。"
+node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major === 22 && minor >= 18) || (major === 24 && minor >= 11) || major >= 26 ? 0 : 1)' || fail "请使用 Node.js 22.18+ / 24.11+（建议 Node 24）。"
 docker info >/dev/null 2>&1 || fail "Docker 尚未就绪，请先启动 Docker Desktop 或本机 Docker 服务。"
 docker compose version >/dev/null 2>&1 || fail "需要 Docker Compose v2。"
 

@@ -77,11 +77,11 @@ PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/b
 
 PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱、「模型设置」、「查看记忆」（跳转 `/memories` 只读记忆浏览器）与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
 
-2026-11-25，为了降低前端复杂度并去掉未使用的框架与冗余校验，前端从 TanStack Start + Zod 简化为纯 Rsbuild + React + TypeScript 静态 SPA（此前的 2026-11-02 Start 方案由本条取代）：聊天数据属于登录用户且仅有 `/` 与 `/memories` 两个页面，无需服务端渲染或路由代码生成，直接使用 `index.html` 与 `src/lib/navigation.tsx` 做轻量路径分发即可，并移除未接通的前端对话分享与本地设计画布 `src/design/`。
+2026-11-27，用户确认将 `frontend/` 与 `admin/` 一并从 Rsbuild 迁移至 **Vite+（`vite-plus`）+ TanStack Router（`@tanstack/react-router` + `@tanstack/router-plugin/vite`）** 纯静态 SPA，统一工具链与路由方式（此前的 2026-11-25 纯 Rsbuild 方案与 `admin/` 的 TanStack Start 预渲染方案由本条取代）。理由是两个前端的全部接口都在 Go 后端、没有 SSR 或 Server Functions 需求，只用 TanStack Router 即可在保持纯静态单一 `build/web` 产物（无 `build/server`、无构建期预渲染 preview server）的同时获得类型安全的文件路由与按路由自动代码分割，并收紧 `admin/server.mjs` 的 CSP（去除 `script-src 'unsafe-inline'`）；同时借助 Vite+ 统一打包（Rolldown）、静态检查（Oxlint + `tsrs` 类型检查）与代码格式化（Oxfmt）。
 
-代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 按路径挂载聊天主页或按需分包的 `/memories` 页面；聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑；移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
+代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 创建 TanStack Router 实例挂载 `src/routes/` 下的 `/`、`/memories` 与 `/oauth/authorize` 文件路由（`autoCodeSplitting: true` 按路由分包）；聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑；移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
 
-依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本为 `22.12.0`。`pnpm run build` 先由 Rsbuild 打包静态资源，再执行类型检查并生成 PWA 图标与 Service Worker。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录（不再产生 `frontend/build/server`）。具体验收记录和命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`。`pnpm run build` 先由 `vp build` 打包静态资源，再执行 `vp check --no-fmt`（Oxlint 与 TypeScript 类型检查）并生成 PWA 图标与 Service Worker；`pnpm run format` 由 `vp fmt`（Oxfmt）执行，替代原有 Prettier。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。具体命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 
@@ -156,7 +156,7 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | --- | --- | --- |
 | `backend/` | Go 后端 | 有代码 |
 | `frontend/` | React Web/PWA、TypeScript 连接管理与静态构建 | 本地实现，移动真机待验收 |
-| `admin/` | TanStack Start 管理看板与 Node 同源代理，独立运行和部署 | 有代码 |
+| `admin/` | Vite+ + TanStack Router 管理看板与 Node 同源代理，独立运行和部署 | 有代码 |
 | `infra/` | dev/prod 环境与部署配置 | 生产 Docker 和 Cloudflare 配置见 [09](09-deployment.md) |
 | `docs/` | 架构图、本 wiki、决策总览 | 有内容 |
 
@@ -188,8 +188,8 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 | WebSocket | `coder/websocket` | 见 [04 消息与实时通信](04-messaging.md#websocket) |
 | 模型 | OpenRouter | 一个 Key 接入多家模型 |
 | 邮件 | Resend，用 `net/http` 直接调用 | 见 [03 认证](03-auth.md) |
-| 前端 | React + TypeScript，Rsbuild 构建 | 纯静态 SPA 部署，移动端安装 PWA |
-| 管理看板 | TanStack Start + React + TypeScript，Rsbuild 构建；Node 内置 HTTP 托管与代理 | 与聊天端同款 SPA，独立服务与域名部署，见 [08](08-admin-observability.md#看板改用-tanstack-start2026-11-03) |
+| 前端 | Vite+ + TanStack Router + React + TypeScript | 纯静态 SPA 部署，移动端安装 PWA，统一打包/检查/格式化工具链 |
+| 管理看板 | Vite+ + TanStack Router + React + TypeScript；Node 内置 HTTP 托管与代理 | 与聊天端同款纯静态 SPA，独立服务与域名部署，见 [08](08-admin-observability.md#看板改用-tanstack-start2026-11-03) |
 
 ## 后端骨架 `已实现`
 

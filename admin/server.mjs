@@ -1,4 +1,4 @@
-// 本文件是管理看板的独立服务入口：托管 TanStack Start 构建出的静态页面，并把管理 API 请求按白名单轮询及故障切换代理到后端实例。
+// 本文件是管理看板的独立服务入口：托管 Vite+ 构建出的静态页面，并把管理 API 请求按白名单轮询及故障切换代理到后端实例。
 
 import http from 'node:http';
 import https from 'node:https';
@@ -22,7 +22,7 @@ const upstreams = (process.env.API_UPSTREAM || 'http://127.0.0.1:8080')
 if (upstreams.length === 0) throw new Error('API_UPSTREAM must contain at least one origin');
 let nextUpstream = 0;
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
-// 静态产物来自 `pnpm run build` 的 build/web；带哈希的资源文件名由 Rsbuild 生成，这里按扩展名给类型。
+// 静态产物来自 `pnpm run build` 的 build/web；带哈希的资源文件名由 Vite+ 生成，这里按扩展名给类型。
 const staticRoot = new URL('./build/web/', import.meta.url);
 const contentTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -117,7 +117,7 @@ async function proxy(request, response, url) {
   };
   forwardTo(0);
 }
-// serveStatic 从 build/web 读取真实文件；不存在的无扩展名路径回退到预渲染的 index.html，让前端路由刷新也能打开。
+// serveStatic 从 build/web 读取真实文件；不存在的无扩展名路径回退到 index.html，让前端路由刷新也能打开。
 async function serveStatic(request, response, url) {
   const relative = path.posix.normalize(`.${decodeURIComponent(url.pathname)}`);
   if (relative.startsWith('..')) return fail(response, 404, 'Not found');
@@ -137,8 +137,8 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
-  // Start 预渲染外壳含内联脚本数据，script-src 需放行 'unsafe-inline'；时间线按需加载私有 OSS 签名预览图，img-src 放行阿里云 OSS。
-  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; connect-src 'self'; img-src 'self' data: https://*.aliyuncs.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  // 纯静态 SPA 入口不含内联脚本，script-src 仅放行同源；时间线按需加载私有 OSS 签名预览图，img-src 放行阿里云 OSS。
+  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https://*.aliyuncs.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   try {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) return await proxy(request, response, url);

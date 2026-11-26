@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AuthError } from '../../lib/api.js';
 import { ChatController } from '../../lib/ChatController.js';
-import { NavLink } from '../../lib/navigation.js';
+import { Link } from '@tanstack/react-router';
 import {
   fetchOAuthAuthorizeContext,
   readOAuthAuthorizeParams,
@@ -69,9 +69,9 @@ export function OAuthAuthorizePage() {
             <p>{contextError || '授权请求无效'}</p>
           </div>
           <div className="oauth-actions">
-            <NavLink to="/" className="oauth-btn-primary">
+            <Link to="/" className="oauth-btn-primary">
               返回 aether
-            </NavLink>
+            </Link>
           </div>
         </section>
       </main>

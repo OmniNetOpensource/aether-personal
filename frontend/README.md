@@ -1,10 +1,10 @@
 # aether Web/PWA
 
-Rsbuild + React + TypeScript 实现邮箱登录、Main 聊天与只读记忆浏览，以纯静态 SPA 部署。桌面直接使用浏览器，移动端安装同一份 Web 应用为 PWA。构建产物仅为静态 HTML/JS/CSS 与 PWA 资源，浏览器通过 Go WebSocket 恢复登录与聊天。
+Vite+ + TanStack Router + React + TypeScript 实现邮箱登录、Main 聊天、只读记忆浏览与远程记忆 MCP OAuth 授权确认，以纯静态 SPA 部署。桌面直接使用浏览器，移动端安装同一份 Web 应用为 PWA。构建产物仅为静态 HTML/JS/CSS 与 PWA 资源，浏览器通过 Go WebSocket 恢复登录与聊天。
 
 ## 本地运行
 
-需要 Node.js `>=22.12.0`（建议 Node 24）与 pnpm `10`。在仓库根目录执行：
+需要 Node.js `22.18+` / `24.11+`（建议 Node 24）与 pnpm `10`。在仓库根目录执行：
 
 ```sh
 make dev
@@ -19,16 +19,17 @@ pnpm install --frozen-lockfile
 pnpm run dev
 ```
 
-打开命令输出的地址，默认是 `localhost:3000`。Rsbuild 提供 React 热更新，并将 `/ws`、`/sandbox/desktop`、`/model-settings`、`/memory-files`、`/images` 与 `/files` 代理至本地后端：页面打开即建立 WebSocket，收到后端 `ready` 事件前显示 loading，登录、历史与收发都走这条连接。端口已占用时可使用 `pnpm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
+打开命令输出的地址，默认是 `localhost:3000`。Vite+ 提供 React 热更新，并将 `/ws`、`/sandbox/desktop`、`/model-settings`、`/memory-files`、`/.well-known`、`/mcp`、`/oauth/*`、`/images` 与 `/files` 代理至本地后端：页面打开即建立 WebSocket，收到后端 `ready` 事件前显示 loading，登录、历史与收发都走这条连接。端口已占用时可使用 `pnpm run dev -- --port 3001`。开发服务器不注册 Service Worker；离线与更新验收使用正式构建。
 
-构建与类型检查：
+构建、静态检查与格式化：
 
 ```sh
 pnpm run check
+pnpm run format
 pnpm run build
 ```
 
-`pnpm run build` 会先执行 Rsbuild 静态打包，再检查 TypeScript 类型并生成 PWA 图标与 Service Worker。唯一部署目录是 `frontend/build/web`，继续兼容后端 `FRONTEND_DIR` 和 Cloudflare Static Assets。页面固定访问同源 API，前端不包含供应商密钥。依赖固定在 `pnpm-lock.yaml`。
+`pnpm run build` 会先执行 Vite+（Rolldown）静态打包与文件路由拆包，再由 `vp check --no-fmt` 执行 Oxlint 与 TypeScript 类型检查，最后生成 PWA 图标与 Service Worker。唯一部署目录是 `frontend/build/web`，继续兼容后端 `FRONTEND_DIR` 和 Cloudflare Static Assets。页面固定访问同源 API，前端不包含供应商密钥。依赖固定在 `pnpm-lock.yaml`。
 
 ## 移动端安装
 
@@ -52,8 +53,8 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 
 | 文件 | 职责 |
 | --- | --- |
-| `index.html`、`web.config.ts` | SPA 入口 HTML 模板、Rsbuild 构建配置及本地开发同源代理 |
-| `src/main.tsx`、`src/lib/navigation.tsx` | 浏览器入口、轻量路径分发与客户端导航 |
+| `index.html`、`vite.config.ts` | SPA 入口 HTML 模板、Vite+ 构建与 TanStack Router 文件路由插件配置、本地开发代理及格式化/检查规则 |
+| `src/main.tsx`、`src/routes/`、`src/routeTree.gen.ts` | 浏览器入口、`/` / `/memories` / `/oauth/authorize` 文件路由与自动生成的路由树 |
 | `src/App.tsx` | 主聊天生命周期：loading、登录页与聊天页切换，可视视口与前后台重连 |
 | `src/lib/ChatController.ts` | 界面状态：登录、历史、消息回执、思考动态、重连与幂等重发 |
 | `src/lib/serverEvents.ts`、`src/lib/ServerEventRelay.ts` | WebSocket 事件类型定义与唯一连接中转 |
