@@ -119,8 +119,11 @@ def main():
         if not shutil.which(command):
             raise RuntimeError(f"缺少命令：{command}")
 
+    # CI 在仓库外解包，避免前端检查因 /.local/ 忽略规则跳过整个源码目录。
+    publish_dir = Path(os.environ["RUNNER_TEMP"]) / "aether-publish" if args.ci else ROOT / ".local/publish"
+    publish_dir.mkdir(parents=True, exist_ok=True)
+
     # 一个工作区只允许一个发布进程；锁随进程退出释放，不留下需要手工删除的锁状态。
-    (ROOT / ".local/publish").mkdir(parents=True, exist_ok=True)
     with (ROOT / ".local/publish.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -182,7 +185,7 @@ def main():
         if args.resume:
             if not re.fullmatch(RELEASE_ID, args.resume):
                 raise RuntimeError("无效的发布编号")
-            release_dir = ROOT / ".local/publish" / args.resume
+            release_dir = publish_dir / args.resume
             manifest = json.loads((release_dir / "release.json").read_text())
             if manifest["target"] and manifest["target"] != config:
                 raise RuntimeError("恢复时的目标配置必须与原发布一致")
@@ -199,7 +202,7 @@ def main():
                 run(["git", "merge", "--ff-only", "origin/main"])
             revision = run(["git", "rev-parse", "HEAD"], quiet=True)
             release_id = revision[:12] + "-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
-            release_dir = ROOT / ".local/publish" / release_id
+            release_dir = publish_dir / release_id
             release_dir.mkdir()
             manifest = {"release_id": release_id, "revision": revision, "target": config}
 
