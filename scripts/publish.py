@@ -64,45 +64,22 @@ def sha256(path):
     return digest.hexdigest()
 
 
-# Actions 读取仍可用的已加密产物，本机读取已经落盘的异机文件。主机重新核对摘要后才删除。
+# 本机发布只清理已有本机异机副本的主机旧备份，主机重新核对摘要后才删除。
 def rotate_backups(ssh):
     script = (ROOT / "scripts/prune-publish-backups.sh").read_text()
     command = ["sudo", "-n", "bash", "-c", script, "prune-publish-backups"]
-    ci = os.environ.get("GITHUB_ACTIONS") == "true"
 
-    # runner 会在任务结束后销毁。只有上传成功后才能记录异机副本。
-    if ci and os.environ.get("BACKUP_ARTIFACT_HAS_DUMP") == "true":
-        release = json.loads((Path(os.environ["BACKUP_RELEASE_DIR"]) / "release.json").read_text())
-        artifact_digest = os.environ["BACKUP_ARTIFACT_DIGEST"].removeprefix("sha256:")
-        remote(ssh, [
-            *command, "--record-artifact", release["release_id"], release["server"]["backup_sha256"],
-            os.environ["BACKUP_ARTIFACT_ID"], "sha256:" + artifact_digest,
-        ], quiet=True)
-
-    # 用当前产物列表排除已过期或已删除的副本，清理范围最终由主机锁内的排序决定。
+    # 主机只会删除存在本机已校验副本的旧备份。
     candidates = [line.split() for line in remote(ssh, [*command, "--list"], quiet=True).splitlines()]
     if not candidates:
         return
     proofs = {}
-    if ci:
-        repository = os.environ["GITHUB_REPOSITORY"]
-        artifacts = run([
-            "gh", "api", "--paginate", f"repos/{repository}/actions/artifacts?per_page=100",
-            "--jq", '.artifacts[] | select(.expired == false) | [.id, .digest] | @tsv',
-        ], quiet=True)
-        available = {tuple(artifact.split()) for artifact in artifacts.splitlines()}
-        for backup, *receipt in candidates:
-            if receipt:
-                checksum, artifact_id, artifact_digest = receipt
-                if (artifact_id, artifact_digest) in available:
-                    proofs[backup] = checksum
-    else:
-        for backup, *_ in candidates:
-            match = re.fullmatch(rf"pre-({RELEASE_ID})\.dump", backup)
-            if match:
-                copy = ROOT / ".local/publish" / match[1] / "database.dump"
-                if copy.is_file():
-                    proofs[backup] = sha256(copy)
+    for backup, *_ in candidates:
+        match = re.fullmatch(rf"pre-({RELEASE_ID})\.dump", backup)
+        if match:
+            copy = ROOT / ".local/publish" / match[1] / "database.dump"
+            if copy.is_file():
+                proofs[backup] = sha256(copy)
     verified = "".join(f"{checksum} {backup}\n" for backup, checksum in proofs.items())
     if verified:
         print(remote(ssh, command, stdin=verified, quiet=True))
@@ -227,10 +204,6 @@ def main():
             manifest = {"release_id": release_id, "revision": revision, "target": config}
 
         print(f"发布记录：{release_dir}", flush=True)
-        # 即使后续发布失败，Actions 仍可定位已经下载的备份并加密保存。
-        if args.ci:
-            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-                output.write(f"release_dir={release_dir}\nrelease_id={manifest['release_id']}\n")
         LOG = (release_dir / "publish.log").open("a", buffering=1)
         snapshot = release_dir / "source"
         release_id = manifest["release_id"]
@@ -289,28 +262,28 @@ def main():
         run([*scp, *[release_dir / name for name in (*manifest["sha256"], "SHA256SUMS")], f"{host}:{upload}/"])
         remote(ssh, ["sudo", "-n", "bash", f"{upload}/install-release.sh", upload, release_id, revision])
 
-        # 通过既有 SSH 通道下载备份，校验后才落为完成文件，不经过网页临时下载链接。
+        # 本机发布下载并校验主机备份供本机轮换使用；Actions runner 不保存备份副本。
         server_result = json.loads(remote(ssh, ["sudo", "-n", "cat", f"/opt/aether-personal/publish/{release_id}/result.json"], quiet=True))
         manifest["server"] = server_result
         (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         backup = Path(server_result["backup"])
         if backup.parent != Path("/opt/aether-personal/backups") or backup.name != f"pre-{release_id}.dump":
             raise RuntimeError("服务器返回了不属于本次发布的备份路径")
-        local_backup = release_dir / "database.dump"
-        if not local_backup.is_file() or sha256(local_backup) != server_result["backup_sha256"]:
-            print("下载并校验数据库备份……", flush=True)
-            backup_started = time.monotonic()
-            partial_backup = release_dir / "database.dump.partial"
-            with partial_backup.open("wb") as output:
-                subprocess.run([*ssh, shlex.join(["sudo", "-n", "cat", str(backup)])], stdout=output, check=True)
-            if sha256(partial_backup) != server_result["backup_sha256"]:
-                raise RuntimeError("异机备份校验失败；服务器备份与新后端保留")
-            partial_backup.replace(local_backup)
-            backup_timing = f"数据库备份下载及校验耗时 {time.monotonic() - backup_started:.1f}s\n"
-            print(backup_timing, end="", flush=True)
-            LOG.write(backup_timing)
-            LOG.flush()
         if not args.ci:
+            local_backup = release_dir / "database.dump"
+            if not local_backup.is_file() or sha256(local_backup) != server_result["backup_sha256"]:
+                print("下载并校验数据库备份……", flush=True)
+                backup_started = time.monotonic()
+                partial_backup = release_dir / "database.dump.partial"
+                with partial_backup.open("wb") as output:
+                    subprocess.run([*ssh, shlex.join(["sudo", "-n", "cat", str(backup)])], stdout=output, check=True)
+                if sha256(partial_backup) != server_result["backup_sha256"]:
+                    raise RuntimeError("异机备份校验失败；服务器备份与新后端保留")
+                partial_backup.replace(local_backup)
+                backup_timing = f"数据库备份下载及校验耗时 {time.monotonic() - backup_started:.1f}s\n"
+                print(backup_timing, end="", flush=True)
+                LOG.write(backup_timing)
+                LOG.flush()
             rotate_backups(ssh)
 
         # 后端健康后才更新 Worker；失败保留可恢复目录，不自动回退已迁移的数据库。
@@ -339,7 +312,7 @@ def main():
                 raise RuntimeError(f"公网文件与本次构建不一致：{path}")
         manifest["status"] = "published"
         (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        print(f"发布完成：{public_url}\n提交：{revision}\n备份与发布记录：{release_dir}")
+        print(f"发布完成：{public_url}\n提交：{revision}\n发布记录：{release_dir}")
 
 
 if __name__ == "__main__":

@@ -198,7 +198,7 @@ Cloudflare 的静态资源和 Worker 一起版本化，使用 Cloudflare 的部�
 
 ### Push 后自动发布
 
-2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。
+2026-11-03，用户确认采用 GitHub Actions：push 到 `main` 后自动更新维护者生产实例。工作流位于 `.github/workflows/deploy.yml`，仍复用 `scripts/publish.py` 和 `scripts/install-release.sh`。选择 GitHub 托管 runner 是为了让发布不再依赖维护者电脑在线，同时保留已有主机、Docker Compose 和 Cloudflare Worker。2026-11-27，用户确认移除 Actions 数据库备份副本：生产快照保留在阿里云，不再复制到 GitHub Actions 工件。
 
 工作流固定 checkout 触发事件的提交，通过 `python3 scripts/publish.py --ci` 构建和发布。Node 固定为 `24.22.1`、pnpm 固定为 `10.32.1`，与现有 Docker 构建镜像一致，避免工具链随 runner 更新而变化。CI 模式不 fetch 或合并新的 `main`，并在开始前跳过已被后续提交取代的任务。工作流只接受 `main` 的 push 或手动运行，使用同一个 concurrency group 串行执行，`cancel-in-progress: false` 避免新 push 中断正在执行的迁移。排队中的中间版本可能被后续任务替代，目标是最终发布最新的 `main`，不保证每次 push 都单独上线。
 
@@ -206,7 +206,7 @@ Actions 使用独立 Buildx builder，将后端与看板的中间构建层分别
 
 后端镜像将只支持 PostgreSQL 的 goose 提前到应用源码之前编译，应用代码变化不会使迁移工具的构建层失效；三个 Go 可执行文件去掉调试符号，减少镜像传输量。看板的 `pnpm run build` 已包含检查，发布脚本不再在宿主机重复安装和检查。Actions 安装 pigz 并行压缩镜像，本机缺少 pigz 时回退 gzip，两者仍生成相同格式的发布包。外部命令输出会记录耗时与退出码，便于区分构建、传输和主机安装耗时。
 
-发布顺序为检查与构建、上传、在线热备数据库、迁移与滚动更新双后端容器、下载并校验备份、发布 Cloudflare、核对公网文件和健康状态。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
+发布顺序为检查与构建、上传、在线热备数据库、迁移与滚动更新双后端容器、发布 Cloudflare、核对公网文件和健康状态。本机 `make publish` 会下载并校验主机备份后再轮换旧备份；GitHub Actions 不复制或轮换数据库备份。生产 `.env` 与服务配置仍留在原主机，不复制到 GitHub。启用 CI 后，不要同时在本机运行 `make publish`，以免两个入口交错更新 Worker。
 
 #### 配置 GitHub production 环境
 
@@ -225,27 +225,14 @@ Actions 使用独立 Buildx builder，将后端与看板的中间构建层分别
 | Variable | 内容 |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | Worker 所属账号 ID |
-| `PROD_BACKUP_RECIPIENT` | age 备份加密公钥，格式为 `age1...` |
 
-这些凭证在发布步骤运行前检查。SSH 严格核对主机公钥，Cloudflare 使用专用 API Token，不复制本机 Wrangler 的 OAuth 登录或刷新令牌。其他 fork 需修改工作流中的域名，以及自身的 Wrangler 路由和生产地址。
+这些凭证在发布步骤运行前检查。SSH 严格核对主机公钥，Cloudflare 使用专用 API Token，不复制本机 Wrangler 的 OAuth 登录或刷新令牌。Actions 不需要数据库备份加密公钥。其他 fork 需修改工作流中的域名，以及自身的 Wrangler 路由和生产地址。
 
-#### 保存与恢复 Actions 备份
+#### Actions 数据库备份
 
-GitHub 托管 runner 是临时机器。每次发布将已下载并通过 SHA-256 核对的 `database.dump` 用 age 公钥加密，再将密文与不含 SSH 连接信息的 `release.json` 上传为 `production-<run_id>-<run_attempt>` 产物，保留 90 天。发布摘要记录原始备份的 SHA-256。
+2026-11-27，用户确认 Actions 不再复制或保存数据库备份，以避免数据库快照占用 Actions 工件存储。每次发布仍在阿里云生产主机生成发布前数据库快照。GitHub Actions runner 不下载、不加密、不上传该快照；备份恢复直接使用主机上的快照或另行保管的副本。
 
-上传成功后，工作流在主机记录产物编号、产物摘要和原始备份摘要。轮换前，工作流确认产物仍存在、未过期且摘要一致。主机只清理最近三份之外、原始备份摘要与异机副本一致的文件。缺少异机副本记录或产物已过期时，旧备份继续留在主机。
-
-公开仓库的 Actions 产物可被其他人下载，所以只上传 `database.dump.age` 和经过筛选的发布摘要，禁止上传 `.local/`、发布目录、完整日志或明文数据库。解密私钥不放入 GitHub Secrets，维护者本机保存在 `.local/github-actions/backup.agekey`，必须单独保管和备份。生产 `SERVICE_ENCRYPTION_KEY` 仍需要另外备份。
-
-从 Actions 页面下载并解压对应产物后，在保存私钥的本机解密：
-
-```sh
-umask 077
-age --decrypt --identity .local/github-actions/backup.agekey \
-  --output database.dump database.dump.age
-```
-
-随后按本页的独立空库恢复流程验证，不直接覆盖运行中的生产数据库。产物在保留期内删除或到期后不能用作长期归档，应另行保管需要长期保留的备份。
+Actions 发布不再根据 GitHub 工件副本轮换主机旧备份，因此发布快照会保留在主机上，直到本机 `make publish` 根据已下载且校验通过的异机副本执行安全轮换。没有异机副本证明的旧备份不会被本机脚本删除。需要长期保留的备份应另行归档。
 
 发布失败时查看 Actions 日志中的发布编号和主机阶段记录。开始迁移后不自动回滚数据库。已有健康后端而 Worker 未完成时，先处理失败步骤并使用原主机发布记录恢复，不根据 Actions 红色状态推断后端仍为旧版本。
 
