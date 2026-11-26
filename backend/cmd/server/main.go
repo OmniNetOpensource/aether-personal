@@ -16,7 +16,6 @@ import (
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/config"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/httpapi"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/images"
-	"github.com/OmniNetOpensource/aether-personal/backend/internal/proactive"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/scheduler"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/services"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -92,7 +91,6 @@ func main() {
 		managerDone <- err
 	}()
 	go scheduler.Run(drainCtx, databasePool, manager)
-	go proactive.Run(drainCtx, databasePool, manager)
 
 	address := ":" + appConfig.Port
 	slog.Info("server listening", "address", address, "app_env", appConfig.AppEnv)

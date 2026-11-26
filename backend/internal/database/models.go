@@ -92,7 +92,6 @@ type ModelSetting struct {
 	MainModelMaxTokens     *int32
 	CompactAtTokens        int32
 	MainContextLength      *int64
-	ReflectionIdleMinutes  int32
 	SubagentModel          *string
 	SubagentModelMaxTokens *int32
 	SubagentContextLength  *int64

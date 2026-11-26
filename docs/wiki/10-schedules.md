@@ -1,8 +1,20 @@
-# 10 Schedule 与闲置反思
+# 10 Schedule 定时任务
 
-2026-11-08，用户重新加入两项能力：Main 用 `schedule` 工具设置定时任务，以及系统在对话闲置后定时请 Main 回看历史、自行决定此时做些什么（整理记忆、给出用户没想到的观察等）。两者共用一套机制：后台调度器到点往该用户的对话里插入一条不可见的 user 消息，再唤醒 Main。本地开发中，未推送部署。
+2026-11-08，用户重新加入两项能力：Main 用 `schedule` 工具设置定时任务，以及系统在对话闲置后定时请 Main 回看历史的闲置后台反思。2026-11-26，用户决定移除闲置后台反思，目前仅保留 `schedule` 定时任务：后台调度器到点往该用户的对话里插入一条不可见的 user 消息（`schedule_event`），再唤醒 Main。
 
 此前 2026-10-27 曾确认过一版定时安排（提交 `89b82dd2`），2026-11-03 用户决定先不做，代码与表由 `00030_drop_schedules` 删除。本次是重新设计，不沿用旧版的暂停状态、版本号与投递记录表。
+
+## 移除闲置后台反思（2026-11-26）
+
+用户原话：
+
+> 我想把proactive去掉，我感觉目前没啥用
+
+据此整体移除系统内置的闲置主动触发（`proactive`），仅保留用户/Agent 通过 `schedule` 工具创建的定时任务：
+
+- 删除后台扫描包 `backend/internal/proactive/proactive.go` 及 `main.go` 中的启动协程。
+- 新增迁移 `00069_drop_reflection_idle_minutes.sql` 删除 `model_settings.reflection_idle_minutes` 列；同步移除 `ListReflectionDue` 查询、运行时配置字段、`GET/PUT /admin/runtime-settings` 对应参数、管理看板「闲置反思时长」表单项，以及 `prompt.go` 中的 `ReflectionMessageName`、`ReflectionPrompt` 与 `MainInstructions` 相关段落。
+- 保留 `messages` 表中已产生的历史反思触发记录，并保留管理看板时间线（`admin/src/Timeline.tsx`）对 `reflection`、`memory_update`、`recent_followup`、`unknown_unknowns` 的中文标题映射，以便回看历史轨迹。
 
 ## 已确认的产品决定（2026-11-08）
 
@@ -10,18 +22,13 @@
 | --- | --- | --- |
 | 定时方式 | 一次性（带时区偏移的时间点）与周期（五段 cron 加 IANA 时区）都支持 | 用户选择；提醒与周期检查都是常见用法 |
 | 界面呈现 | 聊天界面不加任何东西：触发消息不可见，只看到模型发出的正文；查看或修改都通过跟模型对话完成 | 用户选择；不新增前端页面，界面保持现有 IM 形态 |
-| 反思是否主动发消息 | 2026-11-09 改为降低门槛、不强制：倾向发一条简短跟进，只有确实没有有用的候选时才沉默（原为“有值得说的才发”） | 用户选择；线上首次反思时模型只核对了一遍记忆就沉默结束，没有起到作用 |
-| 反思产出什么 | 2026-11-09 新增：更新对用户的理解（目标、处境、反复出现的关切与兴趣，只记用户原话明确支撑的）；先私下列几条候选再挑一两条发出，候选可以接着近期话题，也可以是用户大概率没接触过但可能需要的想法、方法、资源、工具或机会 | 用户选择；参考 Generative Agents 把反思写成高层理解、Inner Thoughts 先生成候选再评估是否开口、ChatGPT Pulse 与 Gemini Daily Brief 围绕长期目标给下一步 |
-| 反思推荐去重 | 2026-11-09 新增：模型在记忆 `/memories/topics/suggestions.md` 维护推荐记录（日期、内容、用户反应），挑选前先读，跳过已推荐过或用户没兴趣的方向 | 用户选择；参考 Marginalia 跟踪每条推荐的去向，Pulse 也已知会重复推荐已完成的事；只靠翻聊天记录学不到用户的反应 |
-| 反思触发节奏 | 2026-11-11 改为：距离最近一次请求结束满设定闲置时长就投递一次后台反思，以前投递过也继续（运行结束刷新计时起点并进入下一个周期）；同日把三阶段后台工作合并回单一 `reflection` 触发并融合提示词；2026-11-16 起若上一条主对话输入本身是一次空的 proactive（其后没有任何对用户可见的消息），则不再继续触发，直到有新输入为止 | 用户选择；后台整理、跟进与探索不依赖用户再发消息，合并为单一触发后去掉前置顺序链，互不推迟或卡住；同时避免在没有新进展且上一轮已沉默时按周期空转调用模型 |
-| 反思看什么 | 2026-11-14 改为两步（2026-11-12 的三步与 `suggestions.md` 去重已简化）：阅读最近对话，1. 看是否有用户潜在需要但未意识到的内容，有则直接告诉用户，不需要说其他内容；2. 看 memory 是否有必要更新。无潜在需要时保持沉默 | 用户选择；直接围绕潜在需要与按需记忆更新，减少额外约束 |
-| 闲置时长 | 管理看板可调（`reflection_idle_minutes`），默认 120 分钟（允许 10–10080 分钟） | 用户选择；可按使用习惯和费用调整，不需重新部署 |
+| 闲置后台反思 | 2026-11-26 整体移除（见上文）；2026-11-08 至 2026-11-17 的历史迭代记录保留于文末 | 用户反馈目前没有实际用处，减少无用后台调用与配置复杂度 |
 
 ## 运行机制
 
-**触发消息。** 定时任务与闲置后台反思都以 `role = user`、`sender = system`、`visible = false` 的消息写入 `messages`，用 `content.name` 区分：`schedule_event`（定时任务）与 `reflection`（闲置后台反思）。Main 是否有活只看消息尾部（视图 `main_work`），最后一条是 user 消息即有活，所以 agent loop 的三个阶段与循环主体都不需要知道“定时”这回事：触发消息照常进入请求组装、思考中被新输入打断、压缩进摘要。投递事务使用 `LockUserMessages` 与 `FOR UPDATE SKIP LOCKED`，因此多个对等后端容器同时扫描也绝不会重复投递；事务提交后调用 `Manager.Wake` 经 Redis 广播并唤醒空闲容器。
+**触发消息。** 定时任务以 `role = user`、`sender = system`、`visible = false` 的消息写入 `messages`，`content.name` 标明为 `schedule_event`。Main 是否有活只看消息尾部（视图 `main_work`），最后一条是 user 消息即有活，所以 agent loop 的三个阶段与循环主体都不需要知道“定时”这回事：触发消息照常进入请求组装、思考中被新输入打断、压缩进摘要。投递事务使用 `LockUserMessages` 与 `FOR UPDATE SKIP LOCKED`，因此多个对等后端容器同时扫描也绝不会重复投递；事务提交后调用 `Manager.Wake` 经 Redis 广播并唤醒空闲容器。
 
-**后台定时循环。** `backend/internal/scheduler/`（`scheduler.go`）只负责扫描和投递 Agent 创建的 `schedule`；系统内置的闲置主动触发由独立的 `backend/internal/proactive/`（`proactive.go`）负责。两者均由 `main.go` 各自启动独立循环，每 5 秒扫描一次，失败在各自外层记录日志，未投递的下一次扫描再试。触发精度因此在 5 秒量级。
+**后台定时循环。** `backend/internal/scheduler/`（`scheduler.go`）负责扫描和投递 Agent 创建的 `schedule`，由 `main.go` 启动独立循环，每 5 秒扫描一次，失败在外层记录日志，未投递的下一次扫描再试。触发精度因此在 5 秒量级。
 
 ### 定时任务
 
@@ -32,22 +39,16 @@
 - 一次性安排投递后即删除，原上下文保留在触发消息里。
 - 模型只能拿到 UTC 时间标记，数据库没有用户时区；固定指令要求模型从记忆中找用户时区，不知道且有影响时询问。
 
-### 闲置后台反思
-
-- 2026-11-08 最初接入单一 `reflection`（`00046`），2026-11-09 曾由 `00047_split_idle_work_minutes` 拆成按前置链依次运行的三种后台工作。2026-11-11 改为持续按间隔触发时，前置链在用户中途插话或不同档时长悬殊时会跳过或互相推迟，因此由迁移 `00053_merge_idle_work_minutes` 合并回单一的 `reflection`（`model_settings.reflection_idle_minutes`，默认 120 分钟），并将三条提示词融合为一条两步指引。
-- 到期条件（查询 `ListReflectionDue`，2026-11-11 起，2026-11-16 补充空触发去重，2026-11-17 随 `model_calls` 删除改为直接由 `messages` 表判断）：该用户发过本人消息、Main 与后台 Subagent 当前都没有活（`main_work` 与 `subagents`），Main 最新一条 `messages.created_at` 距今已满 `reflection_idle_minutes`，且最近一条主对话输入（`subagent_id IS NULL AND role = 'user' AND NOT is_summary` 且非 `memory_context`）不能是一次空的 proactive（`reflection` 或历史同类触发且其后没有任何 `visible = true` 的消息）。若上一轮 proactive 发出了可见消息，则仍可按周期再次触发；若上一轮沉默结束，则暂停继续触发，直到出现新的用户消息、`schedule_event` 或 `subagent_event`。停机期间错过的周期不补跑多次，恢复后只投一次。
-- 投递事务在用户消息锁内按同样条件复查，扫描之后又收到新消息、开始了新请求或已被其他实例抢先投递的用户不再重复投递。时长每次扫描现读，看板修改后下一次扫描生效，由 Main 模型执行。
-- 提示词（`ReflectionPrompt`，2026-11-14 起为两步）：阅读近期对话（需要核对被压缩的细节时用 `search_message` 与 `read_message`），1. 检查是否有用户潜在需要但未意识到的内容，有则直接告诉用户，不说其他内容、不提及后台检查、不续做旧任务，没有则沉默；2. 检查 `/memories/memory.md` 与相关主题文件是否有必要更新，有则更新，否则保持原样。投递由独立的 `backend/internal/proactive/proactive.go` 负责。看板运行过程时间线显示为「闲置后台反思」（旧历史中的三种消息名仍保留各自的中文标题）。
-
 ### 提示词
 
-固定指令新增一段：何时使用 `schedule`、上下文要写成未来自己能独立执行的说明、时间须带偏移或 IANA 时区；`schedule_event` 与 `reflection` 都不是用户本人的新消息。反思与定时触发的文案集中在 `backend/internal/agent/prompt.go`。
+固定指令包含一段定时任务说明：何时使用 `schedule`、上下文要写成未来自己能独立执行的说明、时间须带偏移或 IANA 时区；`schedule_event` 不是用户本人的新消息。定时触发的文案集中在 `backend/internal/agent/prompt.go`。
 
-## 已知影响
+### 闲置后台反思（已于 2026-11-26 移除，历史记录）
 
-- 2026-11-11 起，用户不再发消息也会按设定的闲置时长持续周期触发，每个发过消息的用户都会定期产生模型调用。上线后，最近一次请求已经早于闲置时长的用户会在下一次扫描被投递一次。
-- 管理看板的模型配置页新增“闲置反思”分组；工具统计识别 `schedule`。
+- 2026-11-08 最初接入单一 `reflection`（`00046`），2026-11-09 曾由 `00047_split_idle_work_minutes` 拆成按前置链依次运行的三种后台工作。2026-11-11 改为持续按间隔触发时，前置链在用户中途插话或不同档时长悬殊时会跳过或互相推迟，因此由迁移 `00053_merge_idle_work_minutes` 合并回单一的 `reflection`（`model_settings.reflection_idle_minutes`，默认 120 分钟），并将三条提示词融合为一条两步指引。
+- 到期条件（原查询 `ListReflectionDue`，2026-11-11 起，2026-11-16 补充空触发去重，2026-11-17 随 `model_calls` 删除改为直接由 `messages` 表判断）：该用户发过本人消息、Main 与后台 Subagent 当前都没有活（`main_work` 与 `subagents`），Main 最新一条 `messages.created_at` 距今已满 `reflection_idle_minutes`，且最近一条主对话输入不能是一次空的 proactive（`reflection` 或历史同类触发且其后没有任何 `visible = true` 的消息）。
+- 提示词（原 `ReflectionPrompt`，2026-11-14 起精简为两步，由独立包 `backend/internal/proactive/proactive.go` 投递）：阅读近期对话，1. 检查是否有用户潜在需要但未意识到的内容，有则直接告知，没有则沉默；2. 按需更新记忆。以上实现已于 2026-11-26 移除。
 
-## 本地验证（2026-11-08）
+## 本地验证（2026-11-08，历史记录）
 
 `00045` 与 `00046` 在本地 PostgreSQL 18 完成执行、回滚、再执行；Go 构建、`go vet` 与看板构建通过。用真实后端与 ikun Gemini 模型验证：已到期的一次性安排与逾期三天的周期安排各投递一次，一次性安排被删除，周期安排推进到下一个上海时间 9:00，Main 收到后回复并说明了延迟；`schedule` 工具的创建、修改、列出、删除与各类参数错误均按预期返回。闲置反思在测试对话闲置后投递一次，Main 读取记忆根、新建个人生活主题并更新索引，随后不写正文结束，没有推送消息或记为失败；之后持续扫描未再次触发。没有新增测试文件，测试数据已清理，没有推送或部署。

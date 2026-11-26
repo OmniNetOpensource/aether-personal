@@ -43,7 +43,7 @@ erDiagram
 | `oauth_authorization_codes` | 5 分钟有效、单次消费的 PKCE 授权码哈希（`00067`） | `已实现` |
 | `oauth_tokens` | 外部 MCP 客户端访问 `/mcp/memory` 的访问/刷新令牌哈希与最近使用时间（`00067`） | `已实现` |
 | `user_model_settings` | 每个账号的 Main、Subagent 和压缩模型、已知输入容量与保存版本（`00057`） | `已实现` |
-| `model_settings` | 全局压缩阈值与闲置后台反思时长。旧版全局模型列保留供回滚 | `已实现` |
+| `model_settings` | 全局压缩阈值与热压缩等待时间。旧版全局模型列保留供回滚 | `已实现` |
 | `service_settings` | 看板管理的服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -283,7 +283,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00050_add_sandbox_traffic_token.sql` | 持久化加密的沙箱流量令牌，支持不唤醒实例的只读实时桌面观察 | `已实现` |
 | `00051_add_workspace_file_transfer.sql` | 聊天搜索 `chat_message_text` 纳入用户与工具气泡的附件文件名（其中的 `synced_through_sequence` 游标列后由 `00054` 删除） | `已实现` |
 | `00052_add_user_lease_epoch.sql` | `users.main_lease_epoch` 单调递增执行代数，防止多实例租约超时或 Redis 重启后旧实例覆盖新实例的数据 | `已实现` |
-| `00053_merge_idle_work_minutes.sql` | 将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），配合持续按最近一次请求触发 | `已实现` |
+| `00053_merge_idle_work_minutes.sql` | 曾将三阶段闲置时长合并回单一 `reflection_idle_minutes`（默认 120 分钟），后由 `00069` 删除 | `历史` |
 | `00054_drop_workspace_sync_cursor.sql` | 删除 `sandbox_workspaces.synced_through_sequence`，聊天附件改为由 `sandbox_import_file` 按需导入工作区 | `已实现` |
 | `00055_add_subagents.sql` | 放开 `tasks` 单进行中唯一索引；新建 `subagents` 表与栅栏代数；为 `messages`、`steps`、`model_calls` 增加 `subagent_id` 隔离列与索引；为 `model_settings` 增加可选 `subagent_model` | `已实现` |
 | `00058_drop_tasks.sql` | 删除持久化需求队列 `tasks` 表及索引，整体移除任务系统 | `开发中` |
@@ -291,6 +291,7 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00066_step_cached_input_tokens.sql` | 为 `steps` 增加可空 `cached_input_tokens` 列，记录各渠道返回的缓存命中输入 Token 数 | `已实现` |
 | `00067_add_mcp_oauth.sql` | 新增 `oauth_clients`、`oauth_authorization_codes` 与 `oauth_tokens` 表，支持远程记忆 MCP 的 OAuth 2.1（PKCE + DCR）授权 | `已实现` |
 | `00068_allow_oauth_register_rate_limits.sql` | 扩充 `login_rate_limits.scope` 约束，允许写入 OAuth 动态客户端注册的按 IP 与全站限流计数 | `已实现` |
+| `00069_drop_reflection_idle_minutes.sql` | 删除 `model_settings.reflection_idle_minutes` 列，整体移除闲置后台反思（历史反思消息行保留） | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

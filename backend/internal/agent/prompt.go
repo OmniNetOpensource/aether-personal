@@ -9,8 +9,6 @@ const (
 	progressReminderMessageName = "progress_reminder"
 	// ScheduleEventMessageName 标明调度器投进对话的定时触发消息；它落库，模型据此区分触发与用户本人的消息。
 	ScheduleEventMessageName = "schedule_event"
-	// ReflectionMessageName 标明调度器在闲置满设定时长后投进的后台反思触发消息；它落库，模型据此区分触发与用户本人的消息。
-	ReflectionMessageName = "reflection"
 	// SubagentEventMessageName 标明后台 Subagent 完成或失败后由运行时投进 Main 对话的回报消息。
 	SubagentEventMessageName = "subagent_event"
 )
@@ -135,11 +133,7 @@ with an explicit IANA timezone. The current_time markers are UTC, so check
 memory for the person's timezone, or ask when it matters and is unknown.
 A user-role message named schedule_event is that saved
 context arriving when due, not a new message from the person; follow the
-instructions inside it. A user-role message named reflection (or legacy
-memory_update, recent_followup, unknown_unknowns in older history) is
-background work the runtime starts after the conversation has been idle for a
-while; it is not from the person either. Follow its instructions and stay
-silent when there is nothing genuinely useful to say.
+instructions inside it.
 
 ` + sharedStyleAndHistoryGuidance + `
 
@@ -259,14 +253,6 @@ const SubagentEventPrompt = `Background subagent finished. This is an internal c
 
 // ScheduleEventPrompt 是定时触发消息的开头，后面接调度器写入的安排快照 JSON；说明这不是用户新消息。
 const ScheduleEventPrompt = `Scheduled trigger. This is not a new message from the person: you arranged it earlier with the schedule tool and it is due now. Act on the saved context below. If delivered_at is well after scheduled_for, take the delay into account. Recurring runs missed during downtime are combined into this one delivery.`
-
-// ReflectionPrompt 是闲置后台主动触发消息的正文（%d 填闲置分钟数，%s 填投递时的 UTC 时间）：
-// 阅读近期对话，先看是否有用户潜在需要但未意识到的内容并直接告知（没有则沉默），再按需更新记忆。
-const ReflectionPrompt = `Idle check. This is not a message from the person: at least %d minutes have passed since the last request finished. Read the recent conversation (using search_message and read_message if needed) and do the following:
-
-1. Check if there is anything the person may potentially need without having realized it. If so, proactively tell them directly. Say nothing else—do not mention this background check, do not continue or redo earlier work, and if there is nothing useful that they might need without realizing it, end silently with no assistant text.
-2. Check whether memory needs updating. Read /memories/memory.md and relevant topic files, and update them only if necessary; otherwise leave the files unchanged.
-Current time (UTC): %s`
 
 // currentTimePrompt 紧跟每条用户消息，%s 填这条消息固定的 UTC 入库时间。
 const currentTimePrompt = "Current time (UTC): %s"

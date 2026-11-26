@@ -17,7 +17,7 @@
 2026-11-17，排查生产磁盘占用时发现 `model_calls` 表（主要为 `request_body` 与 `response_body` 载荷）单表膨胀至 `2.72 GB`，连带每次发布的 `pg_dump` 备份膨胀至 `9.2 GB`。用户决定移除 `model_calls` 表（`00059_drop_model_calls.sql`）：
 
 - **自动上下文压缩**：`GetLastContextUsage` 改为从 `steps` 表读取同用户、同角色最近一次成功完成步骤的 `model` 与 `input_tokens`。
-- **闲置后台反思**：`ListReflectionDue` 直接从 `messages` 表判断（`main_work` 视图已覆盖生成中与待处理消息，闲置起点直接取 Main 最新一条消息的 `created_at`）。
+- **闲置后台反思**（已于 2026-11-26 整体移除）：当时 `ListReflectionDue` 改为直接从 `messages` 表判断（`main_work` 视图已覆盖生成中与待处理消息，闲置起点直接取 Main 最新一条消息的 `created_at`）。
 - **管理看板时间线**：不再关联 `model_calls` 展示失败请求节点及请求/响应 JSON 详情弹窗（移除 `GET /admin/calls/{id}` 与 `CallDetail.tsx`，筛选栏精简为用户、Agent 与时间范围）。2026-11-25 补回基于 `steps` 表的用量展示（`00066_step_cached_input_tokens.sql` 新增 `cached_input_tokens`）：`GET /admin/snapshot` 返回当前筛选范围的 `usage` 汇总（顶部五张指标卡：步骤数、输入 Token、缓存命中率、输出 Token、费用；缓存命中率分母仅计入有缓存读数的步骤，避免历史空值拉低分母），`GET /admin/timeline` 通过 `messages.step_id` 左连接 `steps`，在每条模型回复与上下文压缩摘要节点标题行展示单步模型、输入/缓存/输出 Token 与费用，并区分热压缩摘要。下文关于 `model_calls` 的段落保留作历史演进记录。
 
 ## 为什么曾增加 model_calls（历史，已于 2026-11-17 移除）
@@ -118,7 +118,7 @@ In-App Browser 已验证密码错误提示、正确密码进入概览、退出�
 
 ## 全局运行参数
 
-「配置」页的「全局运行参数」可修改上下文压缩提醒线、热压缩触发线、热压缩等待时间和闲置反思时长。后端通过 `GET /admin/runtime-settings` 读取这些设置，通过 `PUT /admin/runtime-settings` 保存。版本冲突返回 409，刷新后可看到当前值。压缩提醒线从下一次准备模型请求时生效，热压缩等待时间（正整数秒，默认 75）用于下一条符合条件的最终回答，已经开始的计时沿用登记时的值。反思时长从调度器下一次扫描时生效。
+「配置」页的「全局运行参数」可修改上下文压缩提醒线、热压缩触发线和热压缩等待时间。后端通过 `GET /admin/runtime-settings` 读取这些设置，通过 `PUT /admin/runtime-settings` 保存。版本冲突返回 409，刷新后可看到当前值。压缩提醒线从下一次准备模型请求时生效，热压缩等待时间（正整数秒，默认 75）用于下一条符合条件的最终回答，已经开始的计时沿用登记时的值。
 
 2026-11-12，模型选择移到 App，用户按账号保存选择。看板的 OpenRouter 卡片显示环境变量配置状态和额度，OpenRouter 的目录、调用和额度查询均读取 `OPENROUTER_API_KEY`。见 [App 模型设置](05-main-runtime.md#app-模型设置)。
 

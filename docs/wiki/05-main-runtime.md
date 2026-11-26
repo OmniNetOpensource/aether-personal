@@ -22,7 +22,7 @@ Main 和 Subagent 可单独调用 `compact(reason, focus)`。到达管理看板�
 
 收到非空摘要正文且没有工具调用时，后端在同一事务内保存摘要、工具回执和压缩步骤结果。下一轮从新摘要接续。进程重启时，缺回执的调用按原步骤恢复。一次回复同时调用 compact 和其他工具时，compact 返回单独调用的提示，同批其他工具照常执行。
 
-Main 最终回答成功落库后，若该轮输入 token 已达独立的热压缩触发线（默认 60,000 tokens），Manager 从回答完成时起等待看板配置的秒数，再用原模型、旧世代和包含最终回答的历史生成摘要。默认等待 75 秒（2026-11-25 由 159 秒下调，依据是线上 Neon 工作日缓存有效存活期缩至约 2 分钟、且上轮生成耗时计入 Prefill 起算间隔）。等待阶段可被新输入或进程排空取消；一旦开始发起压缩请求，不再因用户新消息中断（避免断流丢缓存）。热压缩开步前要求目标回答仍是末尾；提交前在用户消息锁下确认目标回答之后没有出现新的助手消息、摘要或已开步的 Main 轮次——若新轮次尚未开步则照常提交摘要并让新消息排在摘要之后；若新轮次已开步则跳过插入并完整记录本次步骤用量。步骤标记为 `hot_compact`；它的摘要供下一轮读取，同时维持 Main 空闲状态和原来的闲置反思计时。
+Main 最终回答成功落库后，若该轮输入 token 已达独立的热压缩触发线（默认 60,000 tokens），Manager 从回答完成时起等待看板配置的秒数，再用原模型、旧世代和包含最终回答的历史生成摘要。默认等待 75 秒（2026-11-25 由 159 秒下调，依据是线上 Neon 工作日缓存有效存活期缩至约 2 分钟、且上轮生成耗时计入 Prefill 起算间隔）。等待阶段可被新输入或进程排空取消；一旦开始发起压缩请求，不再因用户新消息中断（避免断流丢缓存）。热压缩开步前要求目标回答仍是末尾；提交前在用户消息锁下确认目标回答之后没有出现新的助手消息、摘要或已开步的 Main 轮次——若新轮次尚未开步则照常提交摘要并让新消息排在摘要之后；若新轮次已开步则跳过插入并完整记录本次步骤用量。步骤标记为 `hot_compact`；它的摘要供下一轮读取，同时维持 Main 空闲状态。
 
 ## Main 的执行能力
 
@@ -189,7 +189,7 @@ Runner 被唤醒后按下面的规则把消息展开成请求；固定指令、�
 3. **滚动停机单步优雅交棒（2026-11-16 更新）**
    - 2026-11-16，用户确认将「信号一到立即取消」升级为**单步边界优雅排空（Cooperative Drain）**，避免发版重启打断正在进行的模型流式请求或工具执行（尤其是长耗时工具与沙盒操作）。
    - 容器收到首次 `SIGINT` / `SIGTERM` 后：
-     - `drainCtx` 取消，`/healthz` 立刻返回 `503 draining`；生产环境等待 `8s`（覆盖 Caddy 的 `5s` 探活间隔与 `3s` 超时）让网关摘除本实例，随后发送 `1001 Going Away` 断开已建 WebSocket（触发前端立即重连至存活实例并按游标补齐）并调用 `http.Server.Shutdown`（最多等 5 秒关闭普通 HTTP 请求）；调度器与闲置反思扫描随 `drainCtx` 停止。
+     - `drainCtx` 取消，`/healthz` 立刻返回 `503 draining`；生产环境等待 `8s`（覆盖 Caddy 的 `5s` 探活间隔与 `3s` 超时）让网关摘除本实例，随后发送 `1001 Going Away` 断开已建 WebSocket（触发前端立即重连至存活实例并按游标补齐）并调用 `http.Server.Shutdown`（最多等 5 秒关闭普通 HTTP 请求）；定时调度器随 `drainCtx` 停止。
      - `Manager` 停止从 `agent:wake_queue` / `agent:subagent_wake_queue` 拉取新任务与周期补偿（若恰好在信号瞬间出队尚未抢锁，立即放回队列）；已在运行的 Main 与 Subagent `Runner` 继续持有 `runCtx`（最长兜底 `11m`，略小于生产 Compose `stop_grace_period: 12m`），租约续期与跨实例打断/取消信号保持有效，直到当前这一轮（`beforeRequest -> sendRequest -> afterRequest`）完整跑完并落库。
      - 本轮结束进入下一轮前（或在重试退避等待中）检测到 `drainCtx` 已取消时，`Runner` 静默返回，随后 `Manager` 主动删除 Redis 租约并复查 `HasMainWork` / `HasSubagentWork` 将剩余待办推回唤醒队列，由存活容器接力跑下一轮；若超出 `11m` 硬排空上限或收到第二次信号，再取消 `runCtx` 并靠断点机制兜底恢复。
 
@@ -258,7 +258,7 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 
 未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。2026-11-13，用户明确免费仅是默认值。App 列出原看板支持的全部模型，包括 OpenRouter 的免费与付费模型，以及已配置的 ikun Gemini 和 ikun Claude。OpenRouter 的目录和请求共用环境变量 `OPENROUTER_API_KEY`，ikun 使用部署者在看板配置的凭证。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
 
-请求前阶段按账号读一次模型设置，用同一份选择创建执行步骤、准备压缩和组装请求。保存后下一次准备模型请求时生效。已开始的请求继续使用当时选定的模型。升级后，已有账号也从免费路由开始。管理看板保存全局压缩提醒线、热压缩触发线、热压缩等待时间和闲置反思时长。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
+请求前阶段按账号读一次模型设置，用同一份选择创建执行步骤、准备压缩和组装请求。保存后下一次准备模型请求时生效。已开始的请求继续使用当时选定的模型。升级后，已有账号也从免费路由开始。管理看板保存全局压缩提醒线、热压缩触发线和热压缩等待时间。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
 
 App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-settings`。后端从会话取得账号 ID，保存具体型号前验证所选渠道的实时目录。一个渠道失败时仍可选择其他可用渠道或免费路由。版本冲突返回 409，重新加载可取回另一台设备保存的设置。
 
@@ -322,7 +322,7 @@ App 通过现有聊天会话访问 `GET /model-settings` 和 `PUT /model-setting
    - **单线程写入边界**：每位用户只有一台共享桌面与 `/mnt/workspace` 的沙箱电脑，因此 Subagent 仅开放 7 个只读工具（`search`、`search_twitter`、`fetch_url`、`read_image`、`search_message`、`read_message` 与仅限 `view` 命令的 `memory`）；沙箱电脑、写记忆和定时安排保留给 Main 单线程执行，物理杜绝并发写冲突与无限递归派生。
    - **细粒度锁与配额**：Subagent 常规步骤与工具回执使用独立的 `LockSubagent` 与 `subagents.lease_epoch`，不阻塞主聊天写入；`Manager` 使用独立的 `subagentSlots` 槽位池，并通过 Redis Lua 原子限制**单用户最多同时运行 5 个 Subagent、单个最长 15 分钟**，超出部分留在库中待前序结束后自动补位；用户中途取消请求时，Main 调用 `cancel_subagent` 递增代数并经 `agent:subagent_cancel` 广播立即中止远端执行。
 4. **模型配置、聊天指示与看板观测**
-   - 管理看板「配置」页新增可选的 Subagent 模型（`model_settings.subagent_model`，留空默认跟随 Main）；「运行过程」页支持在 Main 与各 Subagent 的独立时间线间切换或一键跳转；只要 Main 或任意后台 Subagent 仍在运行，聊天底部三点思考气泡保持显示，且期间不触发闲置后台反思。
+   - 管理看板「配置」页新增可选的 Subagent 模型（`model_settings.subagent_model`，留空默认跟随 Main）；「运行过程」页支持在 Main 与各 Subagent 的独立时间线间切换或一键跳转；只要 Main 或任意后台 Subagent 仍在运行，聊天底部三点思考气泡保持显示。
 
 ## 删除 Subagent（2026-11-02，历史记录）
 

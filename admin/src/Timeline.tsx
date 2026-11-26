@@ -230,7 +230,7 @@ function TimelineImages({ item }: { item: TimelineItem }) {
   ) : null;
 }
 
-// triggerTitles 区分落库的定时触发、Subagent 完成回报与闲置后台反思消息。
+// triggerTitles 区分落库的定时触发、Subagent 完成回报，以及已移除功能遗留的历史闲置反思消息。
 const triggerTitles: Record<string, string> = {
   subagent_event: 'Subagent 回报',
   schedule_event: '定时任务触发',
@@ -240,7 +240,7 @@ const triggerTitles: Record<string, string> = {
   unknown_unknowns: '闲置未知探索',
 };
 
-// InputNode 是用户输入、Subagent 指派/回报、定时触发、闲置后台工作与压缩摘要节点的渲染。
+// InputNode 是用户输入、Subagent 指派/回报、定时触发、历史后台触发与压缩摘要节点的渲染。
 function InputNode({
   item,
   ...props
