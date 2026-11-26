@@ -169,7 +169,7 @@ export function highlightQuote(
       target.top -
       viewport.getBoundingClientRect().top -
       (viewport.clientHeight - target.height) / 2,
-    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+    behavior: 'instant',
   });
   return () => {
     body.classList.remove('quote-target');

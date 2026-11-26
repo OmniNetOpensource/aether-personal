@@ -311,16 +311,15 @@
     display: none;
   }
   .memories-sidebar {
+    display: none;
     position: absolute;
     inset: 0 auto 0 0;
     z-index: 5;
     width: min(82vw, 300px);
-    transform: translateX(-100%);
-    transition: transform 160ms ease;
     box-shadow: 8px 0 28px var(--shadow);
   }
   .memories-sidebar.is-open {
-    transform: translateX(0);
+    display: flex;
   }
   .memories-sidebar-backdrop.is-open {
     display: block;

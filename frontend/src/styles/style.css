@@ -69,7 +69,7 @@ button.link {
   background: transparent;
 }
 
-/* 连接尚未就绪时占满剩余高度，展示 aether 呼吸轻弹与暖金波纹，避免首屏等待单调或塌成一条。 */
+/* 连接尚未就绪时占满剩余高度，展示静态 aether 角色与连接提示，避免首屏等待塌成一条。 */
 .loading {
   flex: 1;
   min-height: 0;
@@ -105,121 +105,21 @@ button.link {
   background: radial-gradient(circle, #f6cf8329 0%, #f6cf8300 72%);
   pointer-events: none;
 }
-.loading-ripple {
-  position: absolute;
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  border: 1.5px solid #f6cf8354;
-  pointer-events: none;
-  animation: loading-ripple 2.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
-}
-.loading-ripple-delayed {
-  animation-delay: -1.4s;
-}
 .loading-mascot {
   position: relative;
   width: 112px;
   height: 112px;
   overflow: visible;
 }
-.loading-mascot-body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: loading-bounce 2.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
-}
 .loading-mascot-shadow {
   fill: #07150e;
   opacity: 0.36;
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-  animation: loading-shadow 2.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
-}
-.loading-mascot-eyes {
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-  animation: loading-blink 5.2s ease-in-out infinite;
 }
 .loading-label {
-  display: inline-flex;
-  align-items: baseline;
   color: var(--on-forest-muted);
   font-size: 16px;
   line-height: 24px;
   letter-spacing: 0.02em;
-}
-.loading-ellipsis > span {
-  display: inline-block;
-  width: 0.32em;
-  text-align: center;
-  animation: loading-dot 1.5s ease-in-out infinite;
-}
-.loading-ellipsis > span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.loading-ellipsis > span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-@keyframes loading-ripple {
-  0% {
-    transform: translateY(4px) scale(0.72);
-    opacity: 0;
-  }
-  22% {
-    opacity: 0.55;
-  }
-  100% {
-    transform: translateY(4px) scale(1.68);
-    opacity: 0;
-  }
-}
-@keyframes loading-bounce {
-  0%,
-  100% {
-    transform: translateY(0) scale(1.035, 0.965);
-  }
-  50% {
-    transform: translateY(-8px) scale(0.975, 1.03);
-  }
-}
-@keyframes loading-shadow {
-  0%,
-  100% {
-    transform: scaleX(1.05);
-    opacity: 0.36;
-  }
-  50% {
-    transform: scaleX(0.8);
-    opacity: 0.18;
-  }
-}
-@keyframes loading-blink {
-  0%,
-  38%,
-  42%,
-  84%,
-  88%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  40%,
-  86%,
-  90% {
-    transform: scaleY(0.08);
-  }
-}
-@keyframes loading-dot {
-  0%,
-  60%,
-  100% {
-    opacity: 0.28;
-    transform: translateY(0);
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
 }
 
 /* 消息列表在输入框背后滚动，底部留白等于输入框实测高度。 */
@@ -241,14 +141,13 @@ button.link {
   overflow-anchor: none;
   scrollbar-color: var(--forest-border) transparent;
 }
-/* 回底入口悬浮在输入框上方，沿用输入框实测高度，显隐时平滑淡入淡出。 */
+/* 回底入口悬浮在输入框上方，沿用输入框实测高度，随滚动位置直接显隐。 */
 .scroll-to-bottom {
   position: absolute;
   z-index: 2;
   left: 50%;
   bottom: calc(var(--composer-height, 90px) + 12px);
-  transform: translate(-50%, 0) scale(1);
-  opacity: 1;
+  transform: translateX(-50%);
   display: grid;
   place-items: center;
   width: 44px;
@@ -259,15 +158,6 @@ button.link {
   background: var(--surface);
   color: var(--accent-text);
   box-shadow: 0 3px 12px var(--shadow);
-  transition:
-    opacity 160ms ease,
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    background-color 120ms ease;
-}
-.scroll-to-bottom.is-hidden {
-  opacity: 0;
-  transform: translate(-50%, 10px) scale(0.92);
-  pointer-events: none;
 }
 .scroll-to-bottom:hover {
   background: var(--surface-muted);
@@ -279,7 +169,7 @@ button.link {
   width: 24px;
   height: 24px;
 }
-/* 行内收住气泡外边距，Virtuoso 量到的高度包含消息间距。 */
+/* 行内收住气泡外边距，虚拟列表量到的高度包含消息间距。 */
 .chat-list-row,
 .chat-list-header,
 .chat-list-footer {
@@ -398,21 +288,16 @@ button.link {
 .message-body-clip {
   position: relative;
 }
-.message-body-clip::after {
+.message-body-clip.is-collapsed {
+  overflow: clip;
+}
+.message-body-clip.is-collapsed::after {
   content: '';
   position: absolute;
   inset: auto 0 0;
   height: 54px;
   background: linear-gradient(to bottom, transparent, var(--bubble-bg, var(--surface)));
   pointer-events: none;
-  opacity: 0;
-  transition: opacity 180ms ease;
-}
-.message-body-clip.is-collapsed {
-  overflow: clip;
-}
-.message-body-clip.is-collapsed::after {
-  opacity: 1;
 }
 .message-collapse-footer {
   display: flex;
@@ -433,7 +318,6 @@ button.link {
     'PingFang SC',
     'Microsoft YaHei',
     sans-serif;
-  transition: background-color 140ms ease;
 }
 .message-collapse-toggle:hover {
   background: var(--quote-surface);
@@ -441,7 +325,6 @@ button.link {
 .message-collapse-toggle svg {
   width: 16px;
   height: 16px;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .message-collapse-toggle[aria-expanded='true'] svg {
   transform: rotate(180deg);
@@ -474,25 +357,6 @@ button.link {
   height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
-  animation: thinking 1.2s infinite;
-}
-.dot-two {
-  animation-delay: 0.19s;
-}
-.dot-three {
-  animation-delay: 0.38s;
-}
-@keyframes thinking {
-  0%,
-  50%,
-  100% {
-    opacity: 0.4;
-    transform: translateY(0);
-  }
-  25% {
-    opacity: 1;
-    transform: translateY(-3px);
-  }
 }
 
 /* 引用作为独立快照展示，正文选区入口与回看高亮共用消息位置。 */
@@ -571,9 +435,6 @@ button.link {
   padding: 12px;
   border: 1px solid var(--line-strong);
   border-radius: 24px;
-  transition:
-    border-color 140ms ease,
-    box-shadow 140ms ease;
 }
 .composer:focus-within {
   border-color: var(--forest-border);
@@ -609,12 +470,11 @@ button.link {
   background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
-  transition: opacity 140ms ease;
 }
 .rich-message-input:focus-visible {
   outline: 0;
 }
-/* 发送中文本框整体变淡，进度只由发送按钮的转圈表达，不再另占一行文字。 */
+/* 发送中文本框整体变淡，进度只由发送按钮的发送中图标表达，不再另占一行文字。 */
 .composer.is-sending .rich-message-input {
   opacity: 0.45;
 }
@@ -653,12 +513,6 @@ button.link {
   border-radius: 50%;
   border: 2.5px solid rgb(23 59 41 / 25%);
   border-top-color: var(--on-gold);
-  animation: send-spin 0.7s linear infinite;
-}
-@keyframes send-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 .attach-button {
   display: grid;
@@ -795,9 +649,6 @@ button.link {
   border-radius: 6px;
   color: var(--text-muted);
   background: transparent;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
 }
 .chip-remove svg {
   width: 14px;
@@ -1135,30 +986,4 @@ button.link {
   font-size: 24px;
   background: transparent;
   color: inherit;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dot,
-  .loading-ripple,
-  .loading-mascot-body,
-  .loading-mascot-shadow,
-  .loading-mascot-eyes,
-  .loading-ellipsis > span {
-    animation: none;
-  }
-  .loading-ripple {
-    opacity: 0.28;
-  }
-  .composer,
-  .chip-remove,
-  .rich-message-input,
-  .scroll-to-bottom,
-  .message-body-clip::after,
-  .message-collapse-toggle,
-  .message-collapse-toggle svg {
-    transition: none;
-  }
-  .send-spinner {
-    animation: none;
-  }
 }
