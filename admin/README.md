@@ -1,6 +1,6 @@
 # aether 管理看板
 
-本仓库 `admin/` 目录中的调用观测、全局运行参数与服务凭证配置后台，2026-11-27 起随聊天前端统一迁移为 Vite+ + TanStack Router + React + TypeScript 纯静态 SPA（取代此前 2026-11-03 引入的 Rsbuild + TanStack Start），构建出静态产物后仍由本目录的 Node 服务 `server.mjs` 托管，并把管理 API 按固定白名单代理到 Go 后端。看板独立于聊天客户端部署，通过管理员密码登录。
+本仓库 `admin/` 目录中的调用观测、全局运行参数与服务凭证配置后台，2026-11-27 起随聊天前端统一迁移为 Vite+ + TanStack Router + React 19 + TypeScript + Effect 4（`effect` + `@effect/atom-react`）纯静态 SPA（取代此前 2026-11-03 引入的 Rsbuild + TanStack Start），构建出静态产物后仍由本目录的零依赖 Node 服务 `server.mjs` 托管，并把管理 API 按固定白名单代理到 Go 后端。看板独立于聊天客户端部署，通过管理员密码登录。
 
 ## 本地启动
 
@@ -32,11 +32,11 @@ pnpm start
 | 文件 | 职责 |
 | --- | --- |
 | `index.html`、`vite.config.ts` | SPA 入口 HTML 模板、Vite+ 构建、TanStack Router 文件路由插件、开发代理与格式化/检查规则 |
-| `src/main.tsx`、`src/routeTree.gen.ts` | 浏览器入口、TanStack Router 挂载与自动生成的文件路由类型（不手改生成文件） |
+| `src/main.tsx`、`src/routeTree.gen.ts` | 浏览器入口、`RegistryProvider`、TanStack Router 挂载与自动生成的文件路由类型（不手改生成文件） |
 | `src/routes/__root.tsx`、`src/routes/index.tsx` | 根路由出口与看板首页路由 |
-| `src/AdminApp.tsx` | 管理员登录、侧边栏外壳、筛选、自动刷新与页面切换编排 |
-| `src/api.ts` | 管理接口类型、统一请求与全看板共用的格式化工具 |
-| `src/Overview.tsx`、`src/Calls.tsx`、`src/Timeline.tsx` | 运行概览、模型调用（含详情弹窗）与运行过程三个观测页 |
+| `src/api.ts`、`src/state.ts` | `Schema` 接口定义、`Data.TaggedError`、`effect/http` `AdminApi` 服务、全局 `Atom.runtime` 状态树与格式化工具 |
+| `src/AdminApp.tsx` | 管理员登录、侧边栏外壳、筛选与页面切换 |
+| `src/Timeline.tsx` | 运行过程观测页（含顶部用量汇总与 Main / Subagent 轨迹） |
 | `src/RuntimeSettings.tsx`、`src/ModelProviders.tsx`、`src/ServiceSettings.tsx` | 配置页的全局运行参数、自定义模型供应商与服务凭证 |
 | `src/ui.tsx`、`src/style.css` | 共用小组件（徽章、面板、复制 ID、折叠长文本）与全局样式 |
 | `server.mjs` | 生产入口：托管 `build/web` 静态产物，按白名单流式／缓冲代理 `/api` 到 Go 后端，并统一安全响应头 |

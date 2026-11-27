@@ -272,3 +272,10 @@ go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-b
 - 移除 `@rsbuild/*` 与 `@tanstack/react-start`，改用 `vite-plus`、`@vitejs/plugin-react` 与 `@tanstack/router-plugin/vite`（`vite.config.ts`），以标准 `index.html` + `src/main.tsx` 为入口，继续保留文件路由与自动生成的 `src/routeTree.gen.ts`。
 - 构建只输出单一静态目录 `build/web`（不再生成 `build/server` 或 `.tanstack/`）；`admin/server.mjs` 因不再需要承接 Start 预渲染出的内联脚本，CSP 的 `script-src` 收紧为 `'self'`（移除 `'unsafe-inline'`）。
 - 依赖版本与 `frontend/` 对齐并固定在 `admin/pnpm-lock.yaml`，Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`；`pnpm run check` 运行 `vp check --no-fmt && node --check server.mjs`，`pnpm run format` 运行 `vp fmt`。`infra/prod/Dockerfile.admin` 与独立部署形态保持不变。
+
+### 数据层与状态全面迁移至 Effect 4 + `@effect/atom-react`（2026-11-27）
+
+同日随聊天前端一并将 `admin/src/` 迁至 **Effect 4 + `@effect/atom-react`**（`server.mjs` 因生产镜像运行阶段不带 `node_modules` 继续保持零依赖纯 Node ESM）：
+
+- `src/api.ts`：以 `Schema` 定义全部后端管理接口响应并消除 `as T` 强转；用 `Data.TaggedError` 明确区分 `AdminAuthError`（401）、`AdminForbiddenError`（403）、`AdminHttpError`、`AdminNetworkError` 与 `AdminDecodeError`；基于 `effect/http`（`FetchHttpClient`）与 `AdminTokenStorage` 提供纯 Effect `AdminApi` Service。
+- `src/state.ts`：通过 `Atom.runtime(AdminLive)` 集中管理管理员会话校验/登出、401/403 统一权限失效回落、运行过程并发拉取（`Effect.all`）与 15 秒 `Schedule` 自动刷新、分页/单条全文加载、以及配置页三组数据（运行参数、自定义模型供应商、服务凭证与额度）和写操作；组件直接订阅 Atom，移除原先层层透传的 `refreshKey`、`onAccessLost`、`onLoadingChange` 回调及手写 `AbortController` / `generation` 竞态计数。

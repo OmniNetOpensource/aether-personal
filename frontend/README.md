@@ -1,6 +1,6 @@
 # aether Web/PWA
 
-Vite+ + TanStack Router + React + TypeScript 实现邮箱登录、Main 聊天、只读记忆浏览与远程记忆 MCP OAuth 授权确认，以纯静态 SPA 部署。桌面直接使用浏览器，移动端安装同一份 Web 应用为 PWA。构建产物仅为静态 HTML/JS/CSS 与 PWA 资源，浏览器通过 Go WebSocket 恢复登录与聊天。
+Vite+ + TanStack Router + React 19 + TypeScript + Effect 4（`effect` + `@effect/atom-react`）实现邮箱登录、Main 聊天、只读记忆浏览与远程记忆 MCP OAuth 授权确认，以纯静态 SPA 部署。桌面直接使用浏览器，移动端安装同一份 Web 应用为 PWA。构建产物仅为静态 HTML/JS/CSS 与 PWA 资源，浏览器通过 Go WebSocket 恢复登录与聊天。
 
 ## 本地运行
 
@@ -54,11 +54,12 @@ Service Worker 只缓存构建时列出的公开静态资源，不缓存认证�
 | 文件 | 职责 |
 | --- | --- |
 | `index.html`、`vite.config.ts` | SPA 入口 HTML 模板、Vite+ 构建与 TanStack Router 文件路由插件配置、本地开发代理及格式化/检查规则 |
-| `src/main.tsx`、`src/routes/`、`src/routeTree.gen.ts` | 浏览器入口、`/` / `/memories` / `/oauth/authorize` 文件路由与自动生成的路由树 |
-| `src/App.tsx` | 主聊天生命周期：loading、登录页与聊天页切换，可视视口与前后台重连 |
-| `src/lib/ChatController.ts` | 界面状态：登录、历史、消息回执、思考动态、重连与幂等重发 |
-| `src/lib/serverEvents.ts`、`src/lib/ServerEventRelay.ts` | WebSocket 事件类型定义与唯一连接中转 |
-| `src/lib/api.ts`、`src/lib/modelSettings.ts`、`src/lib/memories.ts` | 同源 HTTP 鉴权封装、个人模型设置与只读记忆接口 |
+| `src/main.tsx`、`src/routes/`、`src/routeTree.gen.ts` | 浏览器入口、`RegistryProvider`、`/` / `/memories` / `/oauth/authorize` 文件路由与自动生成的路由树 |
+| `src/App.tsx` | 主聊天入口：挂载 scoped 聊天会话与浏览器前后台生命周期 Atom，切换 loading、登录页与聊天页 |
+| `src/lib/errors.ts`、`src/lib/runtime.ts` | `Data.TaggedError` 领域错误体系、统一错误文案格式化与 `Atom.runtime` 服务层装配 |
+| `src/lib/ChatController.ts` | 纯 Effect 聊天会话控制器（`Scope`/`FiberHandle`/`Deferred`/`SubscriptionRef`）：登录、历史、消息回执、思考动态、退避重连与幂等重发 |
+| `src/lib/serverEvents.ts`、`src/lib/ServerEventRelay.ts` | `Schema` 定义的 WebSocket 事件结构与唯一连接中转 |
+| `src/lib/api.ts`、`src/lib/modelSettings.ts`、`src/lib/memories.ts`、`src/lib/oauth.ts` | 基于 `effect/http` + `Schema` 的同源 HTTP 服务、个人模型设置、只读记忆与 OAuth 2.1 接口 |
 | `src/components/ModalDialog.tsx` | 原生 `<dialog>` 模态框公共封装 |
 | `src/components/chat/` | 聊天布局、TanStack Virtual 消息列表、折叠、引用、历史搜索、只读桌面与多模态输入框 |
 | `src/components/memories/` | `/memories` 双栏只读记忆预览页（文件列表筛选 + Markdown 预览与复制） |

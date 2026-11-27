@@ -79,7 +79,13 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 2026-11-27，用户确认将 `frontend/` 与 `admin/` 一并从 Rsbuild 迁移至 **Vite+（`vite-plus`）+ TanStack Router（`@tanstack/react-router` + `@tanstack/router-plugin/vite`）** 纯静态 SPA，统一工具链与路由方式（此前的 2026-11-25 纯 Rsbuild 方案与 `admin/` 的 TanStack Start 预渲染方案由本条取代）。理由是两个前端的全部接口都在 Go 后端、没有 SSR 或 Server Functions 需求，只用 TanStack Router 即可在保持纯静态单一 `build/web` 产物（无 `build/server`、无构建期预渲染 preview server）的同时获得类型安全的文件路由与按路由自动代码分割，并收紧 `admin/server.mjs` 的 CSP（去除 `script-src 'unsafe-inline'`）；同时借助 Vite+ 统一打包（Rolldown）、静态检查（Oxlint + `tsrs` 类型检查）与代码格式化（Oxfmt）。
 
-代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 创建 TanStack Router 实例挂载 `src/routes/` 下的 `/`、`/memories` 与 `/oauth/authorize` 文件路由（`autoCodeSplitting: true` 按路由分包）；聊天控制器随 React effect 创建和清理，兼容开发时 Strict Mode 的重跑；移动键盘的可视视口监听保留在 `App.tsx` 生命周期内。
+代码位于 `frontend/src/`：`index.html` 维护元信息与 PWA 清单，`src/main.tsx` 在根节点挂载 `@effect/atom-react` 的 `RegistryProvider` 与 TanStack Router 实例（承载 `/`、`/memories` 与 `/oauth/authorize` 文件路由，按 `autoCodeSplitting: true` 自动分包）。
+
+2026-11-27，用户确认将 `frontend/` 与 `admin/` 的业务与异步层全面迁至 **Effect 4（`effect`）+ `@effect/atom-react`**，理由是项目后续开发需求持续增长，并希望长期保持前沿（frontier）工程底座；同时因官方 `@effect/ui` 仍处于 Public Preview、尚未发 npm 正式版，且现有前端依赖 `@tanstack/react-virtual` 与 React Markdown 管线，因此现阶段保留 React 19 作为纯视图渲染壳，但把所有领域核心写成与 React 完全无关的纯 Effect Service + Layer，为未来平滑替换视图层留出清晰边界：
+
+- `src/lib/errors.ts` 与 `src/lib/serverEvents.ts` / `messageAttachments.ts` / `memories.ts` / `modelSettings.ts` / `oauth.ts`：全部网络与 WebSocket 边界使用 `Schema` 解码并消除 `as T` 强转，错误统一建模为 `Data.TaggedError`。
+- `src/lib/api.ts` 与 `src/lib/platform.ts`：基于 `effect/http`（`FetchHttpClient`，关闭 trace 传播头以避免浏览器多余预检）提供 `ApiClient` Service，基于浏览器存储提供 `SessionStorage` Service；附件上传使用 `Effect.all(..., { concurrency: 4 })`，任一失败自动中断其余在途上传。
+- `src/lib/ServerEventRelay.ts` 与 `src/lib/ChatController.ts`：保持单文件事件中转定位，通过 `Scope`、`Queue`、`FiberHandle`、`Deferred` 与 `SubscriptionRef` 统一管理 WebSocket 连接循环、10 秒 `ready` 握手超时、指数退避重连与命令回执配对；`src/lib/runtime.ts` 通过 `Atom.runtime(AppLive)` 将会话与浏览器前后台生命周期桥接为细粒度 Atom，卸载自动释放 `Scope`；只读桌面与 PWA 更新轮询同样收口到 Effect `Scope` 与 `Schedule`。
 
 依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`。`pnpm run build` 先由 `vp build` 打包静态资源，再执行 `vp check --no-fmt`（Oxlint 与 TypeScript 类型检查）并生成 PWA 图标与 Service Worker；`pnpm run format` 由 `vp fmt`（Oxfmt）执行，替代原有 Prettier。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。具体命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
