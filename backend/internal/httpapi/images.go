@@ -142,17 +142,17 @@ func (s *server) chatMessagesWithPreviews(ctx context.Context, rows []database.L
 }
 
 // checkMessageAttachments 在写入前并行核对图片与工作区文件的真实大小，网络请求发生在数据库事务之外。
-func (s *server) checkMessageAttachments(ctx context.Context, userID uuid.UUID, frame *clientFrame) bool {
-	if len(frame.Files) > 0 {
+func (s *server) checkMessageAttachments(ctx context.Context, userID uuid.UUID, input *sendMessageRequest) bool {
+	if len(input.Files) > 0 {
 		available, err := s.sandbox.Available(ctx, userID)
 		if err != nil || !available {
 			return false
 		}
 	}
-	sizes := make([]int64, len(frame.Parts))
-	imageSizes := make([]int, len(frame.Parts))
+	sizes := make([]int64, len(input.Parts))
+	imageSizes := make([]int, len(input.Parts))
 	group, checkCtx := errgroup.WithContext(ctx)
-	for index, part := range frame.Parts {
+	for index, part := range input.Parts {
 		switch {
 		case part.Image != nil:
 			image := *part.Image

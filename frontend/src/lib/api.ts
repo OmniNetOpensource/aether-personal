@@ -43,14 +43,15 @@ export class ApiClient extends Context.Service<
     readonly requestPublicJson: <S extends JsonDecoder>(
       path: string,
       schema: S,
-      options?: {
-        readonly timeout?: Duration.Input;
-        readonly fallbackError?: string;
-      },
+      options?: ApiRequestOptions,
     ) => Effect.Effect<
       { readonly ok: boolean; readonly status: number; readonly data: S['Type'] },
       HttpApiError | NetworkError | DecodeError
     >;
+    readonly requestPublicVoid: (
+      path: string,
+      options?: ApiRequestOptions,
+    ) => Effect.Effect<void, HttpApiError | NetworkError>;
   }
 >()('@aether/ApiClient') {}
 
@@ -97,6 +98,25 @@ export const ApiClientLive = Layer.effect(
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
 
+    const executeRequest = (
+      path: string,
+      token: string | null,
+      options: ApiRequestOptions = {},
+    ): Effect.Effect<HttpClientResponse.HttpClientResponse, NetworkError> => {
+      const timeout = options.timeout ?? '15 seconds';
+      const fallbackError = options.fallbackError ?? '请求失败，请稍后重试';
+      const request = buildRequest(path, token, options);
+      return httpClient.execute(request).pipe(
+        Effect.timeoutOrElse({
+          duration: timeout,
+          orElse: () => Effect.fail(new NetworkError({ message: '请求超时，请检查网络后重试' })),
+        }),
+        Effect.catchTag('HttpClientError', (cause) =>
+          Effect.fail(new NetworkError({ message: fallbackError, cause })),
+        ),
+      );
+    };
+
     const executeAuthenticated = (
       path: string,
       token: string,
@@ -106,19 +126,8 @@ export const ApiClientLive = Layer.effect(
       AuthError | HttpApiError | NetworkError
     > =>
       Effect.gen(function* () {
-        const timeout = options.timeout ?? '15 seconds';
         const fallbackError = options.fallbackError ?? '请求失败，请稍后重试';
-        const request = buildRequest(path, token, options);
-
-        const response = yield* httpClient.execute(request).pipe(
-          Effect.timeoutOrElse({
-            duration: timeout,
-            orElse: () => Effect.fail(new NetworkError({ message: '请求超时，请检查网络后重试' })),
-          }),
-          Effect.catchTag('HttpClientError', (cause) =>
-            Effect.fail(new NetworkError({ message: fallbackError, cause })),
-          ),
-        );
+        const response = yield* executeRequest(path, token, options);
 
         if (response.status === 401) {
           return yield* Effect.fail(new AuthError({ message: '登录已过期，请重新登录' }));
@@ -153,23 +162,12 @@ export const ApiClientLive = Layer.effect(
 
       requestPublicJson: (path, schema, options) =>
         Effect.gen(function* () {
-          const timeout = options?.timeout ?? '15 seconds';
           const fallbackError = options?.fallbackError ?? '无法加载数据，请稍后重试';
-          const request = buildRequest(path, null, {
-            method: 'GET',
-            headers: { Accept: 'application/json' },
+          const response = yield* executeRequest(path, null, {
+            ...options,
+            headers: { Accept: 'application/json', ...options?.headers },
+            fallbackError,
           });
-
-          const response = yield* httpClient.execute(request).pipe(
-            Effect.timeoutOrElse({
-              duration: timeout,
-              orElse: () =>
-                Effect.fail(new NetworkError({ message: '请求超时，请检查网络后重试' })),
-            }),
-            Effect.catchTag('HttpClientError', (cause) =>
-              Effect.fail(new NetworkError({ message: fallbackError, cause })),
-            ),
-          );
 
           const contentType = response.headers['content-type'] ?? '';
           const ok = response.status >= 200 && response.status < 300;
@@ -189,6 +187,21 @@ export const ApiClientLive = Layer.effect(
               message: message || fallbackError,
             }),
           );
+        }),
+
+      requestPublicVoid: (path, options) =>
+        Effect.gen(function* () {
+          const fallbackError = options?.fallbackError ?? '请求失败，请稍后重试';
+          const response = yield* executeRequest(path, null, options);
+          if (response.status < 200 || response.status >= 300) {
+            const message = yield* readPlainErrorText(response);
+            return yield* Effect.fail(
+              new HttpApiError({
+                status: response.status,
+                message: message || fallbackError,
+              }),
+            );
+          }
         }),
     });
   }),

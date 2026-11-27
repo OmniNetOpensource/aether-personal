@@ -21,6 +21,9 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/auth': { target: 'http://127.0.0.1:8080' },
+      '/messages': { target: 'http://127.0.0.1:8080' },
+      '/shares': { target: 'http://127.0.0.1:8080' },
       '/ws': { target: 'http://127.0.0.1:8080', ws: true },
       '/sandbox/desktop': { target: 'http://127.0.0.1:8080', ws: true },
       '/model-settings': { target: 'http://127.0.0.1:8080' },

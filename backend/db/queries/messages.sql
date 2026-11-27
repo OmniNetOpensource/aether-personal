@@ -12,7 +12,7 @@ UPDATE users SET main_lease_epoch = main_lease_epoch + 1 WHERE id = sqlc.arg(use
 SELECT main_lease_epoch FROM users WHERE id = sqlc.arg(user_id)::uuid;
 
 -- name: InsertUserMessage :one
--- 重发返回原输入序号，唤醒时不会把同一条输入误认为更新的输入。
+-- 重发返回已存在的原消息行，使 POST /messages 幂等返回同一条记录并避免重复入库。
 WITH inserted AS (
 INSERT INTO messages (user_id, role, content, sender, client_message_id, visible)
 VALUES (
@@ -24,11 +24,14 @@ VALUES (
     true
 )
 ON CONFLICT (user_id, client_message_id) DO NOTHING
-RETURNING sequence
+RETURNING id, role, sender, client_message_id, content, created_at,
+    coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor
 )
-SELECT sequence FROM inserted
+SELECT id, role, sender, client_message_id, content, created_at, change_cursor FROM inserted
 UNION ALL
-SELECT sequence FROM messages
+SELECT id, role, sender, client_message_id, content, created_at,
+    coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor
+FROM messages
 WHERE user_id = sqlc.arg(user_id) AND client_message_id = sqlc.arg(client_message_id)
     AND NOT EXISTS (SELECT 1 FROM inserted);
 
@@ -133,10 +136,6 @@ LIMIT 50;
 
 -- name: GetLatestChatChange :one
 SELECT coalesce(max(coalesce(chat_updated_sequence, sequence)), 0)::bigint FROM messages WHERE user_id = $1 AND visible;
-
--- name: GetLegacyChatCursor :one
--- 已打开的旧客户端重连时仍提交行 ID；其原始写入序号之后发生的完成事件也需补发。
-SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2;
 
 -- name: SetStepInputSequence :exec
 UPDATE steps SET input_sequence = $2 WHERE id = $1;

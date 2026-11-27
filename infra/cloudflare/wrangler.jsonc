@@ -10,7 +10,7 @@
     "directory": "../../frontend/build/web",
     "binding": "ASSETS",
     "run_worker_first": [
-      "/auth", "/auth/*", "/messages", "/sandbox", "/sandbox/*",
+      "/auth", "/auth/*", "/messages", "/messages/*", "/sandbox", "/sandbox/*",
       "/ws", "/model-settings", "/memory-files", "/memory-files/*", "/memories",
       "/.well-known/*", "/mcp/*", "/oauth/*",
       "/healthz", "/admin", "/admin/*", "/shares", "/shares/*", "/s/*"

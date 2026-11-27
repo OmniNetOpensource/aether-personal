@@ -160,23 +160,6 @@ func (q *Queries) GetLatestChatChange(ctx context.Context, userID uuid.UUID) (in
 	return column_1, err
 }
 
-const getLegacyChatCursor = `-- name: GetLegacyChatCursor :one
-SELECT coalesce(max(sequence), 0)::bigint FROM messages WHERE user_id = $1 AND visible AND id <= $2
-`
-
-type GetLegacyChatCursorParams struct {
-	UserID uuid.UUID
-	ID     uuid.UUID
-}
-
-// 已打开的旧客户端重连时仍提交行 ID；其原始写入序号之后发生的完成事件也需补发。
-func (q *Queries) GetLegacyChatCursor(ctx context.Context, arg GetLegacyChatCursorParams) (int64, error) {
-	row := q.db.QueryRow(ctx, getLegacyChatCursor, arg.UserID, arg.ID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const getMainStatus = `-- name: GetMainStatus :one
 SELECT (
     EXISTS (SELECT 1 FROM main_work WHERE user_id = $1::uuid)
@@ -316,11 +299,14 @@ VALUES (
     true
 )
 ON CONFLICT (user_id, client_message_id) DO NOTHING
-RETURNING sequence
+RETURNING id, role, sender, client_message_id, content, created_at,
+    coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor
 )
-SELECT sequence FROM inserted
+SELECT id, role, sender, client_message_id, content, created_at, change_cursor FROM inserted
 UNION ALL
-SELECT sequence FROM messages
+SELECT id, role, sender, client_message_id, content, created_at,
+    coalesce(chat_updated_sequence, sequence)::bigint AS change_cursor
+FROM messages
 WHERE user_id = $1 AND client_message_id = $3
     AND NOT EXISTS (SELECT 1 FROM inserted)
 `
@@ -331,12 +317,30 @@ type InsertUserMessageParams struct {
 	ClientMessageID *uuid.UUID
 }
 
-// 重发返回原输入序号，唤醒时不会把同一条输入误认为更新的输入。
-func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessageParams) (int64, error) {
+type InsertUserMessageRow struct {
+	ID              uuid.UUID
+	Role            string
+	Sender          *string
+	ClientMessageID *uuid.UUID
+	Content         []byte
+	CreatedAt       time.Time
+	ChangeCursor    int64
+}
+
+// 重发返回已存在的原消息行，使 POST /messages 幂等返回同一条记录并避免重复入库。
+func (q *Queries) InsertUserMessage(ctx context.Context, arg InsertUserMessageParams) (InsertUserMessageRow, error) {
 	row := q.db.QueryRow(ctx, insertUserMessage, arg.UserID, arg.Content, arg.ClientMessageID)
-	var sequence int64
-	err := row.Scan(&sequence)
-	return sequence, err
+	var i InsertUserMessageRow
+	err := row.Scan(
+		&i.ID,
+		&i.Role,
+		&i.Sender,
+		&i.ClientMessageID,
+		&i.Content,
+		&i.CreatedAt,
+		&i.ChangeCursor,
+	)
+	return i, err
 }
 
 const listAgentContextRows = `-- name: ListAgentContextRows :many

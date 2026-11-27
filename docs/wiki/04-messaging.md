@@ -14,9 +14,9 @@
 
 > 我想定义一下后端会传来的事件类型们，然后在一个文件里专门中转这些事件
 
-因此：访问主页时前端立刻与后端建立一条 WebSocket 双向通道，收到后端 `ready` 事件前只显示 loading 态；连接就绪后，登录、历史消息、发消息与实时推送全部走这条通道，登录、历史与消息收发不调用 HTTP；图片字节通过独立的 `POST /images` 上传到 OSS。谁产生消息就写入 `messages` 表，谁需要就从表里查，PostgreSQL 的 `LISTEN/NOTIFY` 只负责“该去查了”的提醒。
+2026-11-27，用户确认将聊天通信协议对齐为「**HTTP 负责全部请求-响应（认证、首屏与历史翻页、历史搜索/上下文、发消息、图片与文件上传），WebSocket 仅作为已登录用户的单向实时推送通道**」（取代 2026-10-28 的全量 WebSocket RPC 方案）。选择理由是：消除前后端手搓 `request_id`/`Deferred` RPC 层与单连接命令串行队头阻塞、让弱网或滚动发布期间发消息与搜索不再受 WS 断连阻断、避免未登录用户占用长连接，并与已有的 `/images`、`/files`、`/model-settings`、`/memory-files` 等 HTTP 接口统一鉴权与可观测性模型。
 
-服务器事件先集中定义、再由一个文件统一中转：后端事件结构只定义在 `backend/internal/httpapi/events.go`，该文件的 `eventRelay` 是聊天 WebSocket 唯一的写出口；前端在 `frontend/src/serverEvents.ts` 定义对应的校验结构，`frontend/src/ServerEventRelay.ts` 是前端唯一接触聊天 WebSocket 的文件，它把原始帧校验为事件后转交给 `ChatController`，其余前端代码不直接处理原始帧。
+服务器实时推送事件仍先集中定义、再由一个文件统一中转：后端推送事件结构只定义在 `backend/internal/httpapi/events.go`（仅保留 `ready` 与 `messages`）并经 `eventRelay` 写出；前端在 `frontend/src/lib/serverEvents.ts` 定义对应的校验结构，`frontend/src/lib/ServerEventRelay.ts` 是前端唯一接触聊天 WebSocket 的文件，负责首帧 `hello` 鉴权与下行事件解码。
 
 ## 整体结构
 
@@ -32,19 +32,22 @@
 ```mermaid
 sequenceDiagram
     participant App
-    participant WS as 接入容器：WebSocket
+    participant API as 接入容器：HTTP API
+    participant WS as 接入容器：WebSocket 推送
     participant DB as PostgreSQL
     participant Redis as Redis（纯内存信号）
     participant Runner as 执行容器：Main 运行时
     participant Model as 模型供应商
 
-    App->>WS: hello {token?, last_change_cursor?}
-    WS-->>App: ready {authenticated, history, change_cursor}
-    App->>WS: send_message {client_message_id, parts}
-    WS->>DB: 事务：按用户加写入锁，插入消息（分配 sequence）
-    WS->>Redis: Pipeline：PUBLISH agent:input，去重入队 wake_queue
-    WS-->>App: messages {这条用户消息, main_thinking: false}
-    WS-->>App: delivered {client_message_id}
+    App->>API: GET /auth/session + GET /messages（并行）
+    API-->>App: 会话信息 + 首屏历史 + change_cursor + Main 状态
+    App->>WS: hello {token, last_change_cursor}
+    WS-->>App: ready {change_cursor} + 增量 messages
+    App->>API: POST /messages {client_message_id, parts}
+    API->>DB: 事务：按用户加写入锁，插入消息（幂等返回行）
+    API->>Redis: 去重入队 agent:wake_queue + PUBLISH chat:notify
+    API-->>App: 200 {message, change_cursor}（本端立即进列表并清空输入框）
+    Redis-->>WS: 广播唤醒该用户的其他设备/标签页补推
     Redis-->>Runner: BLPOP 取出 user_id，抢租约并递增 main_lease_epoch
     Runner->>Redis: 抢锁成功，PUBLISH chat:notify
     Redis-->>WS: 收到该用户广播，唤醒连接查表
@@ -60,49 +63,35 @@ sequenceDiagram
 
 ### 用户发消息
 
-1. App 发送 `send_message`，`client_message_id` 由 App 生成；消息暂不进入消息列表，输入框保留内容并显示“发送中…”。
-2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用和图片组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 64,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法即断开连接。2026-11-08，用户把这一上限从 32,000 调到 64,000。
-3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存。
-4. 先把这条消息推给当前连接，再在同一连接上回复 `delivered`。顺序反过来时，输入框清空与消息出现在列表之间会有一瞬间两边都看不到这条消息。App 收到 `delivered` 即发送成功，输入框清空；15 秒未收到或连接断开即发送失败，输入框显示错误并保留内容，再按发送就用同一个 `client_message_id` 重发。
-5. 调用 `Manager.Wake` 通过 Redis Pipeline 广播 `agent:input`（若该用户的 Runner 正在任一容器思考则立即打断重读）并将用户去重推入 `agent:wake_queue` 供空闲容器消费。空闲 Runner 抢到 Redis 执行租约后广播 `chat:notify` 亮起思考气泡；运行结束释放租约后再次广播收起思考气泡并推回 AI 回复。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
+1. App 调用 `POST /messages`（Bearer 鉴权），`client_message_id` 由 App 生成；消息暂不进入消息列表，输入框保留内容并显示“发送中…”。发送走独立 HTTP 请求，不再受 WS 临时断线重连阻断。
+2. 后端校验：`client_message_id` 为合法 UUID；支持文字、引用、图片与工作区文件组成的 `parts` 列表；至少一项非空，正文与引用合计不超过 64,000 个字符（防止超长消息撑爆上下文、耗费模型费用）。不合法返回 `400 Bad Request` 与错误提示，不断开 WebSocket。
+3. 存入 `messages`，`id` 与 `sequence` 都由数据库在插入时生成；同一用户下 `client_message_id` 已存在时不重复保存，直接返回已存在的原消息行。
+4. 事务提交后立刻唤醒 Main（`Manager.Wake`）并发布 Redis `chat:notify` 让同账号其他端同步，同时 HTTP `200 OK` 直接返回带预览签名的 `message` 与 `change_cursor`。App 收到 `200` 立即把消息合并进列表并清空输入框（不提前跳大 `last_change_cursor`，避免跳过此前尚未推到的助手消息）；WS 后续推回同一条消息时按 `id` 幂等去重。请求超时或失败时输入框显示错误并保留内容，再按发送仍沿用同一个 `client_message_id` 重发。
+5. 空闲 Runner 抢到 Redis 执行租约后广播 `chat:notify` 亮起思考气泡；运行结束释放租约后再次广播收起思考气泡并推回 AI 回复。Main 的运行见 [05 Main 运行时](05-main-runtime.md)。
 
 ## WebSocket
 
-使用 `coder/websocket` 库，连接地址 `GET /ws`。前端打开主页就连接，此时显示 loading；后端回 `ready` 后才进入登录页或聊天页，之后所有聊天通信都走这条连接。
+使用 `coder/websocket` 库，连接地址 `GET /ws`。2026-11-27 起，WebSocket 仅用于**已登录用户**的单向实时推送（增量消息、Main 思考态与失败态），登录、首屏与历史翻页、历史搜索、消息发送及分享管理全部走标准 HTTP。
 
-- 浏览器中的 WebSocket 不能自定义请求头，因此连接建立后前端立刻发送 `hello`，其中可携带已有登录令牌；5 秒内未收到 `hello` 即断开。不把令牌放在网址中，避免被写入访问日志。未带令牌或令牌已失效也能连上，后端回未登录的 `ready`，登录命令在同一条连接上继续进行。
-- 登录靠 `hello` 中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
-- 后端每 30 秒发送心跳 ping；连接断开时前端自动重连，重连时仍先发 `hello`。
-- 2026-11-03，用户确认切换标签页或把浏览器切到后台时保持连接：页面隐藏不再主动关闭 WebSocket，也不暂停自动重连；网络恢复时即使页面仍在后台也尝试重连，返回前台时确保连接存在。选择理由是普通页面切换不应中断实时收消息，也不应让发送中的请求直接失败。真正离线或离开页面时仍关闭连接，恢复网络或返回页面后重连；手机系统冻结或回收网页时无法保证连接持续存活，断开后的消息仍按变更游标补齐。
-- 不合规则的 `send_message`（缺 `client_message_id`、内容全空、正文与引用超过 64,000 字符，或图片引用不属于当前用户）直接断开连接，原因 `invalid send_message`。正常使用的前端不会发出这类消息，出现即说明前端有 bug 或有人手动调用，断开让问题立刻暴露。登录与历史翻页是用户可重试的请求，其失败通过 `request_failed` 事件按 `request_id` 回复，不关闭连接。
-- 收到该用户的 NOTIFY 时，后端唤醒这个用户的所有连接去查表推送。连接未登录时不注册唤醒，登录成功后才绑定用户。
+- 浏览器中的 WebSocket 不能自定义 `Authorization` 请求头，因此建连后前端立刻发送唯一的上行帧 `hello`（携带 `token` 与可选 `last_change_cursor`）；5 秒内未收到合法 `hello` 即断开，令牌缺失或失效直接以 `"unauthorized"` 关闭。不把令牌放在网址中，避免被写入访问日志。
+- 鉴权靠 `hello` 中的令牌而非 Cookie，跨站页面无法冒用身份，因此不校验 Origin（Web 客户端可能部署在其他域名）。
+- 握手通过后后端调用 `connection.CloseRead(ctx)` 自动处理底层 Ping/Pong/Close 控制帧并在对端关闭或发来非法业务帧时退出，主循环只响应 Redis 唤醒信号与 30 秒心跳 Ping。
+- 2026-11-03，用户确认切换标签页或把浏览器切到后台时保持连接：页面隐藏不再主动关闭 WebSocket，也不暂停自动重连；网络恢复时即使页面仍在后台也尝试重连，返回前台时确保连接存在。真正离线或离开页面时仍关闭连接，恢复网络或返回页面后重连；手机系统冻结或回收网页后靠重连与变更游标补齐。
 
-前端发往后端的命令：
+前端建连后发往后端的唯一上行帧：
 
-| 命令 | 说明 |
+| 帧 | 说明 |
 | --- | --- |
-| `{"type": "hello", "token": "...", "last_change_cursor": "123"}` | 连接后的第一帧；`last_change_cursor` 为最后收到的变更序号（十进制字符串），用于重连补齐，首次连接可省略，令牌也可省略 |
-| `{"type": "request_code", "request_id": "...", "email": "..."}` | 未登录时请求邮箱验证码 |
-| `{"type": "verify_code", "request_id": "...", "email": "...", "code": "..."}` | 未登录时用验证码登录 |
-| `{"type": "dev_login", "request_id": "..."}` | 未登录时请求开发测试登录，仅 dev 后端接受 |
-| `{"type": "load_history", "request_id": "...", "before": "..."}` | 已登录时向前翻一页历史，`before` 可省略取最新一页 |
-| `{"type": "logout", "request_id": "..."}` | 退出当前会话，连接保持未登录状态 |
-| `{"type": "send_message", "client_message_id": "...", "parts": [...]}` | 按顺序发送文字、引用与图片；旧纯文本客户端仍可只带 `text` |
+| `{"type": "hello", "token": "...", "last_change_cursor": "123"}` | 建连后的第一帧；`token` 必填，`last_change_cursor` 为最后收到的变更序号（十进制字符串），用于续推补齐 |
 
-后端发往前端的事件只在 `events.go` 与 `serverEvents.ts` 两处对应定义，并分别由后端 `eventRelay` 与前端 `ServerEventRelay` 中转：
+后端发往前端的推送事件只在 `events.go` 与 `serverEvents.ts` 两处对应定义，并分别由后端 `eventRelay` 与前端 `ServerEventRelay` 中转：
 
 | 事件 | 说明 |
 | --- | --- |
-| `{"type": "ready", "authenticated": false, "dev_login": false, "change_cursor": "0"}` | 连接就绪但未登录；已登录时 `authenticated` 为 true 并带 `email`，首次连接同时带最新一页 `history` |
-| `{"type": "authenticated", "request_id": "...", "token": "...", "email": "...", "history": {...}, "change_cursor": "123"}` | 在当前连接上登录成功，带最新一页历史 |
-| `{"type": "code_sent", "request_id": "..."}` | 验证码已发送 |
-| `{"type": "history", "request_id": "...", "messages": [...]}` | 一页历史消息 |
-| `{"type": "delivered", "client_message_id": "..."}` | 消息已存入数据库 |
-| `{"type": "logged_out", "request_id": "..."}` | 当前会话已退出 |
-| `{"type": "request_failed", "request_id": "...", "code": "invalid_code"}` | 对应请求失败，`code` 区分邮箱无效、验证码错误、过于频繁等可重试原因 |
-| `{"type": "messages", "messages": [...], "main_thinking": false, "main_failed": false, "change_cursor": "123"}` | 新消息与 Main 处理、失败状态；失败时列表底部显示重试提示，新输入清除，重连从数据库恢复 |
+| `{"type": "ready", "change_cursor": "123"}` | 鉴权通过并已注册订阅，返回本次连接的起始同步游标 |
+| `{"type": "messages", "messages": [...], "main_thinking": false, "main_failed": false, "change_cursor": "123"}` | 增量可见消息与 Main 处理、失败状态；失败时列表底部显示重试提示，新输入清除，重连或刷新从数据库恢复 |
 
-2026-11-03，助手开始输出时先占住行位置，整条回复完成后才对用户可见。一条旧行可能晚于后来的用户消息推送，因此聊天按 `position` 排序，实时同步单独用 `change_cursor`。新可见消息用写入时的序号，隐藏行转为可见时分配一个新的变更序号。首屏先读取推送游标再取历史，期间提交的消息可以按 ID 去重。历史翻页只推进历史断点。兼容旧客户端传 `last_position`，服务端用对应的原始写入序号补发后续变更。
+2026-11-03，助手开始输出时先占住行位置，整条回复完成后才对用户可见。一条旧行可能晚于后来的用户消息推送，因此聊天按 `position` 排序，实时同步单独用 `change_cursor`。新可见消息用写入时的序号，隐藏行转为可见时分配一个新的变更序号。首屏 `GET /messages` 先读取推送游标再取历史，期间提交的消息在 WS 续推时按 ID 去重。历史翻页 `GET /messages?before=...` 只推进历史断点。
 
 ### 推送的消息
 
@@ -175,7 +164,7 @@ OSS AccessKey ID、Secret、Bucket 与地域作为一组配置保存在 `service
 
 - 每条 WebSocket 连接记录自己推送到的消息位置。同一用户可有多条连接（多设备或连在不同后端容器），因此不能在消息上标记“已发送”。
 - 收到 Redis `chat:notify` 频道中该用户的广播后，持有其连接的容器唤醒本地连接，从 `messages` 查出变更序号大于该连接断点的可见消息，连同 Main 处理状态推送给 App。
-- 前端重连时在 `hello` 中带上最后收到的变更序号，后端从其后补齐；首次连接时后端在 `ready` 中直接带最新一页历史，更早的消息由前端发 `load_history` 命令、后端回 `history` 事件翻页。
+- 前端首屏通过 `GET /messages` 拿到最新一页历史、`change_cursor` 与 Main 状态，随后在 `hello` 中带上该游标建立推送连接；断线重连时同样在 `hello` 中带上最后收到的变更序号补齐增量；向前翻页通过 `GET /messages?before=<id>` 拉取。
 - 每个后端容器用 `ChannelWithSubscriptions` 订阅 Redis `chat:notify`，首次连接与断线重连收到 `subscribe` 确认后自动触发 `wakeAll()` 让本机所有聊天连接补查，避免断连窗口漏推。
 
 ## 助手消息宽度
@@ -201,9 +190,13 @@ WebSocket 的每个 `messages` 帧包含 `main_thinking` 布尔快照。当前�
 
 ## 历史消息
 
-已登录连接发送 `load_history` 命令，后端回 `history` 事件。从最新往前翻页，每页 50 条用户可见的消息；首次连接的最新一页直接随 `ready` 或 `authenticated` 事件带回，不必再单独请求。
+历史消息与搜索均走标准 HTTP（Bearer 鉴权）：
 
-- 以 UUIDv7 的消息 ID 作翻页位置，与推送和重连使用同一个位置值（最初是因为待读消息没有序号）。
+- `GET /messages`：首屏取最新一页（50 条可见消息）以及当前 `change_cursor`、`main_thinking`、`main_failed`。
+- `GET /messages?before=<uuid>`：以 UUIDv7 消息 ID 为游标向前翻页，每页 50 条可见消息。
+- `GET /messages/search?q=<keyword>&before=<uuid>`：按关键词搜索当前用户可见消息。
+- `GET /messages/{id}/context?direction=around|older|newer`：按锚点加载独立历史上下文窗口。
+
 - 部分行（Main 未发消息给用户的 `assistant` 行）不产生可见消息，因此后端会继续往前查，直到凑满一页或没有更早的行。
 
 ## 消息 ID 与重发

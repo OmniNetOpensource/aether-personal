@@ -172,7 +172,7 @@ export function OAuthAuthorizePage() {
   );
 }
 
-// EmbeddedAuthorizeLogin 复用现有聊天 WebSocket 登录流程，登录成功后回传令牌并卸载释放会话 Scope。
+// EmbeddedAuthorizeLogin 复用现有邮箱登录流程（未登录时仅走 HTTP，不建聊天 WS），登录成功后回传令牌并卸载释放 Scope。
 function EmbeddedAuthorizeLogin({
   onAuthenticated,
 }: {

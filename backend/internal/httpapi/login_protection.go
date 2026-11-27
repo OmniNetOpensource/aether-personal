@@ -22,17 +22,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// requestLoginCodeByEmail 先限制验证尝试，再验证单次机器人令牌，最后原子占用发信名额与邮箱冷却窗口。
-func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challengeToken string, clientIP netip.Addr) string {
+// requestLoginCodeByEmail 先限制验证尝试，再验证单次机器人令牌，最后原子占用发信名额与邮箱冷却窗口；
+// 成功返回 (0, "")，失败返回对应 HTTP 状态码与中文提示。
+func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challengeToken string, clientIP netip.Addr) (int, string) {
 	email, valid := parseEmail(rawEmail)
 	if !valid || len(email) > 254 {
-		return requestFailedInvalidEmail
+		return http.StatusBadRequest, "请输入有效的邮箱地址"
 	}
 	globalHash := sha256.Sum256(nil)
 	emailHash := sha256.Sum256([]byte(email))
 	if s.appConfig.AppEnv == "prod" {
 		if !clientIP.IsValid() || s.appConfig.TurnstileSiteKey == "" || s.appConfig.TurnstileSecretKey == "" || s.appConfig.TurnstileHostname == "" {
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		// 归一化 IPv4，并以 IPv6 /64 为同一来源，避免只换接口标识就绕过计数。
 		clientIP = clientIP.Unmap()
@@ -49,18 +50,18 @@ func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challeng
 		})
 		if err != nil {
 			slog.Error("reserve login challenge attempt failed", "error", err)
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		if !allowed {
-			return requestFailedTooFrequent
+			return http.StatusTooManyRequests, "请求过于频繁，请稍后再试"
 		}
 		// 清理也受全局尝试频率限制；无效挑战流量不能让旧计数永久残留。
 		if err := s.queries.DeleteExpiredLoginRateLimits(ctx); err != nil {
 			slog.Error("clean login rate limits failed", "error", err)
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		if challengeToken == "" || len(challengeToken) > 2048 {
-			return requestFailedVerificationRequired
+			return http.StatusBadRequest, "安全验证已失效，请完成验证后重试"
 		}
 
 		// 浏览器令牌不是可信结果；只向固定的 Cloudflare 地址验证，不记录令牌或密钥。
@@ -69,13 +70,13 @@ func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challeng
 		form := url.Values{"secret": {s.appConfig.TurnstileSecretKey}, "response": {challengeToken}, "remoteip": {clientIP.String()}}
 		request, err := http.NewRequestWithContext(verificationContext, http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(form.Encode()))
 		if err != nil {
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		response, err := s.httpClient.Do(request)
 		if err != nil {
 			slog.Error("login challenge verification unavailable")
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		defer response.Body.Close()
 		body, err := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
@@ -85,17 +86,17 @@ func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challeng
 			Action   string `json:"action"`
 		}
 		if err != nil || response.StatusCode != http.StatusOK || len(body) > 16<<10 || json.Unmarshal(body, &verification) != nil {
-			return requestFailedLoginUnavailable
+			return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 		}
 		if !verification.Success || verification.Hostname != s.appConfig.TurnstileHostname || verification.Action != "request_code" {
-			return requestFailedVerificationRequired
+			return http.StatusBadRequest, "安全验证已失效，请完成验证后重试"
 		}
 	}
 
 	number, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
 		slog.Error("generate login code failed", "error", err)
-		return requestFailedInternal
+		return http.StatusInternalServerError, "服务暂时不可用，请稍后重试"
 	}
 	code := fmt.Sprintf("%06d", number.Int64())
 	codeHash := sha256.Sum256([]byte(code))
@@ -122,18 +123,18 @@ func (s *server) requestLoginCodeByEmail(ctx context.Context, rawEmail, challeng
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return requestFailedTooFrequent
+		return http.StatusTooManyRequests, "请求过于频繁，请稍后再试"
 	}
 	if err != nil {
 		slog.Error("reserve login email failed", "error", err)
-		return requestFailedInternal
+		return http.StatusInternalServerError, "服务暂时不可用，请稍后重试"
 	}
 	// 发送结果未知时也不退还预算，避免断网重试造成重复邮件。
 	if err := s.sendLoginCode(ctx, email, code); err != nil {
 		slog.Error("send login code failed", "error", err)
-		return requestFailedLoginUnavailable
+		return http.StatusServiceUnavailable, "登录服务暂不可用，请稍后再试"
 	}
-	return ""
+	return 0, ""
 }
 
 // useLoginRateLimits 依序占用多个共享窗口；调用方决定拒绝时保留尝试计数还是回滚发信名额。

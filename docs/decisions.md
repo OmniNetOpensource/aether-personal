@@ -92,8 +92,8 @@
 
 | 事项 | 选择 | 详见 |
 | --- | --- | --- |
-| 本地开发登录 | 2026-10-28 确认 dev 默认自动使用固定 mock 用户 `dev@example.com`，前端在 WebSocket `ready` 后自动发 `dev_login` 命令，无需点击登录、输入邮箱或验证码；prod 不开放 | [03](wiki/03-auth.md#本地开发登录) |
-| 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户；登录命令走主页的聊天 WebSocket，不再提供 HTTP 登录接口 | [03](wiki/03-auth.md) |
+| 本地开发登录 | 2026-10-28 确认 dev 默认自动使用固定 mock 用户 `dev@example.com`；2026-11-27 随认证迁回 HTTP，前端通过 `GET /auth/config` 检测 `dev_login` 后自动调用 `POST /auth/dev-login`，无需点击登录、输入邮箱或验证码；prod 拒绝 | [03](wiki/03-auth.md#本地开发登录) |
+| 登录方式 | 邮箱验证码，新邮箱验证成功后自动创建用户；2026-11-27 起认证全部走标准 HTTP（`/auth/config`、`/auth/request-code`、`/auth/verify-code`、`/auth/dev-login`、`/auth/session`、`/auth/logout`），未登录时不建立 WebSocket | [03](wiki/03-auth.md) |
 | 首版注册范围 | 2026-10-26 确认向公众开放注册，不要求邀请码或人工审核；2026-10-30 已部署生产登录防护，并通过真实 Turnstile、收信与验证码登录验收 | [03](wiki/03-auth.md#生产注册范围)、[09](wiki/09-deployment.md) |
 | 首版使用额度 | 2026-10-30 确认先无限额度开放，不设置每日输入次数、每用户模型费用额度或全站模型费用上限；保留验证码防刷和已有运行时约束 | [03](wiki/03-auth.md#生产注册范围) |
 | 验证码防刷实现 | PostgreSQL 共享 IP、邮箱与全站固定窗口；生产发信前校验 Turnstile 的 hostname 和 action，配置或验证失败不发码；不限制已登录聊天额度 | [03](wiki/03-auth.md#生产验证码防刷) |
@@ -110,9 +110,9 @@
 | 事项 | 选择 | 详见 |
 | --- | --- | --- |
 | 整体结构 | 2026-11-11 改为对齐 LangSmith Data Plane 的对等无状态多容器架构：PostgreSQL 保存 100% 持久业务事实与单调递增栅栏代数 `users.main_lease_epoch`（`00052`），纯内存无持久化 Redis 8 负责跨实例唤醒队列、用户临时租约、思考打断广播、聊天推送广播与共享图片旁路缓存；消除 PostgreSQL 池外 `LISTEN` 长连接（取代 2026-11-09 的单进程方案） | [05](wiki/05-main-runtime.md#对等多实例调度与停机交接2026-11-11) |
-| 实时通道 | 2026-10-28 改为：访问主页直接建 WebSocket（`coder/websocket`），收到 `ready` 前显示 loading，登录、历史、收发与推送全走这一条连接，第一帧 `hello` 可带令牌 | [04](wiki/04-messaging.md#websocket) |
+| 实时通道 | 2026-11-27 改为「HTTP 负责全部请求-响应（认证、首屏与翻页 `GET /messages`、发送 `POST /messages`、搜索与上下文、分享），WebSocket（`coder/websocket`）仅作为已登录用户的单向实时推送通道」：建连首帧 `hello` 传令牌与游标，后端以 `CloseRead` 保持控制帧并只下推 `ready` 与 `messages` 两类事件（取代 2026-10-28 的全量 WebSocket RPC 方案），消除手搓 `request_id` RPC 层、单连接队头阻塞及未登录长连接占用 | [04](wiki/04-messaging.md#websocket) |
 | 后台连接 | 2026-11-03：页面隐藏时保留 WebSocket 与自动重连，网络恢复时允许后台重连，返回前台时确保连接存在；离线或离开页面仍关闭。理由是普通页面切换不应中断消息接收或使发送中的请求失败；系统冻结或回收网页后靠重连与游标补齐恢复 | [04](wiki/04-messaging.md#websocket) |
-| 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转：后端事件只定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `serverEvents.ts` 并经 `ServerEventRelay.ts` 中转给业务代码 | [04](wiki/04-messaging.md#websocket) |
+| 服务器事件中转 | 2026-10-28 确认先定义后端事件类型、再由一个文件专门中转；2026-11-27 随协议精简为纯推送通道，后端事件只保留 `ready` 与 `messages` 定义在 `events.go` 并经 `eventRelay` 写出，前端对应定义在 `frontend/src/lib/serverEvents.ts` 并经 `frontend/src/lib/ServerEventRelay.ts` 中转 | [04](wiki/04-messaging.md#websocket) |
 | Main 思考提示 | 聊天底部三点小气泡与任务胶囊呼吸绿点，只要 Main 或任意后台 Subagent 仍在运行即保持显示，全部结束、失败或断线后收起 | [04](wiki/04-messaging.md#main-思考气泡-开发中) |
 | 空白回复与失败提示 | 2026-11-03 用户确认：未给用户正文时，无正文且无工具调用的结果最多补试一次，耗尽后聊天底部显示失败；失败状态可在重连后恢复，新输入清除。已有正文的工具流程仍可静默收尾 | [05](wiki/05-main-runtime.md#模型调用失败) |
 | 运行动态摘要 | 2026-10-30 删除。不再单独调用模型汇总行动，也不保留 recap 历史；聊天底部只按 Main 是否在处理显示思考气泡 | [05](wiki/05-main-runtime.md#行动摘要2026-10-30-已删除) |
@@ -120,7 +120,7 @@
 | 用户可见消息 | 2026-11-02 起由 `messages.visible` 显式记录（`00021`），聊天按它取真人消息与 Main 正文；此前是不加列、在 Go 代码中解析 Main 正文 | [04](wiki/04-messaging.md#用户能看到的消息) |
 | 消息 ID | 数据库生成；`client_message_id` 只用于识别重发 | [04](wiki/04-messaging.md#消息-id-与重发) |
 | 写入顺序 | 同一用户的插入先取 `pg_advisory_xact_lock` | [04](wiki/04-messaging.md#写入顺序) |
-| 不合规则的消息 | 直接断开 WebSocket，不回错误消息 | [04](wiki/04-messaging.md#websocket) |
+| 不合规则的消息 | `POST /messages` 校验不通过直接返回 `400 Bad Request` 与错误提示，不断开 WebSocket；推送连接收到非 `hello` 首帧或非法数据帧则关闭连接 | [04](wiki/04-messaging.md#websocket) |
 | 单条消息长度 | 2026-11-08：正文与引用合计不超过 64,000 个字符（此前 32,000）；仍按字符计，不按模型上下文窗口折算 | [04](wiki/04-messaging.md#用户发消息) |
 | 重连位置 | 展示与历史翻页按行位置；`hello.last_change_cursor` 按变更序号恢复推送，补齐先占位后完成的旧回复 | [04](wiki/04-messaging.md#websocket) |
 

@@ -1,6 +1,6 @@
 # 03 认证 `已实现`
 
-终端用户用邮箱验证码登录，新邮箱验证成功后自动创建用户。2026-10-28 起，登录全程走主页打开时建立的聊天 WebSocket：前端连接后先发 `hello` 携带已有令牌，没有令牌时在同一条连接上发送验证码与开发登录命令（见 [04 消息与实时通信](04-messaging.md#websocket)），聊天不再使用 HTTP 登录或历史接口。管理看板使用独立的密码登录和会话，见 [08](08-admin-observability.md#权限与-api)。
+终端用户用邮箱验证码登录，新邮箱验证成功后自动创建用户。2026-11-27 起，认证与所有聊天读写统一迁回标准 HTTP（`GET /auth/config`、`POST /auth/request-code`、`POST /auth/verify-code`、`POST /auth/dev-login`、`GET /auth/session`、`POST /auth/logout`），未登录时不建立聊天 WebSocket，登录拿到 Bearer 令牌后才连接 `/ws` 接收实时推送（见 [04 消息与实时通信](04-messaging.md#websocket)）。管理看板使用独立的密码登录和会话，见 [08](08-admin-observability.md#权限与-api)。
 
 ## 生产注册范围
 
@@ -12,9 +12,9 @@
 
 ## 本地开发登录
 
-2026-10-28，用户确认本地 dev 默认无需登录，直接使用 mock 邮箱。`APP_ENV=dev` 时后端在 `ready` 事件中标记 `dev_login`，前端随即在同一条 WebSocket 上自动发送 `dev_login` 命令，创建或复用 `dev@example.com` 并签发普通聊天会话；已有该邮箱的会话则直接复用，已有其他邮箱的会话则切换为开发用户。无需点击按钮、输入邮箱或验证码；自动登录失败时保留「开发测试登录」按钮供重试。选择理由是打开本地页面即可开始调试，同时复用真实会话、用户数据和聊天链路。所有开发测试登录共享这一用户的聊天记录。
+2026-10-28，用户确认本地 dev 默认无需登录，直接使用 mock 邮箱。`APP_ENV=dev` 时后端在 `GET /auth/config` 中标记 `dev_login: true`，前端未登录时自动调用 `POST /auth/dev-login`，创建或复用 `dev@example.com` 并签发普通聊天会话。无需点击按钮、输入邮箱或验证码；自动登录失败时保留「开发测试登录」按钮供重试。选择理由是打开本地页面即可开始调试，同时复用真实会话、用户数据和聊天链路。所有开发测试登录共享这一用户的聊天记录。
 
-`prod` 的 `ready` 事件中 `dev_login` 为 false，且后端拒绝 `dev_login` 命令；生产继续使用邮箱验证码。开发登录只模拟身份，模型请求和其他服务仍按当前配置真实调用。
+`prod` 的 `GET /auth/config` 返回 `dev_login: false` 及 Turnstile 公开站点密钥，且后端 `POST /auth/dev-login` 返回 403；生产继续使用邮箱验证码。开发登录只模拟身份，模型请求和其他服务仍按当前配置真实调用。
 
 ## 流程
 
@@ -25,35 +25,36 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Resend
 
-    App->>API: WebSocket 命令 request_code {email}
+    App->>API: GET /auth/config
+    API-->>App: {dev_login, turnstile_site_key}
+    App->>API: POST /auth/request-code {email, turnstile_token}
     API->>DB: 覆盖该邮箱的 login_codes 行（只存哈希）
     alt prod
         API->>Resend: 发送验证码邮件
     else dev
         API->>API: 验证码打印到日志
     end
-    API-->>App: 事件 code_sent
+    API-->>App: 204 No Content
 
-    App->>API: WebSocket 命令 verify_code {email, code}
+    App->>API: POST /auth/verify-code {email, code}
     API->>DB: 原子地占用一次尝试机会，再比对哈希
     API->>DB: 新邮箱则创建 users；删除 login_codes；新增 sessions
-    API-->>App: 事件 authenticated {"token": "..."}
+    API-->>App: 200 {"token": "...", "email": "..."}
 
-    App->>API: 重连时 hello 带令牌
+    App->>API: 后续 HTTP 请求带 Authorization: Bearer；WS 建连首帧 hello 带令牌
     API->>DB: 按令牌哈希查 sessions，必要时延期
 ```
 
-## WebSocket 命令与事件
+## HTTP 认证接口
 
-登录不再提供 HTTP 接口，全部在主页的聊天 WebSocket 上以命令与事件完成，协议见 [04](04-messaging.md#websocket)。
-
-| 命令 | 成功事件 | 失败事件 |
+| 接口 | 成功响应 | 失败响应 |
 | --- | --- | --- |
-| `hello`（可带令牌） | `ready {dev_login, authenticated}` | 令牌失效时回未登录 `ready`，前端清掉本地令牌 |
-| `dev_login` | `authenticated {"token": "...", "email": "dev@example.com"}`，仅 dev | prod 回 `request_failed {code: "dev_login_unavailable"}` |
-| `request_code` | `code_sent` | 60 秒内重复请求回 `request_failed {code: "too_frequent"}` |
-| `verify_code` | `authenticated {"token": "..."}` | 验证码错误或过期统一回 `request_failed {code: "invalid_code"}` |
-| `logout` | `logged_out`，只退出当前设备 | 未登录回 `request_failed {code: "unauthorized"}` |
+| `GET /auth/config` | `200 {dev_login, turnstile_site_key?}` | 公开接口，无需令牌 |
+| `POST /auth/dev-login` | `200 {token, email}`，仅 dev | prod 返回 `403` |
+| `POST /auth/request-code` | `204 No Content` | 60 秒冷却或窗口超限返回 `429`，校验失败返回 `400`，发信不可用返回 `503` |
+| `POST /auth/verify-code` | `200 {token, email}` | 邮箱无效或验证码错误/过期返回 `400` |
+| `GET /auth/session` | `200 {email, desktop_available}` | 令牌缺失或失效返回 `401` |
+| `POST /auth/logout` | `204 No Content`，只退出当前设备 | 令牌缺失或失效返回 `401` |
 
 - 邮箱去除首尾空格并转为小写后再使用。
 - 未携带或携带无效、过期令牌的请求返回 401。
@@ -64,9 +65,9 @@ sequenceDiagram
 ### 登录凭证
 
 - 使用随机令牌 + 数据库记录（`sessions` 表），不使用 JWT：退出登录或管理员删除用户时删除记录，令牌立即失效；删除用户时经级联删除自动清除。JWT 签发后在过期前无法收回。
-- 令牌在重连的 `hello` 中传递，不使用 Cookie，也不放在网址里。
+- 令牌在 HTTP 请求中通过 `Authorization: Bearer` 传递，在 WebSocket 建连后的首帧 `hello` 中传递，不使用 Cookie，也不放在网址里。
 - 允许多设备同时登录，每次登录新增一条 `sessions` 记录。
-- `logout` 命令只退出当前设备（删除当前令牌的记录），连接本身保持未登录状态；“退出所有设备”暂不提供。
+- `POST /auth/logout` 只退出当前设备（删除当前令牌的记录），前端随即断开推送 WebSocket；“退出所有设备”暂不提供。
 - 滑动过期：连续 30 天不活跃才失效。中间件在距上次延期超过一天时将过期时间推迟到 30 天后，避免每次请求都写库。过期令牌按未登录处理，返回 401；过期记录暂留表中，以后再加定期清理。
 
 ### 验证码
@@ -79,7 +80,7 @@ sequenceDiagram
 
 ### 生产验证码防刷
 
-生产 `request_code` 携带 Turnstile 的一次性令牌。公开 site key 随 `ready` 下发，秘密 Key 只在后端；后端调用 Cloudflare Siteverify，要求成功、hostname 与部署配置完全一致，且 action 为 `request_code`。缺少配置、验证服务不可用或验证失败均不发信，dev 不加载挑战。
+生产 `POST /auth/request-code` 携带 Turnstile 的一次性令牌。公开 site key 随 `GET /auth/config` 下发，秘密 Key 只在后端；后端调用 Cloudflare Siteverify，要求成功、hostname 与部署配置完全一致，且 action 为 `request_code`。缺少配置、验证服务不可用或验证失败均不发信，dev 不加载挑战。
 
 IP 只取 Worker 覆盖写入的 `X-Aether-Client-IP`，不信任浏览器传来的同名头或任意 `X-Forwarded-For`。Caddy 的源站凭证和不公开的 API 容器共同构成信任边界。IPv4 归一化，IPv6 按 /64 计数。数据库计数只存地址或邮箱的 SHA-256 哈希，哈希不是匿名化；超过两天的旧窗口记录会清理。
 
@@ -93,7 +94,7 @@ PostgreSQL 共享以下固定窗口，重连或重启不重置。每个窗口自
 
 这些限制只保护验证码邮件，不限制已登录用户的消息或模型使用。选择共享数据库而非进程内计数，是为了避免多实例、重启与重连绕过。挑战尝试失败仍计数；发信名额与邮箱冷却在一个事务中占用，拒绝时一起回滚。调用 Resend 前先提交，发信失败或结果未知也不退还名额，避免重试风暴。
 
-达到限制返回 `too_frequent`；挑战失效返回 `verification_required`；生产配置缺失或服务不可用返回 `login_unavailable`。全站邮件保护触发时新登录可能暂时受限，已登录聊天继续运行。
+达到限制返回 `429`；挑战失效返回 `400`；生产配置缺失或服务不可用返回 `503`。全站邮件保护触发时新登录可能暂时受限，已登录聊天继续运行。
 
 ### 发信
 
@@ -131,10 +132,10 @@ PostgreSQL 共享以下固定窗口，重连或重启不重置。每个窗口自
 
 ## 涉及代码
 
-- `backend/internal/httpapi/auth.go`：验证码、随机令牌生成与会话的核心逻辑。
+- `backend/internal/httpapi/auth.go`：登录配置、验证码发信与核销、开发登录、会话查询/登出与 Bearer 鉴权中间件。
 - `backend/internal/httpapi/oauth.go`：MCP OAuth 2.1 发现文档、DCR、授权校验与决策、令牌换取/轮换/撤销与连接管理。
 - `backend/internal/httpapi/mcp_memory.go`：无状态 Streamable HTTP `/mcp/memory` 处理器与 OAuth Bearer 鉴权中间件。
-- `backend/internal/httpapi/websocket.go`：在聊天连接上处理 `hello` 与登录命令；服务器事件定义与写出中转见 `backend/internal/httpapi/events.go`。
+- `backend/internal/httpapi/websocket.go`：已登录用户的单向实时推送连接（首帧 `hello` 鉴权）；服务器推送事件定义与写出中转见 `backend/internal/httpapi/events.go`。
 - `backend/internal/httpapi/login_email.go`：调用 Resend 发送验证码邮件。
 - `backend/db/queries/auth.sql`、`backend/db/queries/oauth.sql`：验证码、会话与 OAuth 的查询。
 - `frontend/src/components/oauth/OAuthAuthorizePage.tsx`、`frontend/src/lib/oauth.ts`：OAuth 授权确认页与前端请求封装。

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/database"
 	"github.com/OmniNetOpensource/aether-personal/backend/internal/llm"
@@ -42,30 +41,6 @@ type catalogFailure struct {
 	id   string
 	name string
 	err  error
-}
-
-// requireChatUser 用现有 Bearer 会话确定操作对象，账号 ID 由服务端提供。
-func (s *server) requireChatUser(next func(http.ResponseWriter, *http.Request, uuid.UUID)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-		defer cancel()
-		token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !found || token == "" {
-			http.Error(w, "请先登录", http.StatusUnauthorized)
-			return
-		}
-		session, err := s.findSession(ctx, token)
-		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "登录已过期，请重新登录", http.StatusUnauthorized)
-			return
-		}
-		if err != nil {
-			internalError(w, "read chat session for model settings", err)
-			return
-		}
-		next(w, r.WithContext(ctx), session.UserID)
-	}
 }
 
 // getUserModels 返回已保存的选择与当前目录，单个来源失败时仍可以选择其他来源或默认路由。

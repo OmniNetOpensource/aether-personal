@@ -1,4 +1,4 @@
-// 本文件实现对话消息的公开分享功能：生成不可猜测的分享链接、列出或取消当前用户的分享，并提供免登录的公开只读访问接口。
+// 本文件实现对话消息的公开分享 HTTP 接口：生成不可猜测的分享链接、列出或取消当前用户的分享，并提供免登录的公开只读访问接口。
 
 package httpapi
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -88,59 +89,70 @@ func shareMessagePreview(message chatMessage) string {
 	return string([]rune(normalized)[:120])
 }
 
-// handleShareFrame 在聊天 WebSocket 上处理已登录用户的创建分享、查询列表与取消分享命令；返回 false 表示连接已断开。
-func (s *server) handleShareFrame(ctx context.Context, relay *eventRelay, userID uuid.UUID, frame clientFrame) bool {
-	fail := func(code string) bool {
-		return relay.send(ctx, requestFailedEvent{Type: "request_failed", RequestID: frame.RequestID, Code: code}) == nil
+// listShares 处理 GET /shares：返回当前用户创建的全部公开分享摘要。
+func (s *server) listShares(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	shares, err := s.listUserMessageShares(r.Context(), userID)
+	if err != nil {
+		internalError(w, "list message shares", err)
+		return
 	}
+	writeAdminJSON(w, struct {
+		Shares []messageShareSummary `json:"shares"`
+	}{Shares: shares})
+}
 
-	switch frame.Type {
-	case "create_share":
-		summary, failure, err := s.createMessageShare(ctx, userID, frame.MessageIDs)
-		if err != nil {
-			slog.Error("create message share failed", "user_id", userID, "error", err)
-			return fail(requestFailedInternal)
-		}
-		if failure != "" {
-			return fail(failure)
-		}
-		return relay.send(ctx, shareCreatedEvent{Type: "share_created", RequestID: frame.RequestID, Share: summary}) == nil
-
-	case "list_shares":
-		shares, err := s.listUserMessageShares(ctx, userID)
-		if err != nil {
-			slog.Error("list message shares failed", "user_id", userID, "error", err)
-			return fail(requestFailedInternal)
-		}
-		return relay.send(ctx, shareListEvent{Type: "share_list", RequestID: frame.RequestID, Shares: shares}) == nil
-
-	case "delete_share":
-		if frame.ShareID == uuid.Nil {
-			return fail(requestFailedShareNotFound)
-		}
-		deleted, err := s.queries.DeleteUserMessageShare(ctx, database.DeleteUserMessageShareParams{
-			ShareID: frame.ShareID,
-			UserID:  userID,
-		})
-		if err != nil {
-			slog.Error("delete message share failed", "user_id", userID, "share_id", frame.ShareID, "error", err)
-			return fail(requestFailedInternal)
-		}
-		if deleted == 0 {
-			return fail(requestFailedShareNotFound)
-		}
-		return relay.send(ctx, shareDeletedEvent{Type: "share_deleted", RequestID: frame.RequestID, ShareID: frame.ShareID}) == nil
+// createShare 处理 POST /shares：将当前用户选中的若干可见消息打包成一条公开只读分享记录。
+func (s *server) createShare(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	var body struct {
+		MessageIDs []uuid.UUID `json:"message_ids"`
 	}
-	return true
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "请求格式无效", http.StatusBadRequest)
+		return
+	}
+	summary, ok, err := s.createMessageShare(r.Context(), userID, body.MessageIDs)
+	if err != nil {
+		internalError(w, "create message share", err)
+		return
+	}
+	if !ok {
+		http.Error(w, "请选择有效且不超过 200 条的消息", http.StatusBadRequest)
+		return
+	}
+	writeAdminJSON(w, struct {
+		Share messageShareSummary `json:"share"`
+	}{Share: summary})
+}
+
+// deleteShare 处理 DELETE /shares/{id}：撤销当前用户的指定分享记录。
+func (s *server) deleteShare(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	shareID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || shareID == uuid.Nil {
+		http.Error(w, "该分享不存在或已被取消", http.StatusNotFound)
+		return
+	}
+	deleted, err := s.queries.DeleteUserMessageShare(r.Context(), database.DeleteUserMessageShareParams{
+		ShareID: shareID,
+		UserID:  userID,
+	})
+	if err != nil {
+		internalError(w, "delete message share", err)
+		return
+	}
+	if deleted == 0 {
+		http.Error(w, "该分享不存在或已被取消", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // createMessageShare 在单个数据库事务中校验所选消息全部属于当前用户且可展示，再生成 128 位随机分享令牌并落库。
-func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMessageIDs []uuid.UUID) (messageShareSummary, string, error) {
+func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMessageIDs []uuid.UUID) (messageShareSummary, bool, error) {
 	seen := make(map[uuid.UUID]struct{}, len(rawMessageIDs))
 	uniqueIDs := make([]uuid.UUID, 0, len(rawMessageIDs))
 	for _, id := range rawMessageIDs {
 		if id == uuid.Nil {
-			return messageShareSummary{}, requestFailedInvalidShare, nil
+			return messageShareSummary{}, false, nil
 		}
 		if _, exists := seen[id]; !exists {
 			seen[id] = struct{}{}
@@ -148,17 +160,17 @@ func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMe
 		}
 	}
 	if len(uniqueIDs) == 0 || len(uniqueIDs) > maxShareMessages {
-		return messageShareSummary{}, requestFailedInvalidShare, nil
+		return messageShareSummary{}, false, nil
 	}
 
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		return messageShareSummary{}, "", err
+		return messageShareSummary{}, false, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
 
 	var summary messageShareSummary
-	failure := ""
+	valid := true
 	err := pgx.BeginFunc(ctx, s.databasePool, func(tx pgx.Tx) error {
 		queries := database.New(tx)
 		rows, err := queries.ListOwnedShareableMessages(ctx, database.ListOwnedShareableMessagesParams{
@@ -169,7 +181,7 @@ func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMe
 			return err
 		}
 		if len(rows) != len(uniqueIDs) {
-			failure = requestFailedInvalidShare
+			valid = false
 			return nil
 		}
 
@@ -178,7 +190,7 @@ func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMe
 		for index, row := range rows {
 			rendered := chatMessagesFromRow(database.ListChatRowsAfterRow(row))
 			if len(rendered) == 0 {
-				failure = requestFailedInvalidShare
+				valid = false
 				return nil
 			}
 			if index == 0 {
@@ -211,9 +223,9 @@ func (s *server) createMessageShare(ctx context.Context, userID uuid.UUID, rawMe
 		return nil
 	})
 	if err != nil {
-		return messageShareSummary{}, "", err
+		return messageShareSummary{}, false, err
 	}
-	return summary, failure, nil
+	return summary, valid, nil
 }
 
 // listUserMessageShares 查询当前用户已创建的全部公开分享记录（按时间倒序）。

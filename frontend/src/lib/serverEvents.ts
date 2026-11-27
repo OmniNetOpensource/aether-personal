@@ -1,4 +1,4 @@
-// 本文件用 Effect Schema 集中定义后端 WebSocket 服务器事件结构，与后端 events.go 一一对应。
+// 本文件用 Effect Schema 集中定义聊天消息共享结构与 WebSocket 实时推送事件，与后端 events.go 一一对应。
 
 import { Schema } from 'effect';
 import { MessagePartSchema } from './messageAttachments.js';
@@ -21,22 +21,6 @@ export const ChatPageSchema = Schema.Struct({
 });
 export type ChatPage = typeof ChatPageSchema.Type;
 
-// RequestFailedCodeSchema 对应后端可重试请求返回的全部错误码。
-export const RequestFailedCodeSchema = Schema.Literals([
-  'invalid_email',
-  'too_frequent',
-  'invalid_code',
-  'dev_login_unavailable',
-  'unauthorized',
-  'already_authenticated',
-  'internal',
-  'verification_required',
-  'login_unavailable',
-  'invalid_request',
-  'not_found',
-]);
-export type RequestFailedCode = typeof RequestFailedCodeSchema.Type;
-
 // ChatSearchHitSchema 表示历史搜索列表中的单条命中摘要。
 export const ChatSearchHitSchema = Schema.Struct({
   id: Schema.String,
@@ -46,48 +30,11 @@ export const ChatSearchHitSchema = Schema.Struct({
 });
 export type ChatSearchHit = typeof ChatSearchHitSchema.Type;
 
-// ServerEventSchema 联合后端聊天 WebSocket 下发的全部下行事件，用于运行时强校验解码。
+// ServerEventSchema 联合后端聊天 WebSocket 下发的全部实时推送事件，用于运行时强校验解码。
 export const ServerEventSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal('ready'),
     change_cursor: Schema.optional(Schema.String),
-    authenticated: Schema.Boolean,
-    dev_login: Schema.Boolean,
-    desktop_available: Schema.optional(Schema.Boolean),
-    turnstile_site_key: Schema.optional(Schema.String),
-    email: Schema.optional(Schema.String),
-    history: Schema.optional(ChatPageSchema),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('authenticated'),
-    change_cursor: Schema.optional(Schema.String),
-    request_id: Schema.String,
-    token: Schema.String,
-    email: Schema.String,
-    desktop_available: Schema.optional(Schema.Boolean),
-    history: ChatPageSchema,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('code_sent'),
-    request_id: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('history'),
-    request_id: Schema.String,
-    messages: Schema.NullOr(Schema.Array(ChatMessageRowSchema)),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('search_results'),
-    request_id: Schema.String,
-    results: Schema.Array(ChatSearchHitSchema),
-    next_before: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('message_context'),
-    request_id: Schema.String,
-    messages: Schema.NullOr(Schema.Array(ChatMessageRowSchema)),
-    has_more_before: Schema.Boolean,
-    has_more_after: Schema.Boolean,
   }),
   Schema.Struct({
     type: Schema.Literal('messages'),
@@ -95,19 +42,6 @@ export const ServerEventSchema = Schema.Union([
     change_cursor: Schema.optional(Schema.String),
     main_thinking: Schema.optional(Schema.Boolean),
     main_failed: Schema.optional(Schema.Boolean),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('delivered'),
-    client_message_id: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('logged_out'),
-    request_id: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('request_failed'),
-    request_id: Schema.String,
-    code: RequestFailedCodeSchema,
   }),
 ]);
 export type ServerEvent = typeof ServerEventSchema.Type;

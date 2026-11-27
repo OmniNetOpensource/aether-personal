@@ -1,11 +1,11 @@
 flowchart TD
-    subgraph L1["第一层：TanStack Start Web 应用 · 移动端 PWA"]
-        CLIENT["Main 聊天界面：WebSocket · 历史搜索 · 离线草稿 · 账号退出"]
+    subgraph L1["第一层：Vite+ / TanStack Router Web 应用 · 移动端 PWA"]
+        CLIENT["Main 聊天界面：HTTP 认证与读写 · WebSocket 实时推送 · 历史搜索 · 离线草稿"]
         DESKTOP_UI["只读实时桌面（noVNC / RFB）<br/>按工作区绑定显示入口"]
     end
 
     subgraph L2["第二层：Go 后端（对等无状态多容器：api-1 · api-2）"]
-        API["API：聊天 WebSocket · 图片/文件上传 · 只读桌面流 · 管理接口"]
+        API["API：HTTP 认证与消息读写 · 聊天 WS 推送 · 图片/文件上传 · 只读桌面流 · 管理接口"]
         MESSAGES["消息服务：保存消息 · 聊天变更推送 · 页面历史搜索"]
         IMAGES["存储与缓存：私有 OSS 读写签名 · Redis 共享图片缓存"]
         MANAGER["Manager：对等实例双队列调度<br/>Main 与 Subagent 独立槽位池 · 租约续期 · 思考打断与子代理取消 · 5 秒补偿"]
@@ -67,7 +67,7 @@ flowchart TD
 
     ADMIN["管理看板：admin/ · Main/Subagent 运行过程时间线、全局运行参数与凭证<br/>同一仓库 / 独立部署 / 多上游自动故障切换"]
     ADMIN <-->|"独立密码登录 / Main 与 Subagent 轨迹与配置"| API
-    CLIENT <-->|"Caddy 轮询与健康检查 / WebSocket 登录、历史、收发与推送"| API
+    CLIENT <-->|"Caddy 轮询与健康检查 / HTTP 认证、历史与发消息 · WS 实时推送"| API
     DESKTOP_UI <-->|"WebSocket 首帧认证 / 只读 RFB 转发"| API
     API <-->|"被动观察桌面流（不唤醒实例）"| SANDBOX
     IMAGES <-->|"流式读写与临时签名"| OSS

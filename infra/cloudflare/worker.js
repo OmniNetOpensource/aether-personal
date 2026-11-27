@@ -1,7 +1,16 @@
 // 本文件是 Cloudflare Worker 入口：把聊天、模型设置、记忆查看、远程记忆 MCP 与 OAuth 2.1、公开分享读取、只读桌面流和图片文件请求安全转发到后端源站，其余路径交给静态资源托管。
 
 const apiMethods = new Map([
-  // 聊天登录、历史与收发全部走 /ws；旧 /auth、/messages 路径由下方保留路径检查返回 404。
+  // 聊天认证与消息读写走标准 HTTP；/ws 仅用于已登录用户的实时推送。
+  ['/auth/config', 'GET'],
+  ['/auth/request-code', 'POST'],
+  ['/auth/verify-code', 'POST'],
+  ['/auth/dev-login', 'POST'],
+  ['/auth/session', 'GET'],
+  ['/auth/logout', 'POST'],
+  ['/messages', 'GET, POST'],
+  ['/messages/search', 'GET'],
+  ['/shares', 'GET, POST'],
   ['/ws', 'GET'],
   ['/sandbox/desktop', 'GET'],
   ['/images', 'POST'],
@@ -22,11 +31,12 @@ const apiMethods = new Map([
   ['/oauth/connections', 'GET'],
 ]);
 
-// resolveApiMethod 识别固定 API 路径与动态公开分享、授权连接撤销路径对应的允许 HTTP 方法。
+// resolveApiMethod 识别固定 API 路径与动态消息上下文、分享和授权连接路径对应的允许 HTTP 方法。
 function resolveApiMethod(pathname) {
   const exact = apiMethods.get(pathname);
   if (exact) return exact;
-  if (/^\/shares\/[^/]+$/.test(pathname)) return 'GET';
+  if (/^\/messages\/[^/]+\/context$/.test(pathname)) return 'GET';
+  if (/^\/shares\/[^/]+$/.test(pathname)) return 'GET, DELETE';
   if (/^\/oauth\/connections\/[^/]+$/.test(pathname)) return 'DELETE';
   return undefined;
 }

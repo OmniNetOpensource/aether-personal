@@ -1,17 +1,27 @@
-// 本文件是纯 Effect 聊天会话控制器：用 Scope、FiberHandle、Deferred 与 SubscriptionRef 管理登录、重连、命令回执与消息窗口。
+// 本文件是纯 Effect 聊天会话控制器：登录与消息读写走 HTTP，已登录连接仅通过 WebSocket 接收实时推送与运行状态。
 
-import { Deferred, Effect, FiberHandle, Queue, Scope, SubscriptionRef } from 'effect';
+import { Effect, FiberHandle, Queue, Scope, SubscriptionRef } from 'effect';
+import { ApiClient } from './api.js';
+import type { ApiError } from './api.js';
 import {
-  StorageError,
-  WsConnectionError,
-  WsRequestError,
-  formatUserError,
-  requestFailedMessage,
-} from './errors.js';
+  devLoginEffect,
+  fetchInitialMessagesEffect,
+  fetchMessageContextEffect,
+  fetchOlderMessagesEffect,
+  getAuthConfigEffect,
+  getAuthSessionEffect,
+  logoutAuthSessionEffect,
+  requestLoginCodeEffect,
+  searchMessagesEffect,
+  sendMessageEffect,
+  verifyLoginCodeEffect,
+} from './chatApi.js';
+import type { AuthToken, ChatSearchResults, MessageContextResult } from './chatApi.js';
+import { AuthError, StorageError, WsConnectionError, formatUserError } from './errors.js';
 import type { MessagePart } from './messageAttachments.js';
 import { SessionStorage } from './platform.js';
 import { openServerEventConnection } from './ServerEventRelay.js';
-import type { ClientCommand, ServerEventConnection } from './ServerEventRelay.js';
+import type { ServerEventConnection } from './ServerEventRelay.js';
 import type { ChatMessageRow, ChatPage, ServerEvent } from './serverEvents.js';
 
 // ChatMessage 是服务器已保存的聊天消息，发送中的内容留在输入框里。
@@ -63,7 +73,7 @@ export const initialChatState: ChatState = {
 // 位于最新底部时主列表保留的最近消息条数；超出部分的旧历史会从头部回收，再次上翻时按游标向后端重新拉取。
 export const latestMessageWindow = 30;
 
-// 断线自动重连退避阶梯（秒），连接完成 ready 握手后重置为首项。
+// 断线自动重连退避阶梯（秒），推送连接完成 ready 握手后重置为首项。
 const reconnectDelaysSeconds = [1, 2, 4, 8, 15] as const;
 
 // chatMessageFromRow 在服务器消息进入界面时统一转换时间和多段内容，正常聊天与历史窗口共用。
@@ -78,7 +88,7 @@ export function chatMessageFromRow(row: ChatMessageRow): ChatMessage {
   };
 }
 
-export type ChatCommandError = WsRequestError | WsConnectionError | StorageError;
+export type ChatCommandError = ApiError | WsConnectionError | StorageError;
 
 // ChatSession 对外暴露只读状态流及所有聊天命令，完全不依赖 React。
 export interface ChatSession {
@@ -97,11 +107,11 @@ export interface ChatSession {
   readonly searchMessages: (
     keyword: string,
     before?: string,
-  ) => Effect.Effect<Extract<ServerEvent, { readonly type: 'search_results' }>, ChatCommandError>;
+  ) => Effect.Effect<ChatSearchResults, ChatCommandError>;
   readonly loadMessageContext: (
     messageID: string,
     direction: 'around' | 'older' | 'newer',
-  ) => Effect.Effect<Extract<ServerEvent, { readonly type: 'message_context' }>, ChatCommandError>;
+  ) => Effect.Effect<MessageContextResult, ChatCommandError>;
   readonly trimOlderMessages: (maxCount?: number) => Effect.Effect<number>;
   readonly send: (
     parts: readonly MessagePart[],
@@ -127,534 +137,509 @@ function mergeRows(
   return { messages: next, changed: true };
 }
 
-// makeChatSession 在调用方 Scope 内创建独立聊天会话；Scope 关闭时自动中断连接与所有挂起请求。
-export const makeChatSession: Effect.Effect<ChatSession, never, Scope.Scope | SessionStorage> =
-  Effect.gen(function* () {
-    const storage = yield* SessionStorage;
-    const saved = yield* storage.readSession;
-    const stateRef = yield* SubscriptionRef.make<ChatState>({
-      ...initialChatState,
-      token: saved.token,
-      email: saved.email,
-      iconURL: saved.iconURL,
+// makeChatSession 在调用方 Scope 内创建独立聊天会话；Scope 关闭时自动中断后台推送连接与初始化协程。
+export const makeChatSession: Effect.Effect<
+  ChatSession,
+  never,
+  Scope.Scope | SessionStorage | ApiClient
+> = Effect.gen(function* () {
+  const storage = yield* SessionStorage;
+  const api = yield* ApiClient;
+  const provideApi = <A, E>(effect: Effect.Effect<A, E, ApiClient>) =>
+    Effect.provideService(effect, ApiClient, api);
+
+  const saved = yield* storage.readSession;
+  const stateRef = yield* SubscriptionRef.make<ChatState>({
+    ...initialChatState,
+    token: saved.token,
+    email: saved.email,
+    iconURL: saved.iconURL,
+  });
+
+  const baseURL = saved.baseURL;
+  const bootstrapHandle = yield* FiberHandle.make<void, never>();
+  const connectionHandle = yield* FiberHandle.make<void, never>();
+  const readyTimeoutHandle = yield* FiberHandle.make<void, never>();
+
+  let activeConnection: ServerEventConnection | null = null;
+  let reconnectAttempt = 0;
+  let historyLoaded = false;
+  let authConfigLoaded = false;
+  let suspended = false;
+  let devLoginAttempted = false;
+  // 重连按变更序号续推，历史分页只按已读取的历史页推进；迟到的旧回复不应跳过中间一页。
+  let lastChangeCursor: string | undefined;
+  let oldestHistoryPosition: string | undefined;
+
+  const getState = SubscriptionRef.get(stateRef);
+  const updateState = (f: (state: ChatState) => ChatState) => SubscriptionRef.update(stateRef, f);
+
+  const clearLocalSession = Effect.gen(function* () {
+    historyLoaded = false;
+    lastChangeCursor = undefined;
+    oldestHistoryPosition = undefined;
+    yield* FiberHandle.clear(connectionHandle);
+    yield* FiberHandle.clear(readyTimeoutHandle);
+    yield* storage.clearSession;
+    yield* updateState((state) => ({
+      ...state,
+      token: null,
+      connected: false,
+      desktopAvailable: false,
+      mainThinking: false,
+      mainFailed: false,
+      loadingHistory: false,
+      hasMoreHistory: true,
+      messages: [],
+    }));
+  });
+
+  // applyHistory 记住连续翻过的最早位置；首屏超过窗口条数时只保留最新窗口并允许继续上翻。
+  const applyHistory = (state: ChatState, page: ChatPage): ChatState => {
+    const rows = page.messages ?? [];
+    const initialLoad = !historyLoaded;
+    const first = rows[0]?.position;
+    if (first && (!oldestHistoryPosition || first < oldestHistoryPosition)) {
+      oldestHistoryPosition = first;
+    }
+    const merged = mergeRows(state.messages, page).messages;
+    historyLoaded = true;
+    let messages = merged;
+    let trimmed = false;
+    if (initialLoad && messages.length > latestMessageWindow) {
+      messages = messages.slice(messages.length - latestMessageWindow);
+      oldestHistoryPosition = messages[0]?.position;
+      trimmed = true;
+    }
+    return {
+      ...state,
+      messages,
+      hasMoreHistory: trimmed || rows.length > 0,
+    };
+  };
+
+  // handleServerEvent 仅消费后端实时推送的 ready 与 messages 事件，驱动连接态、思考态和增量消息合并。
+  const handleServerEvent = (event: ServerEvent): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case 'ready': {
+          yield* FiberHandle.clear(readyTimeoutHandle);
+          reconnectAttempt = 0;
+          if (!lastChangeCursor && event.change_cursor) {
+            lastChangeCursor = event.change_cursor;
+          }
+          yield* updateState((state) =>
+            state.connected && state.error === null
+              ? state
+              : { ...state, connected: true, error: null },
+          );
+          return;
+        }
+        case 'messages': {
+          if (event.change_cursor) {
+            lastChangeCursor = event.change_cursor;
+          }
+          const nextThinking = event.main_thinking === true;
+          const nextFailed = event.main_failed === true;
+          yield* updateState((state) => {
+            const merged = mergeRows(state.messages, event);
+            const statusChanged =
+              !state.connected ||
+              state.mainThinking !== nextThinking ||
+              state.mainFailed !== nextFailed ||
+              state.error !== null;
+            if (!statusChanged && !merged.changed) return state;
+            return {
+              ...state,
+              connected: true,
+              mainThinking: nextThinking,
+              mainFailed: nextFailed,
+              error: null,
+              messages: merged.messages,
+            };
+          });
+          return;
+        }
+      }
     });
 
-    const baseURL = saved.baseURL;
-    const connectionHandle = yield* FiberHandle.make<void, never>();
-    const readyTimeoutHandle = yield* FiberHandle.make<void, never>();
-    const devLoginHandle = yield* FiberHandle.make<void, never>();
-
-    const pendingRequests = new Map<string, Deferred.Deferred<ServerEvent, ChatCommandError>>();
-    let activeConnection: ServerEventConnection | null = null;
-    let reconnectAttempt = 0;
-    let historyLoaded = false;
-    let suspended = false;
-    let devLoginAttempted = false;
-    // 重连按变更序号续推，历史分页只按已读取的历史页推进；迟到的旧回复不应跳过中间一页。
-    let lastChangeCursor: string | undefined;
-    let oldestHistoryPosition: string | undefined;
-
-    const getState = SubscriptionRef.get(stateRef);
-    const updateState = (f: (state: ChatState) => ChatState) => SubscriptionRef.update(stateRef, f);
-
-    const rejectPendingRequests = (error: WsConnectionError) =>
-      Effect.gen(function* () {
-        const entries = [...pendingRequests.values()];
-        pendingRequests.clear();
-        for (const deferred of entries) {
-          yield* Deferred.fail(deferred, error);
+  // loadAuthConfig 拉取未登录页所需的登录配置；仅在未登录且尚未获取时使用，不建立 WebSocket。
+  const loadAuthConfig = (allowAutoDevLogin: boolean): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const result = yield* provideApi(getAuthConfigEffect()).pipe(Effect.result);
+      if (result._tag === 'Failure') {
+        yield* updateState((state) => ({
+          ...state,
+          error: formatUserError(result.failure, '无法读取登录配置，请刷新重试'),
+          initializing: false,
+        }));
+        return;
+      }
+      authConfigLoaded = true;
+      const config = result.success;
+      const shouldDevLogin = allowAutoDevLogin && config.dev_login && !devLoginAttempted;
+      if (shouldDevLogin) devLoginAttempted = true;
+      yield* updateState((state) => ({
+        ...state,
+        devLoginAvailable: config.dev_login,
+        turnstileSiteKey: config.turnstile_site_key ?? '',
+        initializing: shouldDevLogin ? state.initializing : false,
+      }));
+      if (shouldDevLogin) {
+        const loginResult = yield* completeLogin(devLoginEffect()).pipe(Effect.result);
+        if (loginResult._tag === 'Failure') {
+          yield* updateState((state) => ({
+            ...state,
+            error: formatUserError(loginResult.failure, '开发测试登录失败，请重试'),
+            initializing: false,
+          }));
         }
-      });
+      }
+    });
 
-    const resolvePendingRequest = (requestID: string, event: ServerEvent) =>
-      Effect.gen(function* () {
-        const deferred = pendingRequests.get(requestID);
-        if (!deferred) return;
-        pendingRequests.delete(requestID);
-        yield* Deferred.succeed(deferred, event);
-      });
+  // handleAuthExpired 统一处理 HTTP 401 或 WS unauthorized：清理本地令牌并切换回登录态。
+  const handleAuthExpired = (message: string | null) =>
+    Effect.gen(function* () {
+      yield* clearLocalSession;
+      yield* updateState((state) => ({
+        ...state,
+        error: message,
+        initializing: false,
+      }));
+      yield* loadAuthConfig(true);
+    });
 
-    const failPendingRequest = (requestID: string, error: ChatCommandError) =>
-      Effect.gen(function* () {
-        const deferred = pendingRequests.get(requestID);
-        if (!deferred) return false;
-        pendingRequests.delete(requestID);
-        yield* Deferred.fail(deferred, error);
-        return true;
-      });
+  // runConnectionLoop 仅在已登录且联网时维持单向推送 WebSocket，并在断线后按退避阶梯自动重连。
+  const runConnectionLoop: Effect.Effect<void> = Effect.gen(function* () {
+    while (!suspended && navigator.onLine) {
+      const current = yield* getState;
+      const token = current.token;
+      if (!token) return;
 
-    const clearLocalSession = Effect.gen(function* () {
+      const closeReason = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* openServerEventConnection(
+            baseURL,
+            token,
+            lastChangeCursor,
+          ).pipe(Effect.option);
+          if (connection._tag === 'None') return '';
+
+          activeConnection = connection.value;
+          yield* FiberHandle.run(
+            readyTimeoutHandle,
+            Effect.sleep('10 seconds').pipe(Effect.andThen(connection.value.close)),
+          );
+
+          return yield* Effect.gen(function* () {
+            while (true) {
+              const signal = yield* Queue.take(connection.value.signals);
+              if (signal._tag === 'Closed') return signal.reason;
+              yield* handleServerEvent(signal.event);
+            }
+          }).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                activeConnection = null;
+                yield* FiberHandle.clear(readyTimeoutHandle);
+                yield* updateState((state) =>
+                  state.connected || state.mainThinking
+                    ? { ...state, connected: false, mainThinking: false }
+                    : state,
+                );
+              }),
+            ),
+          );
+        }),
+      );
+
+      if (closeReason === 'unauthorized') {
+        yield* handleAuthExpired('登录已过期，请重新登录');
+        return;
+      }
+      if (suspended || !navigator.onLine) return;
+
+      const latest = yield* getState;
+      if (!latest.token) return;
+
+      const delaySeconds =
+        reconnectDelaysSeconds[Math.min(reconnectAttempt++, reconnectDelaysSeconds.length - 1)] ??
+        15;
+      yield* Effect.sleep(`${delaySeconds} seconds`);
+    }
+  });
+
+  const startConnectionLoop = (forceRestart: boolean) =>
+    Effect.gen(function* () {
+      const current = yield* getState;
+      if (suspended || !navigator.onLine || !current.token) return;
+      if (!forceRestart && activeConnection) return;
+      yield* FiberHandle.run(connectionHandle, runConnectionLoop, {
+        onlyIfMissing: !forceRestart,
+      });
+    });
+
+  // bootstrapAuthenticated 并行拉取会话信息与首屏历史，完成后立刻渲染聊天界面并启动 WS 实时推送。
+  const bootstrapAuthenticated = (token: string, fallbackEmail?: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const result = yield* Effect.all(
+        [provideApi(getAuthSessionEffect(token)), provideApi(fetchInitialMessagesEffect(token))],
+        { concurrency: 'unbounded' },
+      ).pipe(Effect.result);
+
+      if (result._tag === 'Failure') {
+        if (result.failure instanceof AuthError) {
+          yield* handleAuthExpired(null);
+          return;
+        }
+        yield* updateState((state) => ({
+          ...state,
+          token,
+          email: fallbackEmail ?? state.email,
+          error: formatUserError(result.failure, '历史消息加载失败，点击重试'),
+          initializing: false,
+        }));
+        return;
+      }
+
+      const [session, initial] = result.success;
+      lastChangeCursor = initial.change_cursor;
+      yield* updateState((state) =>
+        applyHistory(
+          {
+            ...state,
+            token,
+            email: session.email,
+            desktopAvailable: session.desktop_available,
+            mainThinking: initial.main_thinking,
+            mainFailed: initial.main_failed,
+            error: null,
+            initializing: false,
+          },
+          initial,
+        ),
+      );
+      yield* startConnectionLoop(true);
+    });
+
+  // completeLogin 统一处理验证码登录与开发登录：先持久化令牌，再拉齐首屏历史并建立推送通道。
+  const completeLogin = (
+    loginEffect: Effect.Effect<AuthToken, ApiError, ApiClient>,
+  ): Effect.Effect<void, ChatCommandError> =>
+    Effect.gen(function* () {
+      const auth = yield* provideApi(loginEffect);
+      yield* storage.saveSession(auth.token, auth.email);
       historyLoaded = false;
       lastChangeCursor = undefined;
       oldestHistoryPosition = undefined;
-      yield* storage.clearSession;
-      yield* updateState((state) => ({
-        ...state,
-        token: null,
-        desktopAvailable: false,
-        mainThinking: false,
-        mainFailed: false,
-        loadingHistory: false,
-        hasMoreHistory: true,
-        messages: [],
-      }));
+      yield* bootstrapAuthenticated(auth.token, auth.email);
     });
 
-    // mergeHistory 记住连续翻过的最早位置；首屏超过窗口条数时只保留最新窗口并允许继续上翻。
-    const applyHistory = (state: ChatState, page: ChatPage): ChatState => {
-      const rows = page.messages ?? [];
-      const initialLoad = !historyLoaded;
-      const first = rows[0]?.position;
-      if (first && (!oldestHistoryPosition || first < oldestHistoryPosition)) {
-        oldestHistoryPosition = first;
-      }
-      const merged = mergeRows(state.messages, page).messages;
-      historyLoaded = true;
-      let messages = merged;
-      let trimmed = false;
-      if (initialLoad && messages.length > latestMessageWindow) {
-        messages = messages.slice(messages.length - latestMessageWindow);
-        oldestHistoryPosition = messages[0]?.position;
-        trimmed = true;
-      }
-      return {
-        ...state,
-        messages,
-        hasMoreHistory: trimmed || rows.length > 0,
-      };
-    };
-
-    // sendRequest 发出命令并等待服务端回执：发送消息按 client_message_id 匹配，其余按 request_id 匹配。
-    const sendRequest = (command: ClientCommand): Effect.Effect<ServerEvent, ChatCommandError> =>
-      Effect.gen(function* () {
-        const connection = activeConnection;
-        if (!connection) {
-          return yield* Effect.fail(
-            new WsConnectionError({ reason: 'closed', message: '连接已断开，请稍后重试' }),
-          );
-        }
-        const requestID =
-          command.type === 'send_message' ? command.client_message_id : command.request_id;
-        const deferred = yield* Deferred.make<ServerEvent, ChatCommandError>();
-        pendingRequests.set(requestID, deferred);
-        const timeout = command.type === 'request_code' ? '30 seconds' : '15 seconds';
-
-        return yield* connection.send(command).pipe(
-          Effect.andThen(
-            Deferred.await(deferred).pipe(
-              Effect.timeoutOrElse({
-                duration: timeout,
-                orElse: () =>
-                  Effect.fail(
-                    new WsConnectionError({
-                      reason: 'timeout',
-                      message: '连接超时，请检查网络后重试',
-                    }),
-                  ),
-              }),
-            ),
-          ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (pendingRequests.get(requestID) === deferred) {
-                pendingRequests.delete(requestID);
-              }
-            }),
-          ),
-        );
-      });
-
-    const devSignIn: Effect.Effect<void, ChatCommandError> = sendRequest({
-      type: 'dev_login',
-      request_id: crypto.randomUUID(),
-    }).pipe(Effect.asVoid);
-
-    // handleServerEvent 按序处理单条下行事件，驱动认证、历史合并、思考状态和挂起请求回执。
-    const handleServerEvent = (event: ServerEvent): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        switch (event.type) {
-          case 'ready': {
-            yield* FiberHandle.clear(readyTimeoutHandle);
-            reconnectAttempt = 0;
-            const current = yield* getState;
-            if (event.authenticated) {
-              lastChangeCursor = event.change_cursor;
-              yield* updateState((state) => {
-                let next: ChatState = {
-                  ...state,
-                  devLoginAvailable: event.dev_login,
-                  turnstileSiteKey: event.turnstile_site_key ?? '',
-                  error: null,
-                  connected: true,
-                  desktopAvailable: event.desktop_available === true,
-                  email: event.email ?? state.email,
-                  initializing: false,
-                };
-                if (event.history) next = applyHistory(next, event.history);
-                return next;
-              });
-              return;
-            }
-            if (current.token) {
-              yield* storage.clearSession;
-            }
-            const shouldDevLogin = event.dev_login && !devLoginAttempted;
-            if (shouldDevLogin) devLoginAttempted = true;
-            yield* updateState((state) => ({
-              ...state,
-              devLoginAvailable: event.dev_login,
-              turnstileSiteKey: event.turnstile_site_key ?? '',
-              error: null,
-              connected: false,
-              desktopAvailable: false,
-              token: null,
-              initializing: shouldDevLogin ? state.initializing : false,
-            }));
-            if (shouldDevLogin) {
-              yield* FiberHandle.run(
-                devLoginHandle,
-                devSignIn.pipe(
-                  Effect.catch((error) =>
-                    updateState((state) => ({
-                      ...state,
-                      error: formatUserError(error, '开发测试登录失败，请重试'),
-                      initializing: false,
-                    })),
-                  ),
-                ),
-              );
-            }
-            return;
-          }
-          case 'authenticated': {
-            lastChangeCursor = event.change_cursor;
-            const savedResult = yield* storage
-              .saveSession(event.token, event.email)
-              .pipe(Effect.result);
-            if (savedResult._tag === 'Failure') {
-              yield* updateState((state) => ({ ...state, initializing: false }));
-              yield* failPendingRequest(event.request_id, savedResult.failure);
-              return;
-            }
-            yield* updateState((state) =>
-              applyHistory(
-                {
-                  ...state,
-                  token: event.token,
-                  email: event.email,
-                  desktopAvailable: event.desktop_available === true,
-                  connected: true,
-                  error: null,
-                  initializing: false,
-                },
-                event.history,
-              ),
-            );
-            yield* resolvePendingRequest(event.request_id, event);
-            return;
-          }
-          case 'code_sent':
-          case 'search_results':
-          case 'message_context':
-            yield* resolvePendingRequest(event.request_id, event);
-            return;
-          case 'history':
-            yield* updateState((state) => applyHistory({ ...state, error: null }, event));
-            yield* resolvePendingRequest(event.request_id, event);
-            return;
-          case 'messages': {
-            lastChangeCursor = event.change_cursor;
-            const nextThinking = event.main_thinking === true;
-            const nextFailed = event.main_failed === true;
-            yield* updateState((state) => {
-              const merged = mergeRows(state.messages, event);
-              const statusChanged =
-                !state.connected ||
-                state.mainThinking !== nextThinking ||
-                state.mainFailed !== nextFailed ||
-                state.error !== null;
-              if (!statusChanged && !merged.changed) return state;
-              return {
-                ...state,
-                connected: true,
-                mainThinking: nextThinking,
-                mainFailed: nextFailed,
-                error: null,
-                messages: merged.messages,
-              };
-            });
-            return;
-          }
-          case 'delivered':
-            yield* resolvePendingRequest(event.client_message_id, event);
-            return;
-          case 'logged_out':
-            yield* clearLocalSession;
-            yield* resolvePendingRequest(event.request_id, event);
-            return;
-          case 'request_failed': {
-            const matched = yield* failPendingRequest(
-              event.request_id,
-              WsRequestError.fromCode(event.code),
-            );
-            if (!matched) {
-              yield* updateState((state) => ({
-                ...state,
-                error: requestFailedMessage(event.code),
-              }));
-            }
-            return;
-          }
-        }
-      });
-
-    // runConnectionLoop 串行驱动单条 WebSocket 生命周期与断线指数退避重连，直到被挂起、鉴权失败或 Scope 释放。
-    const runConnectionLoop: Effect.Effect<void> = Effect.gen(function* () {
-      while (!suspended && navigator.onLine) {
-        const current = yield* getState;
-        const closeReason = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const connection = yield* openServerEventConnection(
-              baseURL,
-              current.token,
-              lastChangeCursor,
-            ).pipe(Effect.option);
-            if (connection._tag === 'None') return '';
-
-            activeConnection = connection.value;
-            yield* FiberHandle.run(
-              readyTimeoutHandle,
-              Effect.sleep('10 seconds').pipe(Effect.andThen(connection.value.close)),
-            );
-
-            return yield* Effect.gen(function* () {
-              while (true) {
-                const signal = yield* Queue.take(connection.value.signals);
-                if (signal._tag === 'Closed') return signal.reason;
-                yield* handleServerEvent(signal.event);
-              }
-            }).pipe(
-              Effect.ensuring(
-                Effect.gen(function* () {
-                  activeConnection = null;
-                  yield* FiberHandle.clear(readyTimeoutHandle);
-                  yield* updateState((state) =>
-                    state.connected || state.mainThinking
-                      ? { ...state, connected: false, mainThinking: false }
-                      : state,
-                  );
-                  yield* rejectPendingRequests(
-                    new WsConnectionError({ reason: 'closed', message: '连接已断开，请稍后重试' }),
-                  );
-                }),
-              ),
-            );
-          }),
-        );
-
-        if (closeReason === 'unauthorized') {
-          yield* clearLocalSession;
-          yield* updateState((state) => ({
-            ...state,
-            error: '登录已过期，请重新登录',
-            initializing: false,
-          }));
-          return;
-        }
-        if (suspended || !navigator.onLine) return;
-
-        const delaySeconds =
-          reconnectDelaysSeconds[Math.min(reconnectAttempt++, reconnectDelaysSeconds.length - 1)] ??
-          15;
-        yield* Effect.sleep(`${delaySeconds} seconds`);
-      }
-    });
-
-    const startConnectionLoop = (forceRestart: boolean) =>
-      Effect.gen(function* () {
-        if (suspended || !navigator.onLine) return;
-        if (!forceRestart && activeConnection) return;
-        yield* FiberHandle.run(connectionHandle, runConnectionLoop, {
-          onlyIfMissing: !forceRestart,
+  const reconnect = Effect.gen(function* () {
+    suspended = false;
+    if (!navigator.onLine) return;
+    const current = yield* getState;
+    if (current.token) {
+      if (!historyLoaded) {
+        yield* FiberHandle.run(bootstrapHandle, bootstrapAuthenticated(current.token), {
+          onlyIfMissing: true,
         });
-      });
+      } else {
+        yield* startConnectionLoop(false);
+      }
+      return;
+    }
+    if (!authConfigLoaded) {
+      yield* FiberHandle.run(bootstrapHandle, loadAuthConfig(true), { onlyIfMissing: true });
+    }
+  });
 
-    const reconnect = Effect.gen(function* () {
-      suspended = false;
-      yield* startConnectionLoop(false);
-    });
+  const suspend = Effect.gen(function* () {
+    suspended = true;
+    yield* FiberHandle.clear(connectionHandle);
+    yield* FiberHandle.clear(readyTimeoutHandle);
+  });
 
-    const suspend = Effect.gen(function* () {
+  // 初始化：已登录时通过 HTTP 并行拉取会话与首屏后再建 WS；未登录只拉取 HTTP 登录配置。
+  if (navigator.onLine) {
+    if (saved.token) {
+      yield* FiberHandle.run(bootstrapHandle, bootstrapAuthenticated(saved.token));
+    } else {
+      yield* FiberHandle.run(bootstrapHandle, loadAuthConfig(true));
+    }
+  } else {
+    yield* updateState((state) => ({
+      ...state,
+      error: state.token ? state.error : '当前处于离线状态，恢复网络后即可登录',
+      initializing: false,
+    }));
+  }
+
+  // Scope 释放时收尾取消初始化与推送连接。
+  yield* Effect.addFinalizer(() =>
+    Effect.gen(function* () {
       suspended = true;
+      yield* FiberHandle.clear(bootstrapHandle);
       yield* FiberHandle.clear(connectionHandle);
       yield* FiberHandle.clear(readyTimeoutHandle);
-    });
+    }),
+  );
 
-    // 初始化：联网时立即建立连接，离线冷启动直接开放界面编辑草稿或展示离线提示。
-    if (navigator.onLine) {
-      yield* startConnectionLoop(true);
-    } else {
-      yield* updateState((state) => ({
-        ...state,
-        error: state.token ? state.error : '当前处于离线状态，恢复网络后即可登录',
-        initializing: false,
-      }));
-    }
+  return {
+    stateRef,
+    getState,
+    reconnect,
+    suspend,
 
-    // Scope 释放时收尾关闭连接并通知所有尚未返回的挂起请求。
-    yield* Effect.addFinalizer(() =>
+    requestCode: (email, turnstileToken) =>
+      provideApi(requestLoginCodeEffect(email.trim(), turnstileToken)),
+
+    signIn: (email, code) => completeLogin(verifyLoginCodeEffect(email.trim(), code.trim())),
+
+    devSignIn: completeLogin(devLoginEffect()),
+
+    signOut: Effect.gen(function* () {
+      const current = yield* getState;
+      yield* FiberHandle.clear(bootstrapHandle);
+      yield* FiberHandle.clear(connectionHandle);
+      yield* FiberHandle.clear(readyTimeoutHandle);
+      if (current.token) {
+        yield* provideApi(logoutAuthSessionEffect(current.token)).pipe(Effect.ignore);
+      }
+      yield* clearLocalSession;
+      if (!authConfigLoaded && navigator.onLine) {
+        yield* loadAuthConfig(false);
+      }
+    }),
+
+    loadHistory: (older = false) =>
       Effect.gen(function* () {
-        suspended = true;
-        yield* FiberHandle.clear(connectionHandle);
-        yield* FiberHandle.clear(readyTimeoutHandle);
-        yield* FiberHandle.clear(devLoginHandle);
-        yield* rejectPendingRequests(
-          new WsConnectionError({ reason: 'disposed', message: '连接已关闭' }),
-        );
-      }),
-    );
-
-    return {
-      stateRef,
-      getState,
-      reconnect,
-      suspend,
-      requestCode: (email, turnstileToken) =>
-        sendRequest({
-          type: 'request_code',
-          request_id: crypto.randomUUID(),
-          email: email.trim(),
-          turnstile_token: turnstileToken,
-        }).pipe(Effect.asVoid),
-
-      signIn: (email, code) =>
-        sendRequest({
-          type: 'verify_code',
-          request_id: crypto.randomUUID(),
-          email: email.trim(),
-          code: code.trim(),
-        }).pipe(Effect.asVoid),
-
-      devSignIn,
-
-      signOut: Effect.gen(function* () {
         const current = yield* getState;
-        let loggedOut = false;
-        if (current.token && activeConnection) {
-          const result = yield* sendRequest({
-            type: 'logout',
-            request_id: crypto.randomUUID(),
-          }).pipe(Effect.result);
-          loggedOut = result._tag === 'Success';
-        }
-        yield* clearLocalSession;
-        // 未收到 logged_out 时服务端仍把连接绑在旧会话上，重启连接以未登录身份重新握手。
-        if (!loggedOut) {
-          yield* FiberHandle.clear(connectionHandle);
-          yield* startConnectionLoop(true);
-        }
-      }),
+        if (current.loadingHistory || !current.token || (older && !current.hasMoreHistory)) return;
+        const token = current.token;
+        yield* updateState((state) => ({ ...state, loadingHistory: true }));
 
-      loadHistory: (older = false) =>
-        Effect.gen(function* () {
-          const current = yield* getState;
-          if (current.loadingHistory || !current.token || (older && !current.hasMoreHistory))
+        const task = Effect.gen(function* () {
+          if (!older && !historyLoaded) {
+            yield* bootstrapAuthenticated(token);
             return;
-          const token = current.token;
-          const before = older ? oldestHistoryPosition : undefined;
-          yield* updateState((state) => ({ ...state, loadingHistory: true }));
-          yield* sendRequest({
-            type: 'load_history',
-            request_id: crypto.randomUUID(),
-            ...(before ? { before } : {}),
-          }).pipe(
-            Effect.catch((error) =>
-              updateState((state) =>
+          }
+          if (older && oldestHistoryPosition) {
+            const page = yield* provideApi(fetchOlderMessagesEffect(token, oldestHistoryPosition));
+            yield* updateState((state) =>
+              state.token === token ? applyHistory({ ...state, error: null }, page) : state,
+            );
+            return;
+          }
+          const initial = yield* provideApi(fetchInitialMessagesEffect(token));
+          lastChangeCursor = initial.change_cursor;
+          yield* updateState((state) =>
+            state.token === token
+              ? applyHistory(
+                  {
+                    ...state,
+                    mainThinking: initial.main_thinking,
+                    mainFailed: initial.main_failed,
+                    error: null,
+                  },
+                  initial,
+                )
+              : state,
+          );
+        });
+
+        yield* task.pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              if (error instanceof AuthError) {
+                yield* handleAuthExpired('登录已过期，请重新登录');
+                return;
+              }
+              yield* updateState((state) =>
                 state.token === token
                   ? { ...state, error: formatUserError(error, '历史消息加载失败，点击重试') }
                   : state,
-              ),
-            ),
-            Effect.ensuring(
-              updateState((state) =>
-                state.token === token ? { ...state, loadingHistory: false } : state,
-              ),
-            ),
-          );
-        }),
-
-      searchMessages: (keyword, before) =>
-        sendRequest({
-          type: 'search_messages',
-          request_id: crypto.randomUUID(),
-          keyword,
-          ...(before ? { before } : {}),
-        }).pipe(
-          Effect.flatMap((event) =>
-            event.type === 'search_results'
-              ? Effect.succeed(event)
-              : Effect.fail(
-                  new WsConnectionError({
-                    reason: 'unexpected_event',
-                    message: '搜索返回了错误的事件类型',
-                  }),
-                ),
+              );
+            }),
           ),
-        ),
-
-      loadMessageContext: (messageID, direction) =>
-        sendRequest({
-          type: 'load_message_context',
-          request_id: crypto.randomUUID(),
-          message_id: messageID,
-          direction,
-        }).pipe(
-          Effect.flatMap((event) =>
-            event.type === 'message_context'
-              ? Effect.succeed(event)
-              : Effect.fail(
-                  new WsConnectionError({
-                    reason: 'unexpected_event',
-                    message: '历史消息返回了错误的事件类型',
-                  }),
-                ),
+          Effect.ensuring(
+            updateState((state) =>
+              state.token === token ? { ...state, loadingHistory: false } : state,
+            ),
           ),
-        ),
+        );
+      }),
 
-      trimOlderMessages: (maxCount = latestMessageWindow) =>
-        SubscriptionRef.modify(stateRef, (state) => {
-          if (state.loadingHistory || state.messages.length <= maxCount) {
-            return [0, state] as const;
-          }
-          const removed = state.messages.length - maxCount;
-          const kept = state.messages.slice(removed);
-          oldestHistoryPosition = kept[0]?.position;
-          return [removed, { ...state, messages: kept, hasMoreHistory: true }] as const;
-        }),
+    searchMessages: (keyword, before) =>
+      Effect.gen(function* () {
+        const current = yield* getState;
+        if (!current.token) {
+          return yield* Effect.fail(new AuthError({ message: '登录已过期，请重新登录' }));
+        }
+        return yield* provideApi(searchMessagesEffect(current.token, keyword, before)).pipe(
+          Effect.tapError((error) =>
+            error instanceof AuthError ? handleAuthExpired('登录已过期，请重新登录') : Effect.void,
+          ),
+        );
+      }),
 
-      send: (parts, clientMessageID) =>
-        Effect.gen(function* () {
-          const current = yield* getState;
-          const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
-          const quotes = parts.flatMap((part) => (part.type === 'quote' ? [part.quote] : []));
-          const images = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
-          const files = parts.flatMap((part) => (part.type === 'file' ? [part.file] : []));
-          const trimmed = text.trim();
-          if (
-            (!trimmed && quotes.length === 0 && images.length === 0 && files.length === 0) ||
-            Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 64000 ||
-            !current.token
-          ) {
-            return false;
-          }
-          if (!current.connected) {
-            yield* reconnect;
-            return yield* Effect.fail(
-              new WsConnectionError({ reason: 'closed', message: '连接已断开，请稍后重试' }),
-            );
-          }
-          yield* sendRequest({ type: 'send_message', client_message_id: clientMessageID, parts });
-          return true;
-        }),
-    };
-  });
+    loadMessageContext: (messageID, direction) =>
+      Effect.gen(function* () {
+        const current = yield* getState;
+        if (!current.token) {
+          return yield* Effect.fail(new AuthError({ message: '登录已过期，请重新登录' }));
+        }
+        return yield* provideApi(
+          fetchMessageContextEffect(current.token, messageID, direction),
+        ).pipe(
+          Effect.tapError((error) =>
+            error instanceof AuthError ? handleAuthExpired('登录已过期，请重新登录') : Effect.void,
+          ),
+        );
+      }),
+
+    trimOlderMessages: (maxCount = latestMessageWindow) =>
+      SubscriptionRef.modify(stateRef, (state) => {
+        if (state.loadingHistory || state.messages.length <= maxCount) {
+          return [0, state] as const;
+        }
+        const removed = state.messages.length - maxCount;
+        const kept = state.messages.slice(removed);
+        oldestHistoryPosition = kept[0]?.position;
+        return [removed, { ...state, messages: kept, hasMoreHistory: true }] as const;
+      }),
+
+    send: (parts, clientMessageID) =>
+      Effect.gen(function* () {
+        const current = yield* getState;
+        const text = parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
+        const quotes = parts.flatMap((part) => (part.type === 'quote' ? [part.quote] : []));
+        const images = parts.flatMap((part) => (part.type === 'image' ? [part.image] : []));
+        const files = parts.flatMap((part) => (part.type === 'file' ? [part.file] : []));
+        const trimmed = text.trim();
+        if (
+          (!trimmed && quotes.length === 0 && images.length === 0 && files.length === 0) ||
+          Array.from(trimmed + quotes.map((quote) => quote.text).join('')).length > 64000 ||
+          !current.token
+        ) {
+          return false;
+        }
+        const token = current.token;
+        const created = yield* provideApi(sendMessageEffect(token, clientMessageID, parts)).pipe(
+          Effect.tapError((error) =>
+            error instanceof AuthError ? handleAuthExpired('登录已过期，请重新登录') : Effect.void,
+          ),
+        );
+        // 仅合并刚落库的消息，不把 lastChangeCursor 直接跳到该值，避免跳过此前尚未推到的助手消息。
+        yield* updateState((state) => {
+          if (state.token !== token) return state;
+          const merged = mergeRows(state.messages, { messages: [created.message] });
+          return { ...state, messages: merged.messages, error: null };
+        });
+        if (!activeConnection && navigator.onLine && !suspended) {
+          yield* startConnectionLoop(false);
+        }
+        return true;
+      }),
+  };
+});
