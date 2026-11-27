@@ -183,20 +183,28 @@
   margin-bottom: 0;
 }
 
-/* 高亮 token 同时携带两套颜色，随系统外观立即切换。 */
-.markdown-code-line > span {
-  color: var(--shiki-light, inherit);
-  background-color: var(--shiki-light-bg, transparent);
-  font-style: var(--shiki-light-font-style, normal);
-  font-weight: var(--shiki-light-font-weight, normal);
-  text-decoration: var(--shiki-light-text-decoration, none);
+/* 模型类别映射到系统深浅色；普通文本继承代码块前景色。 */
+.markdown-code-line [data-syntax='comment'] {
+  color: light-dark(#57606a, #8b949e);
 }
-@media (prefers-color-scheme: dark) {
-  .markdown-code-line > span {
-    color: var(--shiki-dark, inherit);
-    background-color: var(--shiki-dark-bg, transparent);
-    font-style: var(--shiki-dark-font-style, normal);
-    font-weight: var(--shiki-dark-font-weight, normal);
-    text-decoration: var(--shiki-dark-text-decoration, none);
-  }
+.markdown-code-line [data-syntax='string'] {
+  color: light-dark(#0a3069, #a5d6ff);
+}
+.markdown-code-line [data-syntax='number'] {
+  color: light-dark(#0550ae, #79c0ff);
+}
+.markdown-code-line [data-syntax='keyword'] {
+  color: light-dark(#cf222e, #ff7b72);
+}
+.markdown-code-line [data-syntax='type'] {
+  color: light-dark(#953800, #ffa657);
+}
+.markdown-code-line [data-syntax='function'] {
+  color: light-dark(#8250df, #d2a8ff);
+}
+.markdown-code-line [data-syntax='constant'] {
+  color: light-dark(#0550ae, #79c0ff);
+}
+.markdown-code-line [data-syntax='operator'] {
+  color: light-dark(#cf222e, #ff7b72);
 }

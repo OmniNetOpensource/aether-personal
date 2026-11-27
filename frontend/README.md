@@ -61,7 +61,7 @@ PWA 清单设置 `display: standalone`，安装后以独立窗口打开。多尺
 | `src/components/ModalDialog.tsx` | 原生 `<dialog>` 模态框公共封装 |
 | `src/components/chat/` | 聊天布局、TanStack Virtual 消息列表、折叠、引用、历史搜索、只读桌面与多模态输入框 |
 | `src/components/memories/` | `/memories` 双栏只读记忆预览页（文件列表筛选 + Markdown 预览与复制） |
-| `src/components/login/`、`src/components/markdown/` | 邮箱验证码登录、Markdown/KaTeX/Shiki 渲染与公共 LRU 缓存 |
+| `src/components/login/`、`src/components/markdown/` | 邮箱验证码登录、Markdown/KaTeX/GPU Lexer 渲染与公共 LRU 缓存 |
 | `src/lib/platform.ts` | 浏览器登录存储与安全链接校验 |
 | `src/styles/style.css`、`src/styles/palette.css` | 响应式布局与随系统切换的森林绿深浅色变量 |
 | `public/manifest.webmanifest`、`public/icons/` | PWA 清单与静态多尺寸图标 |

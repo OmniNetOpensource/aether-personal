@@ -1,5 +1,6 @@
 // 本文件是浏览器端应用入口：加载全局样式、挂载 Effect Atom RegistryProvider 与 TanStack Router 实例。
 
+import { parse } from 'gpu-lexer';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RegistryProvider } from '@effect/atom-react';
@@ -11,6 +12,8 @@ import './styles/style.css';
 // 全局路由实例复用 LoadingScreen 作为路由分包切换期间的占位界面。
 const router = createRouter({
   routeTree,
+  // 在入口加载模型，代码块通过路由上下文复用同一解析器。
+  context: { parseCode: parse },
   defaultPendingComponent: LoadingScreen,
 });
 

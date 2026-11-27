@@ -1,53 +1,59 @@
-// 本文件渲染带语言标签、复制反馈、语法高亮和行号的代码块，按需加载语法并缓存高亮结果以避免滚动重挂载跳动。
+// 本文件渲染带语言标签、复制反馈、语法高亮和行号的代码块，使用 GPU Lexer 着色并缓存结果以避免滚动重挂载跳动。
 
 import { useEffect, useRef, useState } from 'react';
-import type { TokensResult } from '@shikijs/core';
+import { getRouteApi } from '@tanstack/react-router';
+import type { parse } from 'gpu-lexer';
 import { createLruCache } from './cache.js';
 
-// 高亮结果携带输入标识，内容更新时先显示新原文，避免短暂显示旧代码。
-type Highlight = { key: string; result: TokensResult };
+// 模型返回 UTF-16 源码区间，逐行保存文本和类别供行号与主题共用。
+type SyntaxSpan = Awaited<ReturnType<typeof parse>>[number];
+type CodeLine = { content: string; type: SyntaxSpan['type'] }[];
 
-// 缓存已高亮的 token 结果，虚拟行滚出视口后再次进入时首帧即带高亮，不再重复异步解析。
-const tokenCache = createLruCache<TokensResult>(100);
+// 重挂载时按源码复用结果，模型不依赖语言标签。
+const tokenCache = createLruCache<CodeLine[]>(100);
+const rootRoute = getRouteApi('__root__');
 
-// 代码复制由浏览器剪贴板完成；失败反馈留在按钮内，允许用户直接重试。
+// 代码块先展示可复制的原文，WebGPU 完成推理后再着色。
 export function MarkdownCodeBlock({ code, language }: { code: string; language: string }) {
-  const key = `${language}\0${code}`;
-  const [highlight, setHighlight] = useState<Highlight | undefined>(() => {
-    const cached = tokenCache.get(key);
-    return cached ? { key, result: cached } : undefined;
-  });
+  const { parseCode } = rootRoute.useRouteContext();
+  const plainText = ['text', 'txt', 'plaintext'].includes(language.toLowerCase());
+  const [highlight, setHighlight] = useState<{ code: string; lines: CodeLine[] }>();
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const result = (highlight?.key === key ? highlight.result : undefined) ?? tokenCache.get(key);
+  const result = plainText
+    ? undefined
+    : highlight?.code === code
+      ? highlight.lines
+      : tokenCache.get(code);
 
-  // 一次生成深浅两套高亮变量，系统切换外观时由 CSS 即时切换，无需重新解析代码。
-  // 加载失败或未知语言仍保留可读、可复制的代码原文。
+  // 跨行区间按原文换行拆开，连续换行与末尾空行也各占一行。
   useEffect(() => {
-    const cached = tokenCache.get(key);
-    if (cached) {
-      setHighlight((current) => (current?.key === key ? current : { key, result: cached }));
-      return;
-    }
+    if (plainText || !code || tokenCache.get(code)) return;
     let active = true;
-    void import('./shiki.js')
-      .then(async ({ bundledLanguages, codeToTokens }) => {
-        if (language && !Object.hasOwn(bundledLanguages, language)) return;
-        const tokens = await codeToTokens(code, {
-          lang: language || 'text',
-          themes: { light: 'github-light', dark: 'github-dark' },
-          defaultColor: false,
-        });
-        tokenCache.set(key, tokens);
-        if (active) setHighlight({ key, result: tokens });
+    void parseCode(code)
+      .then((spans) => {
+        let line: CodeLine = [];
+        const lines = [line];
+        for (const span of spans) {
+          const pieces = code.slice(span.start, span.end).split('\n');
+          for (const [index, content] of pieces.entries()) {
+            if (index > 0) {
+              line = [];
+              lines.push(line);
+            }
+            if (content) line.push({ content, type: span.type });
+          }
+        }
+        tokenCache.set(code, lines);
+        if (active) setHighlight({ code, lines });
       })
       .catch(() => {
-        /* 高亮是增强功能，代码原文已显示。 */
+        /* WebGPU 不可用或推理失败时继续显示原文。 */
       });
     return () => {
       active = false;
     };
-  }, [code, language, key]);
+  }, [code, plainText, parseCode]);
 
   // 卸载或内容变化时清除复制反馈计时器，避免回调写入已经移除的代码块。
   useEffect(() => {
@@ -83,10 +89,10 @@ export function MarkdownCodeBlock({ code, language }: { code: string; language: 
       <pre tabIndex={0}>
         <code>
           {result
-            ? result.tokens.map((line, lineIndex) => (
+            ? result.map((line, lineIndex) => (
                 <span className="markdown-code-line" key={lineIndex}>
                   {line.map((token, tokenIndex) => (
-                    <span key={tokenIndex} style={token.htmlStyle}>
+                    <span key={tokenIndex} data-syntax={token.type}>
                       {token.content}
                     </span>
                   ))}

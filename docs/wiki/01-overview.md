@@ -71,6 +71,8 @@ flowchart LR
 
 2026-11-02，用户要求 Markdown 渲染对齐 Aether Start。Main 正文改用同款 unified / remark 管线，支持中文紧邻标点的加粗与删除线、GFM 表格与任务列表、KaTeX 行内和块级公式，以及带语言标签、行号和复制反馈的 Shiki 高亮代码块；排版对齐其标题层级、列表缩进和块间距，配色与 18px 正文沿用当前主题。选择相同解析管线是为了统一语法和阅读体验，替代手工遍历 marked token。整条消息一次解析，保留跨段列表与引用式链接；当前后端整条推送，不引入 Start 的流式 DOM 动画。代码高亮器和常用语言包按需加载，未知语言或高亮加载失败显示原文。原始 HTML 不执行，也不转成 DOM；解析结果先清洗，再生成公式。图片与 Start 一样展示，仅允许无账号密码的 HTTP(S)，不发送页面来源；链接同样只允许这些地址，新窗口使用 `noopener noreferrer`。表格、代码块与块级公式在各自区域横向滚动。用户消息显示原文。Enter 换行、Ctrl+Enter 发送，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
 
+2026-11-27，聊天端与记忆页的代码高亮统一迁移到 GPU Lexer。模型直接对源码分类，可处理未标语言和未配置语法包的代码块。聊天端入口静态加载模型，首次显示代码块即可调用解析器；路由仍独立拆包。明确标记为纯文本或 WebGPU 不可用时显示原文，复制始终使用原始代码。深浅色由 CSS 映射模型类别。
+
 2026-10-28，用户要求删除整个顶部栏，让聊天内容直接占满页面顶部；同时删除页面的「安装应用」按钮和安装说明弹窗，安装继续使用浏览器自带入口。
 
 PWA 的清单位于 `frontend/public/manifest.webmanifest`，多尺寸图标（192px、512px、Apple 180px 与带安全边距的 maskable 512px）作为静态 PNG 保存在 `frontend/public/icons/`。2026-11-27，用户确认移除构建期 `sharp` 切图与 Service Worker 脚本（原 `frontend/scripts/build-pwa.mjs` 与 `src/components/PwaControls.tsx`）：理由是聊天本身强依赖联网，无需离线应用外壳与每分钟 SW 更新轮询，保留清单与静态图标即可满足 iOS/Android 添加到主屏幕独立窗口打开，同时省去原生二进制依赖与全量静态资源预缓存开销。入口 `/` 与 `/index.html` 通过 `frontend/public/_headers` 配置 `Cache-Control: no-cache`，刷新或重开即加载最新构建版本。
