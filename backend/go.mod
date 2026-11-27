@@ -7,12 +7,12 @@ require (
 	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.1
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/redis/go-redis/v9 v9.23.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/shopspring/decimal v1.5.0
-	golang.org/x/sync v0.24.0
+	github.com/shopspring/decimal v1.6.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
@@ -76,7 +76,7 @@ require (
 	golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8 // indirect
