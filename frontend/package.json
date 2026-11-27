@@ -12,7 +12,7 @@
   "dependencies": {
     "@effect/atom-react": "^4.1.6",
     "@novnc/novnc": "1.7.0",
-    "@shikijs/core": "3.23.0",
+    "@shikijs/core": "4.6.0",
     "@shikijs/engine-javascript": "3.23.0",
     "@shikijs/langs": "3.23.0",
     "@shikijs/themes": "3.23.0",
