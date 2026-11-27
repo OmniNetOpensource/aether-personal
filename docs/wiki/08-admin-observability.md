@@ -195,17 +195,7 @@ Gemini 3、4 的正常请求沿用 Aether 的高推理强度，压缩使用低�
 
 两个接口使用已有独立管理会话并返回 no-store。管理端代理仅开放固定六个服务路径。更改日志只记录服务名称、操作及管理会话 ID，不记录提交正文。保存不发模型请求或测试邮件，供应商拒绝凭证时由实际请求返回错误并记录原有调用结果。
 
-模型目录、Main、压缩、邮件和联网工具均在准备供应商请求时读取数据库，没有凭证缓存。已取到凭证的进行中请求继续完成，随后准备的请求读取新值。数据库读写失败或解密失败时返回错误，不使用旧环境变量兜底。清除操作保留空记录，后续使用该服务时报未配置。
-
-已有本地部署先保留原 `.env` 中的服务变量，补充 `SERVICE_ENCRYPTION_KEY`，执行迁移与一次性导入：
-
-```sh
-cd backend
-make migrate
-make import-services
-```
-
-导入识别 `GEMINI_API_KEY_IKUNCODE`、`GEMINI_BASE_URL_IKUNCODE`、`RESEND_API_KEY`、`EMAIL_FROM`、`SERP_API_KEY`、`PARALLEL_API_KEY`、`EVERYINFRA_API_KEY`。仅填入不存在的服务记录，重复执行不覆盖已有或已清除的配置，不输出 Key。完成后可删除已导入的环境变量。保留 `OPENROUTER_API_KEY`，后端启动时读取它。生产镜像包含 `/usr/local/bin/import-services`，升级旧部署时使用 `make prod-import-services`；新部署直接从看板填写。
+模型目录、Main、压缩、邮件和联网工具均在准备供应商请求时读取数据库，没有凭证缓存。已取到凭证的进行中请求继续完成，随后准备的请求读取新值。数据库读写失败或解密失败时返回错误，不使用旧环境变量兜底。清除操作保留空记录，后续使用该服务时报未配置。所有第三方服务凭证（除由部署环境注入的 `OPENROUTER_API_KEY` 外）统一在看板填写与维护（早期的 `cmd/import-services` 迁移命令已于 2026-11-27 移除）。
 
 独立数据库已验证 `00015` 的 Up、Down、Up，密文落库与脱敏返回、导入幂等、清除不恢复、非法输入不改原值、运行中替换 Key、六家服务的实际请求读取新值、跨服务密文与错误主密钥拒绝解密、恢复原主密钥、数据库故障和缺少主密钥。真实后端通过受控 HTTP/TLS 接口验证请求，Resend 验证未向外发送邮件。In-App Browser 完成服务页与保存新 Key 后仅回显末尾四位的验收。未新增测试文件。
 
@@ -244,16 +234,7 @@ In-App Browser 验证默认值、修改与保存，以及刷新和服务重启�
 
 ### 阿里云 OSS 图片服务（2026-11-02）
 
-服务配置页新增阿里云 OSS，填写一组 AccessKey ID、AccessKey Secret、Bucket 与地域。凭证与配置整体按 AES-GCM 加密保存，管理接口只回显 Bucket、地域与 Secret 末尾四位。使用私有 Bucket 与项目专用 RAM 身份；仅授予图片路径的 GetObject 和 PutObject 权限。OSS 按实际存储、请求与流量计费，看板不把未查询到的账单记为零。
-
-管理员也可用 RAM 导出的单用户 CSV 显式导入。命令读取文件后只写加密配置，不打印凭证：
-
-```sh
-# backend 下先按原有方式加载 .env，再运行：
-go run ./cmd/import-services -oss-csv /安全临时目录/credentials.csv -oss-bucket <bucket> -oss-region cn-hangzhou
-```
-
-此模式只导入 OSS；未传 `-oss-csv` 时，仍按原有规则导入旧服务环境变量。OSS 密钥不从环境变量回退。
+服务配置页新增阿里云 OSS，填写一组 AccessKey ID、AccessKey Secret、Bucket 与地域。凭证与配置整体按 AES-GCM 加密保存，管理接口只回显 Bucket、地域与 Secret 末尾四位。使用私有 Bucket 与项目专用 RAM 身份；仅授予图片路径的 GetObject 和 PutObject 权限。OSS 按实际存储、请求与流量计费，看板不把未查询到的账单记为零。OSS 密钥不从环境变量回退。
 
 ## 看板改用 TanStack Start（2026-11-03）
 

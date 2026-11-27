@@ -14,7 +14,7 @@ const getServiceSettings = `-- name: GetServiceSettings :one
 SELECT id, service, api_key_ciphertext, key_suffix, base_url, email_from, updated_at FROM service_settings WHERE service = $1
 `
 
-// 本文件查询服务配置：读取当前凭证、保存管理员修改，以及一次性导入旧环境变量而不覆盖已有记录。
+// 本文件查询服务配置：读取当前凭证并保存管理员在看板中的修改。
 func (q *Queries) GetServiceSettings(ctx context.Context, service string) (ServiceSetting, error) {
 	row := q.db.QueryRow(ctx, getServiceSettings, service)
 	var i ServiceSetting
@@ -28,34 +28,6 @@ func (q *Queries) GetServiceSettings(ctx context.Context, service string) (Servi
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const importServiceSettings = `-- name: ImportServiceSettings :execrows
-INSERT INTO service_settings (service, api_key_ciphertext, key_suffix, base_url, email_from)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (service) DO NOTHING
-`
-
-type ImportServiceSettingsParams struct {
-	Service          string
-	ApiKeyCiphertext []byte
-	KeySuffix        string
-	BaseUrl          string
-	EmailFrom        string
-}
-
-func (q *Queries) ImportServiceSettings(ctx context.Context, arg ImportServiceSettingsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, importServiceSettings,
-		arg.Service,
-		arg.ApiKeyCiphertext,
-		arg.KeySuffix,
-		arg.BaseUrl,
-		arg.EmailFrom,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const listServiceSettings = `-- name: ListServiceSettings :many

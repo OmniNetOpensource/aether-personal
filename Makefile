@@ -1,5 +1,5 @@
 # Makefile 编排全仓构建、静态检查、本地开发与生产一键发布；不包含任何本地测试目标。
-.PHONY: dev frontend admin check edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-import-services prod-up prod-status prod-backup publish publish-check
+.PHONY: dev frontend admin check edge-check edge-dry-run edge-dev edge-deploy prod-build prod-db-up prod-migrate prod-up prod-status prod-backup publish publish-check
 
 PROD_COMPOSE = docker compose --env-file infra/prod/.env -f infra/prod/compose.yaml
 
@@ -30,9 +30,6 @@ prod-db-up:
 prod-migrate:
 	$(PROD_COMPOSE) run --rm migrate
 
-prod-import-services:
-	$(PROD_COMPOSE) run --rm import-services
-
 prod-up:
 	$(PROD_COMPOSE) up -d --wait redis api-1 api-2 admin gateway
 
@@ -55,6 +52,7 @@ admin:
 	cd admin && pnpm install --frozen-lockfile && pnpm run build && pnpm start
 
 check:
+	@test "$$(find backend/cmd -mindepth 1 -maxdepth 1 ! -name '.DS_Store' | sort)" = "backend/cmd/server" || { echo "backend/cmd must contain only server"; exit 1; }
 	cd backend && go build ./... && go vet ./...
 	cd frontend && pnpm run check
 	cd admin && pnpm run check

@@ -100,26 +100,6 @@ services:
     security_opt: [no-new-privileges:true]
     logging: *logging
 
-  # 显式升级旧部署时执行一次；日常后端容器不接收这些旧服务 Key。
-  import-services:
-    image: aether-personal-backend:${RELEASE_TAG:-local}
-    profiles: [tools]
-    entrypoint: [/usr/local/bin/import-services]
-    environment:
-      APP_ENV: prod
-      DATABASE_URL: *database-url
-      SERVICE_ENCRYPTION_KEY: ${SERVICE_ENCRYPTION_KEY:?Set SERVICE_ENCRYPTION_KEY}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      EMAIL_FROM: ${EMAIL_FROM:-}
-      SERP_API_KEY: ${SERP_API_KEY:-}
-      PARALLEL_API_KEY: ${PARALLEL_API_KEY:-}
-      EVERYINFRA_API_KEY: ${EVERYINFRA_API_KEY:-}
-    depends_on:
-      postgres: { condition: service_healthy }
-    read_only: true
-    security_opt: [no-new-privileges:true]
-    logging: *logging
-
   admin:
     image: aether-personal-admin:${RELEASE_TAG:-local}
     build:

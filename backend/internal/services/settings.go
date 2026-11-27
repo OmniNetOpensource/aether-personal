@@ -30,21 +30,20 @@ const (
 	AliyunFC          = "aliyun_fc"
 )
 
-// Definition 提供看板名称与旧环境变量名称，导入命令与管理页使用同一份服务目录。
+// Definition 提供看板展示用的服务标识与名称。
 type Definition struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	LegacyKey string `json:"-"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 var Definitions = []Definition{
-	{OpenRouter, "OpenRouter", ""},
-	{Resend, "Resend", "RESEND_API_KEY"},
-	{Serper, "Serper", "SERP_API_KEY"},
-	{Parallel, "Parallel", "PARALLEL_API_KEY"},
-	{EveryInfra, "EveryInfra", "EVERYINFRA_API_KEY"},
-	{AliyunOSS, "阿里云 OSS", ""},
-	{AliyunFC, "阿里云 FC 沙箱", ""},
+	{OpenRouter, "OpenRouter"},
+	{Resend, "Resend"},
+	{Serper, "Serper"},
+	{Parallel, "Parallel"},
+	{EveryInfra, "EveryInfra"},
+	{AliyunOSS, "阿里云 OSS"},
+	{AliyunFC, "阿里云 FC 沙箱"},
 }
 
 // 固定错误让调用者区分未配置、解密失败、输入错误、资源不存在与名称冲突，不把秘密带入日志或 HTTP 响应。
@@ -163,7 +162,7 @@ func (s *Store) List(ctx context.Context) ([]Info, error) {
 }
 
 // Update 处理单管理员的一次修改：nil Key 保留，空 Key 清除，非空 Key 替换。
-// 清除仍保留数据库行，因此重新运行旧配置导入命令不会恢复被清除的 Key。
+// 清除保留空行以记录更新时间，后续使用该服务时报未配置。
 func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailFrom *string) error {
 	row, err := s.queries.GetServiceSettings(ctx, service)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -199,23 +198,6 @@ func (s *Store) Update(ctx context.Context, service string, key, baseURL, emailF
 		return err
 	}
 	return s.queries.SaveServiceSettings(ctx, settings)
-}
-
-// Import 仅填入从未配置过的服务，批量迁移由显式命令调用，正常启动不读取旧 Key。
-func (s *Store) Import(ctx context.Context, service string, settings Settings) (bool, error) {
-	if err := validate(service, settings.APIKey != "", settings.BaseURL, settings.EmailFrom); err != nil {
-		return false, err
-	}
-	if settings.APIKey == "" {
-		return false, nil
-	}
-	if err := validateAPIKey(settings.APIKey); err != nil {
-		return false, err
-	}
-	count, err := s.queries.ImportServiceSettings(ctx, database.ImportServiceSettingsParams{
-		Service: service, ApiKeyCiphertext: s.cipher.Seal(nil, nil, []byte(settings.APIKey), []byte(service)), KeySuffix: keySuffix(settings.APIKey), BaseUrl: settings.BaseURL, EmailFrom: settings.EmailFrom,
-	})
-	return count == 1, err
 }
 
 // validateAPIKey 限制密钥为可见 ASCII 字符串，供服务凭证与自定义模型供应商共用。

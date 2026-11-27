@@ -11,35 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const bindSandboxWorkspace = `-- name: BindSandboxWorkspace :one
-INSERT INTO sandbox_workspaces (user_id, server_addr, role_arn)
-VALUES ($1, $2, $3)
-ON CONFLICT (user_id) DO NOTHING
-RETURNING user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext
-`
-
-type BindSandboxWorkspaceParams struct {
-	UserID     uuid.UUID
-	ServerAddr string
-	RoleArn    string
-}
-
-func (q *Queries) BindSandboxWorkspace(ctx context.Context, arg BindSandboxWorkspaceParams) (SandboxWorkspace, error) {
-	row := q.db.QueryRow(ctx, bindSandboxWorkspace, arg.UserID, arg.ServerAddr, arg.RoleArn)
-	var i SandboxWorkspace
-	err := row.Scan(
-		&i.UserID,
-		&i.ServerAddr,
-		&i.RoleArn,
-		&i.SandboxID,
-		&i.TokenCiphertext,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.TrafficTokenCiphertext,
-	)
-	return i, err
-}
-
 const getSandboxWorkspace = `-- name: GetSandboxWorkspace :one
 
 SELECT user_id, server_addr, role_arn, sandbox_id, token_ciphertext, created_at, updated_at, traffic_token_ciphertext FROM sandbox_workspaces WHERE user_id = $1

@@ -41,7 +41,7 @@ func (s *Store) ensure(ctx context.Context, userID uuid.UUID) (*e2b.Sandbox, str
 	}
 	workspace, err := s.queries.GetSandboxWorkspace(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, "", errors.New("sandbox workspace is not configured; operator must run init-workspace")
+		return nil, "", errors.New("sandbox workspace is not configured")
 	}
 	if err != nil {
 		return nil, "", err

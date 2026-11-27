@@ -49,8 +49,6 @@ chmod 600 infra/prod/.env
 
 在 Cloudflare 创建仅允许聊天域名的 Turnstile widget，把公开 site key、秘密 Key、聊天域名分别填入 `TURNSTILE_SITE_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_HOSTNAME`。hostname 只填域名，不含协议和路径，例如 `aether.forkicks.fun`。缺少这些配置不阻止管理看板启动，但生产不发送登录验证码。不要将官方测试 Key 用于公开部署。验证与限流行为见 [03 生产验证码防刷](03-auth.md#生产验证码防刷)。
 
-旧部署升级时，先保留原服务变量、补充主密钥，构建新镜像并执行迁移，再运行一次 `make prod-import-services`。该命令只导入不存在的服务记录，不覆盖已保存或已清除的 Key。导入完成后从生产 `.env` 删除旧服务变量，日常 API 容器不再接收它们。新部署无需导入，先登录看板即可填写服务配置。
-
 为看板设置独立密码：
 
 ```sh
