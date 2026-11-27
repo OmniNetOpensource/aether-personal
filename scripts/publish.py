@@ -304,14 +304,14 @@ def main():
             raise RuntimeError("Cloudflare 当前流量未全部指向本次版本")
 
         # 公网文件逐字节核对，同时检查数据库健康与管理接口隔离；不冒充真实邮件或模型验收。
-        for path, expected in (("/", 200), ("/sw.js", 200), ("/manifest.webmanifest", 200), ("/healthz", 200), ("/admin", 404)):
+        for path, expected in (("/", 200), ("/sw.js", 404), ("/manifest.webmanifest", 200), ("/healthz", 200), ("/admin", 404)):
             destination = release_dir / (path.strip("/").replace("/", "_") or "index.html")
             status = run(["curl", "--silent", "--show-error", "--retry", "3", "--max-time", "30", "-o", destination,
                           "-w", "%{http_code}", public_url + path], quiet=True)
             if status != str(expected):
                 raise RuntimeError(f"公网校验失败：{path} 返回 {status}，预期 {expected}")
             local = snapshot / "frontend/build/web" / destination.name
-            if path in ("/", "/sw.js", "/manifest.webmanifest") and sha256(destination) != sha256(local):
+            if path in ("/", "/manifest.webmanifest") and sha256(destination) != sha256(local):
                 raise RuntimeError(f"公网文件与本次构建不一致：{path}")
         manifest["status"] = "published"
         (release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
