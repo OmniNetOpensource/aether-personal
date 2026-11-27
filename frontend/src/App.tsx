@@ -1,77 +1,22 @@
-// 本文件是聊天应用组件：随页面生命周期持有聊天控制器，切换登录与聊天界面，并处理可视视口和前后台重连。
+// 本文件是聊天应用组件：挂载 Effect 聊天会话与浏览器生命周期，按细粒度状态切换登录与聊天界面。
 
-import { useEffect, useState } from 'react';
-import { ChatController } from './lib/ChatController.js';
+import { useAtomMount, useAtomValue } from '@effect/atom-react';
+import { chatBrowserLifecycleAtom, chatSessionAtom, chatStateAtom } from './lib/runtime.js';
 import { ChatPage } from './components/chat/ChatPage.js';
 import { LoadingScreen } from './components/LoadingScreen.js';
 import { LoginPage } from './components/login/LoginPage.js';
 import { PwaControls } from './components/PwaControls.js';
 
-// 每次 effect 启动创建独立控制器，兼容 Strict Mode 的清理重跑和路由重挂载。
+// App 通过挂载 scoped Atom 持有聊天连接和浏览器前后台监听，组件卸载时自动释放 Scope。
 export function App() {
-  const [controller, setController] = useState<ChatController | null>(null);
-  const [, refresh] = useState(0);
-  useEffect(() => {
-    const controller = new ChatController();
-    setController(controller);
-    // 可视视口跟随移动键盘变化；路由卸载时一起移除监听。
-    const resize = () => {
-      const viewport = window.visualViewport;
-      document.documentElement.style.setProperty(
-        '--app-height',
-        `${viewport?.height ?? innerHeight}px`,
-      );
-      document.documentElement.style.setProperty('--app-top', `${viewport?.offsetTop ?? 0}px`);
-    };
-    window.visualViewport?.addEventListener('resize', resize);
-    window.visualViewport?.addEventListener('scroll', resize);
-    window.addEventListener('resize', resize);
-    resize();
+  useAtomMount(chatSessionAtom);
+  useAtomMount(chatBrowserLifecycleAtom);
+  const initializing = useAtomValue(chatStateAtom, (state) => state.initializing);
+  const hasToken = useAtomValue(chatStateAtom, (state) => Boolean(state.token));
 
-    // 页面隐藏时保留连接与自动重连；恢复网络或返回页面时确保连接存在。
-    const unsubscribe = controller.subscribe(() => refresh((value) => value + 1));
-    void controller.initialize();
-    const resume = () => {
-      if (navigator.onLine) controller.reconnect();
-    };
-    const suspend = () => {
-      controller.suspend();
-    };
-    const visibility = () => {
-      if (!document.hidden) resume();
-    };
-    const sessionChanged = (event: StorageEvent) => {
-      if (event.key === 'aether_session' && event.newValue !== controller.token) location.reload();
-    };
-    window.addEventListener('online', resume);
-    window.addEventListener('offline', suspend);
-    window.addEventListener('pageshow', resume);
-    window.addEventListener('pagehide', suspend);
-    window.addEventListener('storage', sessionChanged);
-    document.addEventListener('visibilitychange', visibility);
-    return () => {
-      unsubscribe();
-      controller.dispose();
-      window.visualViewport?.removeEventListener('resize', resize);
-      window.visualViewport?.removeEventListener('scroll', resize);
-      window.removeEventListener('resize', resize);
-      window.removeEventListener('online', resume);
-      window.removeEventListener('offline', suspend);
-      window.removeEventListener('pageshow', resume);
-      window.removeEventListener('pagehide', suspend);
-      window.removeEventListener('storage', sessionChanged);
-      document.removeEventListener('visibilitychange', visibility);
-    };
-  }, []);
   return (
     <>
-      {!controller || controller.initializing ? (
-        <LoadingScreen />
-      ) : controller.token ? (
-        <ChatPage controller={controller} />
-      ) : (
-        <LoginPage controller={controller} />
-      )}
+      {initializing ? <LoadingScreen /> : hasToken ? <ChatPage /> : <LoginPage />}
       <PwaControls />
     </>
   );

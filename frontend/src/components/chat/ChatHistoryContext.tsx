@@ -1,87 +1,93 @@
-// 本文件展示独立的历史上下文窗口：按消息 ID 定位、展开并高亮原文，使用普通滚动容器向两侧分页而不改动实时聊天。
+// 本文件展示独立的历史上下文窗口：按消息 ID 定位、展开并高亮原文，使用 Effect Atom 请求上下文并自动中断过期请求。
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useAtomSet } from '@effect/atom-react';
+import { Cause, Exit } from 'effect';
 import { chatMessageFromRow } from '../../lib/ChatController.js';
-import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
+import type { ChatMessage } from '../../lib/ChatController.js';
+import { formatCauseError } from '../../lib/errors.js';
+import type { MessageQuote } from '../../lib/messageAttachments.js';
+import { loadMessageContextAtom } from '../../lib/runtime.js';
 import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { highlightQuote } from './QuoteSelection.js';
-import type { MessageQuote } from '../../lib/messageAttachments.js';
 
 // 已加载的历史与正常聊天分开保存，单侧翻页失败时仍保留当前内容。
 type ContextState =
-  | { status: 'loading' }
-  | { status: 'error'; error: string }
+  | { readonly status: 'loading' }
+  | { readonly status: 'error'; readonly error: string }
   | {
-      status: 'ready';
-      messages: ChatMessage[];
-      hasMoreBefore: boolean;
-      hasMoreAfter: boolean;
-      loading: 'older' | 'newer' | null;
-      error: string | null;
+      readonly status: 'ready';
+      readonly messages: readonly ChatMessage[];
+      readonly hasMoreBefore: boolean;
+      readonly hasMoreAfter: boolean;
+      readonly loading: 'older' | 'newer' | null;
+      readonly error: string | null;
     };
 
 // ChatHistoryContext 共用聊天气泡与时间分组，命中的长消息默认展开，向上翻页时按高度差保持当前阅读位置。
 export function ChatHistoryContext({
-  controller,
   messageID,
   keyword,
   onBack,
   onClose,
   onLatest,
 }: {
-  controller: ChatController;
   messageID: string;
   keyword: string;
   onBack: () => void;
   onClose: () => void;
   onLatest: () => void;
 }) {
+  const loadContext = useAtomSet(loadMessageContextAtom, { mode: 'promiseExit' });
   const viewport = useRef<HTMLDivElement>(null);
   const back = useRef<HTMLButtonElement>(null);
-  const version = useRef(0);
   const paging = useRef(false);
+  const activeAnchorID = useRef(messageID);
   const pendingAnchorScroll = useRef(false);
   const prependAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const clearQuoteHighlight = useRef<() => void>(() => {});
-  const [anchor, setAnchor] = useState<{ id: string; quote?: MessageQuote }>({ id: messageID });
+  const [anchor, setAnchor] = useState<{ readonly id: string; readonly quote?: MessageQuote }>({
+    id: messageID,
+  });
   const [state, setState] = useState<ContextState>({ status: 'loading' });
   const [retry, setRetry] = useState(0);
   const [expanded, setExpanded] = useState(() => new Set([messageID]));
 
-  // 每个锚点有自己的请求版本；点击引用或退出窗口后，旧回执不再改变当前页面。
+  // 每次锚点切换发起新请求，AtomResultFn 自动中断上一条未完成的上下文加载。
   useEffect(() => {
-    const requestVersion = ++version.current;
+    let active = true;
+    activeAnchorID.current = anchor.id;
     paging.current = false;
     pendingAnchorScroll.current = true;
     prependAnchor.current = null;
     setState({ status: 'loading' });
     back.current?.focus({ preventScroll: true });
-    void controller.loadMessageContext(anchor.id, 'around').then(
-      (page) => {
-        if (version.current !== requestVersion) return;
+
+    void loadContext({ messageID: anchor.id, direction: 'around' }).then((exit) => {
+      if (!active) return;
+      if (Exit.isSuccess(exit)) {
         setState({
           status: 'ready',
-          messages: (page.messages ?? []).map(chatMessageFromRow),
-          hasMoreBefore: page.has_more_before,
-          hasMoreAfter: page.has_more_after,
+          messages: (exit.value.messages ?? []).map(chatMessageFromRow),
+          hasMoreBefore: exit.value.has_more_before,
+          hasMoreAfter: exit.value.has_more_after,
           loading: null,
           error: null,
         });
-      },
-      (error: unknown) => {
-        if (version.current !== requestVersion) return;
+      } else if (!Cause.hasInterruptsOnly(exit.cause)) {
         setState({
           status: 'error',
-          error: error instanceof Error ? error.message : '历史消息加载失败',
+          error: formatCauseError(exit.cause, '历史消息加载失败'),
         });
-      },
-    );
+      }
+    });
+
     return () => {
-      version.current++;
+      active = false;
       clearQuoteHighlight.current();
       clearQuoteHighlight.current = () => {};
     };
-  }, [controller, anchor, retry]);
+  }, [loadContext, anchor, retry]);
 
   // 向上翻出更早一页后按容器新增高度补齐 scrollTop，保持正在阅读的内容不跳动。
   const readyMessages = state.status === 'ready' ? state.messages : null;
@@ -98,9 +104,7 @@ export function ChatHistoryContext({
   useLayoutEffect(() => {
     if (!ready) return;
     const element = viewport.current;
-    const targetRow = element?.querySelector<HTMLElement>(
-      `[data-history-message="${anchor.id}"]`,
-    );
+    const targetRow = element?.querySelector<HTMLElement>(`[data-history-message="${anchor.id}"]`);
     const bubble = targetRow?.querySelector<HTMLElement>('.bubble');
     if (!element || !targetRow) return;
 
@@ -144,35 +148,48 @@ export function ChatHistoryContext({
     if (state.status !== 'ready' || paging.current) return;
     const edge = direction === 'older' ? state.messages[0] : state.messages.at(-1);
     if (!edge) return;
-    const requestVersion = version.current;
+    const targetAnchorID = anchor.id;
     paging.current = true;
     setState({ ...state, loading: direction, error: null });
     try {
-      const page = await controller.loadMessageContext(edge.id, direction);
-      if (version.current !== requestVersion) return;
-      const element = viewport.current;
-      if (direction === 'older' && element) {
-        prependAnchor.current = { scrollHeight: element.scrollHeight, scrollTop: element.scrollTop };
+      const exit = await loadContext({ messageID: edge.id, direction });
+      if (activeAnchorID.current !== targetAnchorID) return;
+      if (Exit.isSuccess(exit)) {
+        const element = viewport.current;
+        if (direction === 'older' && element) {
+          prependAnchor.current = {
+            scrollHeight: element.scrollHeight,
+            scrollTop: element.scrollTop,
+          };
+        }
+        setState((current) => {
+          if (current.status !== 'ready') return current;
+          const messages = new Map(current.messages.map((message) => [message.id, message]));
+          for (const row of exit.value.messages ?? [])
+            messages.set(row.id, chatMessageFromRow(row));
+          return {
+            ...current,
+            messages: [...messages.values()].sort((a, b) => a.position.localeCompare(b.position)),
+            hasMoreBefore:
+              direction === 'older' ? exit.value.has_more_before : current.hasMoreBefore,
+            hasMoreAfter: direction === 'newer' ? exit.value.has_more_after : current.hasMoreAfter,
+            loading: null,
+            error: null,
+          };
+        });
+      } else if (!Cause.hasInterruptsOnly(exit.cause)) {
+        setState((current) =>
+          current.status === 'ready'
+            ? {
+                ...current,
+                loading: null,
+                error: formatCauseError(exit.cause, '历史消息加载失败，请重试'),
+              }
+            : current,
+        );
       }
-      const messages = new Map(state.messages.map((message) => [message.id, message]));
-      for (const row of page.messages ?? []) messages.set(row.id, chatMessageFromRow(row));
-      setState({
-        ...state,
-        messages: [...messages.values()].sort((a, b) => a.position.localeCompare(b.position)),
-        hasMoreBefore: direction === 'older' ? page.has_more_before : state.hasMoreBefore,
-        hasMoreAfter: direction === 'newer' ? page.has_more_after : state.hasMoreAfter,
-        loading: null,
-        error: null,
-      });
-    } catch (error) {
-      if (version.current !== requestVersion) return;
-      setState({
-        ...state,
-        loading: null,
-        error: error instanceof Error ? error.message : '历史消息加载失败，请重试',
-      });
     } finally {
-      if (version.current === requestVersion) paging.current = false;
+      if (activeAnchorID.current === targetAnchorID) paging.current = false;
     }
   };
 

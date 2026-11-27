@@ -1,16 +1,20 @@
-// 本文件实现 /oauth/authorize 路由的第三方记忆授权页：校验客户端请求、未登录时内嵌原登录流程、确认后跳回外部 MCP 客户端。
+// 本文件实现 /oauth/authorize 路由的第三方记忆授权页：由 Effect Atom 核验授权上下文、内嵌登录并提交授权决策。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AuthError } from '../../lib/api.js';
-import { ChatController } from '../../lib/ChatController.js';
+import { useEffect, useMemo, useState } from 'react';
+import { useAtomMount, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
+import { Exit } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { formatCauseError, isAuthFailure } from '../../lib/errors.js';
+import { readOAuthAuthorizeParams } from '../../lib/oauth.js';
 import {
-  fetchOAuthAuthorizeContext,
-  readOAuthAuthorizeParams,
-  submitOAuthAuthorizeDecision,
-} from '../../lib/oauth.js';
-import type { OAuthAuthorizeContext } from '../../lib/oauth.js';
-import { clearSession, readSession } from '../../lib/platform.js';
+  browserSessionAtom,
+  chatSessionAtom,
+  chatStateAtom,
+  clearBrowserSessionAtom,
+  oauthAuthorizeContextAtom,
+  submitOAuthDecisionAtom,
+} from '../../lib/runtime.js';
 import { LoadingScreen } from '../LoadingScreen.js';
 import { LoginPage } from '../login/LoginPage.js';
 import './oauth.css';
@@ -19,54 +23,47 @@ import './oauth.css';
 export function OAuthAuthorizePage() {
   const search = window.location.search;
   const params = useMemo(() => readOAuthAuthorizeParams(search), [search]);
-  const [contextLoading, setContextLoading] = useState(true);
-  const [contextError, setContextError] = useState('');
-  const [authContext, setAuthContext] = useState<OAuthAuthorizeContext | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(() => readSession().token);
-  const [sessionEmail, setSessionEmail] = useState<string>(() => readSession().email);
+  const contextResult = useAtomValue(oauthAuthorizeContextAtom(search));
+  const sessionResult = useAtomValue(browserSessionAtom);
+  const clearSession = useAtomSet(clearBrowserSessionAtom, { mode: 'promiseExit' });
+  const submitDecision = useAtomSet(submitOAuthDecisionAtom, { mode: 'promiseExit' });
+
+  const [overrideSession, setOverrideSession] = useState<{
+    readonly token: string | null;
+    readonly email: string;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
-  // 页面加载时先由服务端核验 client_id 与 redirect_uri，再决定展示授权页、报错或直接回跳。
+  // 服务端返回直接错误回调地址时立刻跳回外部客户端。
   useEffect(() => {
-    const abortController = new AbortController();
-    setContextLoading(true);
-    setContextError('');
-    void fetchOAuthAuthorizeContext(search, abortController.signal)
-      .then((result) => {
-        if (abortController.signal.aborted) return;
-        if (result.redirect_to) {
-          window.location.replace(result.redirect_to);
-          return;
-        }
-        if (result.error) {
-          setContextError(result.error);
-          setContextLoading(false);
-          return;
-        }
-        setAuthContext(result);
-        setContextLoading(false);
-      })
-      .catch((error: unknown) => {
-        if (abortController.signal.aborted) return;
-        setContextError(error instanceof Error ? error.message : '无法加载授权信息');
-        setContextLoading(false);
-      });
-    return () => abortController.abort();
-  }, [search]);
+    if (AsyncResult.isSuccess(contextResult) && contextResult.value.redirect_to) {
+      window.location.replace(contextResult.value.redirect_to);
+    }
+  }, [contextResult]);
 
-  if (contextLoading) {
+  if (AsyncResult.isInitial(contextResult) || AsyncResult.isInitial(sessionResult)) {
     return <LoadingScreen />;
   }
 
-  if (contextError || !authContext) {
+  if (
+    AsyncResult.isFailure(contextResult) ||
+    contextResult.value.redirect_to ||
+    contextResult.value.error
+  ) {
+    if (AsyncResult.isSuccess(contextResult) && contextResult.value.redirect_to) {
+      return <LoadingScreen />;
+    }
+    const contextError = AsyncResult.isFailure(contextResult)
+      ? formatCauseError(contextResult.cause, '无法加载授权信息')
+      : contextResult.value.error || '授权请求无效';
     return (
       <main className="oauth-page">
         <section className="oauth-card" role="alert">
           <div className="oauth-header">
             <span className="oauth-badge">aether Memory MCP</span>
             <h1>无法完成授权</h1>
-            <p>{contextError || '授权请求无效'}</p>
+            <p>{contextError}</p>
           </div>
           <div className="oauth-actions">
             <Link to="/" className="oauth-btn-primary">
@@ -78,13 +75,17 @@ export function OAuthAuthorizePage() {
     );
   }
 
+  const authContext = contextResult.value;
+  const baseSession = AsyncResult.isSuccess(sessionResult) ? sessionResult.value : null;
+  const sessionToken = overrideSession ? overrideSession.token : (baseSession?.token ?? null);
+  const sessionEmail = overrideSession ? overrideSession.email : (baseSession?.email ?? '');
+
   // 未登录或旧会话失效时在当前页内嵌现有邮箱登录流程，登录完成后自动回到授权确认卡片。
   if (!sessionToken) {
     return (
       <EmbeddedAuthorizeLogin
         onAuthenticated={(token, email) => {
-          setSessionToken(token);
-          setSessionEmail(email);
+          setOverrideSession({ token, email });
           setSubmitError('');
         }}
       />
@@ -96,17 +97,20 @@ export function OAuthAuthorizePage() {
     setSubmitting(true);
     setSubmitError('');
     try {
-      const redirectTo = await submitOAuthAuthorizeDecision(sessionToken, params, approve);
-      window.location.replace(redirectTo);
-    } catch (error: unknown) {
-      if (error instanceof AuthError) {
-        clearSession();
-        setSessionToken(null);
-        setSessionEmail('');
+      const exit = await submitDecision({ token: sessionToken, params, approve });
+      if (Exit.isFailure(exit)) {
+        if (isAuthFailure(exit.cause)) {
+          await clearSession(undefined);
+          setOverrideSession({ token: null, email: '' });
+          setSubmitting(false);
+          return;
+        }
+        setSubmitError(formatCauseError(exit.cause, '提交授权失败，请重试'));
         setSubmitting(false);
         return;
       }
-      setSubmitError(error instanceof Error ? error.message : '提交授权失败，请重试');
+      window.location.replace(exit.value);
+    } catch {
       setSubmitting(false);
     }
   };
@@ -168,36 +172,25 @@ export function OAuthAuthorizePage() {
   );
 }
 
-// EmbeddedAuthorizeLogin 复用现有聊天 WebSocket 登录流程（含生产 Turnstile 与开发自动登录），登录成功后回传令牌。
+// EmbeddedAuthorizeLogin 复用现有聊天 WebSocket 登录流程，登录成功后回传令牌并卸载释放会话 Scope。
 function EmbeddedAuthorizeLogin({
   onAuthenticated,
 }: {
   onAuthenticated: (token: string, email: string) => void;
 }) {
-  const [controller, setController] = useState<ChatController | null>(null);
-  const [, refresh] = useState(0);
-  const onAuthenticatedRef = useRef(onAuthenticated);
-  onAuthenticatedRef.current = onAuthenticated;
+  useAtomMount(chatSessionAtom);
+  const initializing = useAtomValue(chatStateAtom, (state) => state.initializing);
+  const token = useAtomValue(chatStateAtom, (state) => state.token);
+  const email = useAtomValue(chatStateAtom, (state) => state.email);
 
   useEffect(() => {
-    const nextController = new ChatController();
-    setController(nextController);
-    const unsubscribe = nextController.subscribe(() => {
-      if (nextController.token) {
-        onAuthenticatedRef.current(nextController.token, nextController.email);
-        return;
-      }
-      refresh((value) => value + 1);
-    });
-    void nextController.initialize();
-    return () => {
-      unsubscribe();
-      nextController.dispose();
-    };
-  }, []);
+    if (token) {
+      onAuthenticated(token, email);
+    }
+  }, [token, email, onAuthenticated]);
 
-  if (!controller || controller.initializing) {
+  if (initializing) {
     return <LoadingScreen />;
   }
-  return <LoginPage controller={controller} />;
+  return <LoginPage />;
 }

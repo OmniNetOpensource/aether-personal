@@ -1,8 +1,9 @@
-// 本文件组合聊天列表、输入框、历史搜索、只读桌面、模型设置与账号入口；浮层保留聊天草稿和阅读位置。
+// 本文件组合聊天列表、输入框、历史搜索、只读桌面、模型设置与账号入口；状态通过 Effect Atom 细粒度订阅。
 
 import { useEffect, useRef, useState } from 'react';
-import type { ChatController } from '../../lib/ChatController.js';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
+import { chatStateAtom, signOutAtom } from '../../lib/runtime.js';
 import type { MessageComposerHandle } from './MessageComposer.js';
 import { ChatMessageList } from './ChatMessageList.js';
 import { MessageComposer } from './MessageComposer.js';
@@ -11,7 +12,12 @@ import { DesktopViewer } from './DesktopViewer.js';
 import { ChatModelSettings } from './ChatModelSettings.js';
 
 // ChatPage 承载登录后的全屏对话界面与右上角悬浮操作入口。
-export function ChatPage({ controller }: { controller: ChatController }) {
+export function ChatPage() {
+  const desktopAvailable = useAtomValue(chatStateAtom, (state) => state.desktopAvailable);
+  const email = useAtomValue(chatStateAtom, (state) => state.email);
+  const token = useAtomValue(chatStateAtom, (state) => state.token);
+  const signOut = useAtomSet(signOutAtom, { mode: 'promiseExit' });
+
   const composer = useRef<MessageComposerHandle | null>(null);
   const accountWrap = useRef<HTMLDivElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -44,15 +50,14 @@ export function ChatPage({ controller }: { controller: ChatController }) {
   return (
     <main className="chat-page">
       <ChatMessageList
-        controller={controller}
         latestRequest={latestRequest}
         onQuote={(quote) => {
           composer.current?.insertQuote(quote);
         }}
       />
-      <MessageComposer controller={controller} composerRef={composer} />
+      <MessageComposer composerRef={composer} />
       <div className="chat-floating-actions">
-        {controller.desktopAvailable && (
+        {desktopAvailable && (
           <button
             type="button"
             className="chat-action-btn"
@@ -101,8 +106,8 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           </button>
           {accountOpen && (
             <div className="chat-account-popover" role="dialog" aria-label="当前账号">
-              <p className="chat-account-email" title={controller.email}>
-                {controller.email || '已登录账号'}
+              <p className="chat-account-email" title={email}>
+                {email || '已登录账号'}
               </p>
               <button
                 type="button"
@@ -127,7 +132,7 @@ export function ChatPage({ controller }: { controller: ChatController }) {
                 disabled={signingOut}
                 onClick={async () => {
                   setSigningOut(true);
-                  await controller.signOut();
+                  await signOut(undefined);
                 }}
               >
                 {signingOut ? '正在退出…' : '退出登录'}
@@ -136,9 +141,9 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           )}
         </div>
       </div>
-      {modelsOpen && controller.token && (
+      {modelsOpen && token && (
         <ChatModelSettings
-          token={controller.token}
+          token={token}
           onClose={() => {
             setModelsOpen(false);
             requestAnimationFrame(() => accountButton.current?.focus({ preventScroll: true }));
@@ -147,7 +152,6 @@ export function ChatPage({ controller }: { controller: ChatController }) {
       )}
       {searchOpen && (
         <ChatHistorySearch
-          controller={controller}
           onClose={() => setSearchOpen(false)}
           onLatest={() => {
             setSearchOpen(false);
@@ -155,8 +159,8 @@ export function ChatPage({ controller }: { controller: ChatController }) {
           }}
         />
       )}
-      {desktopOpen && controller.token && (
-        <DesktopViewer token={controller.token} onClose={() => setDesktopOpen(false)} />
+      {desktopOpen && token && (
+        <DesktopViewer token={token} onClose={() => setDesktopOpen(false)} />
       )}
     </main>
   );

@@ -1,28 +1,35 @@
-// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片与文件上传和草稿，展示发送中与发送失败，发送成功后清空输入。
+// 本文件组合多模态编辑器与发送工具栏：统一管理文字、引用、图片与文件上传和草稿，通过 Effect Atom 执行附件并发上传与可靠发送。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { uploadAttachments } from '../../lib/messageAttachments.js';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Exit } from 'effect';
+import { formatCauseError } from '../../lib/errors.js';
 import type { MessagePart, MessageQuote } from '../../lib/messageAttachments.js';
+import { chatStateAtom, sendMessageAtom, uploadAttachmentsAtom } from '../../lib/runtime.js';
 import { RichMessageInput } from './RichMessageInput.js';
 import type { RichMessageInputHandle } from './RichMessageInput.js';
-import type { ChatController } from '../../lib/ChatController.js';
 
 // MessageComposerHandle 供消息列表把选区引用插入当前光标处。
 export interface MessageComposerHandle {
   insertQuote: (quote: MessageQuote) => void;
 }
 
-// MessageComposer 以结构化内容作为草稿，编辑器负责光标、混排和撤销，控制器负责可靠发送。
+// MessageComposer 以结构化内容作为草稿，编辑器负责光标、混排和撤销，Effect Atom 负责上传与发送。
 export function MessageComposer({
-  controller,
   composerRef,
 }: {
-  controller: ChatController;
   composerRef: RefObject<MessageComposerHandle | null>;
 }) {
-  const draftKey = `aether_draft:${controller.email}`;
-  const [parts, setParts] = useState<MessagePart[]>(() => {
+  const email = useAtomValue(chatStateAtom, (state) => state.email);
+  const token = useAtomValue(chatStateAtom, (state) => state.token);
+  const connected = useAtomValue(chatStateAtom, (state) => state.connected);
+  const desktopAvailable = useAtomValue(chatStateAtom, (state) => state.desktopAvailable);
+  const uploadAttachments = useAtomSet(uploadAttachmentsAtom, { mode: 'promiseExit' });
+  const sendMessage = useAtomSet(sendMessageAtom, { mode: 'promiseExit' });
+
+  const draftKey = `aether_draft:${email}`;
+  const [parts, setParts] = useState<readonly MessagePart[]>(() => {
     try {
       const text = sessionStorage.getItem(draftKey);
       return text ? [{ type: 'text', text }] : [];
@@ -73,22 +80,24 @@ export function MessageComposer({
     return () => observer.disconnect();
   }, []);
 
-  // addFiles 统一处理选择、粘贴与拖放的图片和工作区文件，失败保留其余草稿以便继续编辑。
+  // addFiles 统一处理选择、粘贴与拖放的图片和工作区文件，任一失败自动取消剩余上传并保留草稿。
   const addFiles = async (files: File[]) => {
-    if (readingRef.current || files.length === 0 || !controller.token) return;
+    if (readingRef.current || files.length === 0 || !token) return;
     readingRef.current = true;
     setReading(true);
     try {
-      const uploaded = await uploadAttachments(
-        controller.token,
+      const exit = await uploadAttachments({
+        token,
         files,
-        parts,
-        controller.desktopAvailable,
-      );
-      input.current?.insert(uploaded);
+        existing: parts,
+        workspaceEnabled: desktopAvailable,
+      });
+      if (Exit.isFailure(exit)) {
+        setError(formatCauseError(exit.cause, '附件上传失败'));
+        return;
+      }
+      input.current?.insert(exit.value);
       setError('');
-    } catch (error) {
-      setError(error instanceof Error ? error.message : '附件上传失败');
     } finally {
       readingRef.current = false;
       setReading(false);
@@ -120,13 +129,16 @@ export function MessageComposer({
     setSending(true);
     setError('');
     try {
-      if (await controller.send(parts, clientMessageID.current)) {
+      const exit = await sendMessage({ parts, clientMessageID: clientMessageID.current });
+      if (Exit.isFailure(exit)) {
+        setError(`发送失败：${formatCauseError(exit.cause, '请稍后重试')}`);
+        return;
+      }
+      if (exit.value) {
         input.current?.clear();
         setParts([]);
         clientMessageID.current = crypto.randomUUID();
       }
-    } catch (error) {
-      setError(`发送失败：${error instanceof Error ? error.message : '请稍后重试'}`);
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -135,7 +147,7 @@ export function MessageComposer({
 
   return (
     <div className="composer-padding" ref={composerPadding}>
-      {!controller.connected && (
+      {!connected && (
         <p className="composer-connection-hint" role="status">
           {typeof navigator !== 'undefined' && !navigator.onLine
             ? '当前处于离线状态，可先编辑草稿，恢复网络后自动连接'
@@ -170,11 +182,9 @@ export function MessageComposer({
           ref={fileInput}
           type="file"
           multiple
-          accept={
-            controller.desktopAvailable ? undefined : 'image/png,image/jpeg,image/gif,image/webp'
-          }
+          accept={desktopAvailable ? undefined : 'image/png,image/jpeg,image/gif,image/webp'}
           hidden
-          aria-label={controller.desktopAvailable ? '选择图片或文件' : '选择图片'}
+          aria-label={desktopAvailable ? '选择图片或文件' : '选择图片'}
           onChange={(event) => {
             void addFiles(Array.from(event.currentTarget.files ?? []));
             event.currentTarget.value = '';
@@ -200,9 +210,9 @@ export function MessageComposer({
           <button
             type="button"
             className="attach-button"
-            aria-label={controller.desktopAvailable ? '添加图片或文件' : '添加图片'}
+            aria-label={desktopAvailable ? '添加图片或文件' : '添加图片'}
             title={
-              controller.desktopAvailable
+              desktopAvailable
                 ? '添加图片或文件（上限 50 MB），也可粘贴或拖入'
                 : '添加图片，也可粘贴或拖入'
             }

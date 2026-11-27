@@ -1,40 +1,55 @@
-// 本文件定义个人模型设置的数据结构，并封装读取与保存模型配置的同源 HTTP 请求。
+// 本文件用 Effect Schema 定义个人模型设置的数据结构，并封装读取与保存模型配置的 Effect 请求。
 
-import { requestAPI } from './api.js';
+import { Effect, Schema } from 'effect';
+import { HttpBody } from 'effect/http';
+import { ApiClient } from './api.js';
+import type { ApiError } from './api.js';
 
-// ModelSelection 描述当前账号选择的 Main、Subagent 模型 ID 与服务端并发版本号。
-export interface ModelSelection {
-  main_model: string;
-  subagent_model: string;
-  version: number;
-}
+// ModelSelectionSchema 描述当前账号选择的 Main、Subagent 模型 ID 与服务端并发版本号。
+export const ModelSelectionSchema = Schema.Struct({
+  main_model: Schema.String,
+  subagent_model: Schema.String,
+  version: Schema.Number,
+});
+export type ModelSelection = typeof ModelSelectionSchema.Type;
 
-// ModelSettings 包含当前选择、可选模型目录以及目录加载状态提示。
-export interface ModelSettings {
-  selection: ModelSelection;
-  models: { id: string; name: string }[];
-  catalog_notice: string;
-}
+// ModelCatalogItemSchema 描述模型目录中的单个可选项。
+export const ModelCatalogItemSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+});
 
-// getModelSettings 读取当前账号的模型选择与可选目录，关闭浮层时可通过 signal 取消。
-export async function getModelSettings(token: string, signal: AbortSignal): Promise<ModelSettings> {
-  const response = await requestAPI('/model-settings', token, {
-    signal,
-    fallbackError: '模型设置暂时不可用，请稍后重试',
+// ModelSettingsSchema 包含当前选择、可选模型目录以及目录加载状态提示。
+export const ModelSettingsSchema = Schema.Struct({
+  selection: ModelSelectionSchema,
+  models: Schema.Array(ModelCatalogItemSchema),
+  catalog_notice: Schema.String,
+});
+export type ModelSettings = typeof ModelSettingsSchema.Type;
+
+// getModelSettingsEffect 读取当前账号的模型选择与可选目录，Fiber 中断时自动取消底层请求。
+export function getModelSettingsEffect(
+  token: string,
+): Effect.Effect<ModelSettings, ApiError, ApiClient> {
+  return Effect.gen(function* () {
+    const api = yield* ApiClient;
+    return yield* api.requestJson('/model-settings', token, ModelSettingsSchema, {
+      fallbackError: '模型设置暂时不可用，请稍后重试',
+    });
   });
-  return (await response.json()) as ModelSettings;
 }
 
-// saveModelSettings 提交修改后的模型选择与版本号，返回服务端确认的最新配置。
-export async function saveModelSettings(
+// saveModelSettingsEffect 提交修改后的模型选择与版本号，返回服务端确认的最新配置。
+export function saveModelSettingsEffect(
   token: string,
   selection: ModelSelection,
-): Promise<ModelSelection> {
-  const response = await requestAPI('/model-settings', token, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(selection),
-    fallbackError: '模型设置暂时不可用，请稍后重试',
+): Effect.Effect<ModelSelection, ApiError, ApiClient> {
+  return Effect.gen(function* () {
+    const api = yield* ApiClient;
+    return yield* api.requestJson('/model-settings', token, ModelSelectionSchema, {
+      method: 'PUT',
+      body: HttpBody.jsonUnsafe(selection),
+      fallbackError: '模型设置暂时不可用，请稍后重试',
+    });
   });
-  return (await response.json()) as ModelSelection;
 }

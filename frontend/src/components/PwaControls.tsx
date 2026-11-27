@@ -1,50 +1,69 @@
-// 本文件注册 Service Worker，并在打开、重新联网或回到前台时检查最新版本。
+// 本文件用 Effect Scope 与 Schedule 注册 Service Worker，并在打开、重新联网、回到前台或每分钟检查最新版本。
 
 import { useEffect, useState } from 'react';
+import { Effect, Fiber, Schedule } from 'effect';
 
 // PwaControls 为活跃页面定期检查更新；Service Worker 安装完成后负责切换应用页面。
 export function PwaControls() {
   const [offlineUnavailable, setOfflineUnavailable] = useState(false);
+
   useEffect(() => {
     if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
-    let disposed = false;
-    let registration: ServiceWorkerRegistration | undefined;
-    let checking = false;
 
-    // 一分钟检查一次活跃标签页，焦点、前后台和网络变化时立即再检查。
-    const refresh = () => {
-      if (!registration || checking || document.hidden || !navigator.onLine) return;
-      checking = true;
-      void registration
-        .update()
-        .catch(() => {})
-        .finally(() => {
-          checking = false;
+    const program = Effect.scoped(
+      Effect.gen(function* () {
+        const registration = yield* Effect.tryPromise(() =>
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
+        ).pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              setOfflineUnavailable(true);
+            }).pipe(Effect.andThen(Effect.fail('register_failed' as const))),
+          ),
+        );
+
+        let checking = false;
+        const refresh = Effect.gen(function* () {
+          if (checking || document.hidden || !navigator.onLine) return;
+          checking = true;
+          yield* Effect.tryPromise(() => registration.update()).pipe(
+            Effect.ignore,
+            Effect.ensuring(
+              Effect.sync(() => {
+                checking = false;
+              }),
+            ),
+          );
         });
-    };
-    void navigator.serviceWorker
-      .register('/sw.js', { updateViaCache: 'none' })
-      .then((value) => {
-        if (disposed) return;
-        registration = value;
-        refresh();
-      })
-      .catch(() => {
-        if (!disposed) setOfflineUnavailable(true);
-      });
 
-    const interval = window.setInterval(refresh, 60_000);
-    document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('online', refresh);
-    window.addEventListener('focus', refresh);
-    window.addEventListener('pageshow', refresh);
+        const triggerRefresh = () => {
+          Effect.runFork(refresh);
+        };
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            document.addEventListener('visibilitychange', triggerRefresh);
+            window.addEventListener('online', triggerRefresh);
+            window.addEventListener('focus', triggerRefresh);
+            window.addEventListener('pageshow', triggerRefresh);
+            return () => {
+              document.removeEventListener('visibilitychange', triggerRefresh);
+              window.removeEventListener('online', triggerRefresh);
+              window.removeEventListener('focus', triggerRefresh);
+              window.removeEventListener('pageshow', triggerRefresh);
+            };
+          }),
+          (cleanup) => Effect.sync(cleanup),
+        );
+
+        // 打开后立即检查一次，之后每 60 秒轮询一次直到组件卸载中断。
+        yield* Effect.repeat(refresh, Schedule.spaced('60 seconds'));
+      }),
+    ).pipe(Effect.ignore);
+
+    const fiber = Effect.runFork(program);
     return () => {
-      disposed = true;
-      window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('online', refresh);
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('pageshow', refresh);
+      Effect.runFork(Fiber.interrupt(fiber));
     };
   }, []);
 

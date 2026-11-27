@@ -1,182 +1,59 @@
-// 本文件实现 /memories 路由的双栏只读记忆浏览页，展示左侧可筛选文件列表、右侧 Markdown 预览以及远程 MCP 接入管理弹窗。
+// 本文件实现 /memories 路由的双栏只读记忆浏览页，由 Effect Atom 驱动文件清单、按需正文读取以及远程 MCP 接入管理弹窗。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AuthError } from '../../lib/api.js';
-import { fetchMemoryFileContent, fetchMemoryFiles } from '../../lib/memories.js';
-import type { MemoryFileDetail, MemoryFileSummary } from '../../lib/memories.js';
-import { formatFileSize } from '../../lib/messageAttachments.js';
+import { useAtomRefresh, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
-import { fetchOAuthConnections, revokeOAuthConnection } from '../../lib/oauth.js';
-import type { OAuthConnectionSummary } from '../../lib/oauth.js';
-import { readSession } from '../../lib/platform.js';
+import { Exit } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { formatCauseError, isAuthFailure } from '../../lib/errors.js';
+import type { MemoryFileSummary } from '../../lib/memories.js';
+import { formatFileSize } from '../../lib/messageAttachments.js';
+import {
+  browserSessionAtom,
+  memoryFileContentAtom,
+  memoryFilesAtom,
+  oauthConnectionsAtom,
+  revokeOAuthConnectionAtom,
+} from '../../lib/runtime.js';
 import { LoadingScreen } from '../LoadingScreen.js';
 import { ModalDialog } from '../ModalDialog.js';
 import { Markdown } from '../markdown/Markdown.js';
 import './memories.css';
 
-type PageStatus = 'loading' | 'unauthenticated' | 'error' | 'ready';
-
-// MemoriesPage 管理当前账号记忆列表与按需拉取的正文缓存，全程只读不改写数据库。
+// MemoriesPage 读取当前账号的记忆文件列表；未登录或会话失效时引导返回对话登录。
 export function MemoriesPage() {
-  const [status, setStatus] = useState<PageStatus>('loading');
-  const [pageError, setPageError] = useState('');
-  const [token, setToken] = useState<string | null>(null);
-  const [email, setEmail] = useState('');
-  const [files, setFiles] = useState<MemoryFileSummary[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
-  const [fileCache, setFileCache] = useState<Record<string, MemoryFileDetail>>({});
-  const [loadingPath, setLoadingPath] = useState<string | null>(null);
-  const [fileError, setFileError] = useState('');
-  const [filterText, setFilterText] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
-  const [reloadCount, setReloadCount] = useState(0);
-  const [fileRetry, setFileRetry] = useState(0);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const activePathRef = useRef<string | null>(null);
-  activePathRef.current = activePath;
+  const sessionResult = useAtomValue(browserSessionAtom);
+  const refreshSession = useAtomRefresh(browserSessionAtom);
+  const [authExpired, setAuthExpired] = useState(false);
 
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
-
-  // 初始化或刷新时重新读取会话与文件清单，尽量停留在当前查看的文件。
-  useEffect(() => {
-    const abortController = new AbortController();
-    setStatus((current) => (current === 'ready' ? 'ready' : 'loading'));
-    setPageError('');
-
-    const session = readSession();
-    if (!session.token) {
-      setToken(null);
-      setStatus('unauthenticated');
-      return () => abortController.abort();
-    }
-    setToken(session.token);
-    setEmail(session.email);
-
-    void fetchMemoryFiles(session.token, abortController.signal)
-      .then((loadedFiles) => {
-        if (abortController.signal.aborted) return;
-        const validPaths = new Set(loadedFiles.map((item) => item.path));
-        const preferredPath =
-          (activePathRef.current && validPaths.has(activePathRef.current)
-            ? activePathRef.current
-            : null) ??
-          (validPaths.has('/memories/memory.md')
-            ? '/memories/memory.md'
-            : (loadedFiles[0]?.path ?? null));
-        setFiles(loadedFiles);
-        setFileCache({});
-        setFileError('');
-        setActivePath(preferredPath);
-        setStatus('ready');
-      })
-      .catch((error: unknown) => {
-        if (abortController.signal.aborted) return;
-        if (error instanceof AuthError) {
-          setToken(null);
-          setStatus('unauthenticated');
-          return;
-        }
-        setPageError(error instanceof Error ? error.message : '记忆加载失败，请稍后重试');
-        setStatus('error');
-      });
-
-    return () => abortController.abort();
-  }, [reloadCount]);
-
-  // 选中文件切换或点击重试时，按需拉取该文件的完整文本。
-  useEffect(() => {
-    if (status !== 'ready' || !token || !activePath) return;
-    if (fileCache[activePath]) {
-      setLoadingPath(null);
-      setFileError('');
-      return;
-    }
-
-    const abortController = new AbortController();
-    setLoadingPath(activePath);
-    setFileError('');
-
-    void fetchMemoryFileContent(token, activePath, abortController.signal)
-      .then((detail) => {
-        if (abortController.signal.aborted) return;
-        setFileCache((previous) => ({ ...previous, [detail.path]: detail }));
-        setLoadingPath(null);
-      })
-      .catch((error: unknown) => {
-        if (abortController.signal.aborted) return;
-        if (error instanceof AuthError) {
-          setToken(null);
-          setStatus('unauthenticated');
-          return;
-        }
-        setLoadingPath(null);
-        setFileError(error instanceof Error ? error.message : '无法读取该记忆文件');
-      });
-
-    return () => abortController.abort();
-  }, [status, token, activePath, fileCache, fileRetry]);
-
-  const filteredFiles = useMemo(() => {
-    const query = filterText.trim().toLowerCase();
-    if (!query) return files;
-    return files.filter((item) => item.path.toLowerCase().includes(query));
-  }, [files, filterText]);
-
-  const activeDetail = activePath ? fileCache[activePath] : undefined;
-  const activeSummary = activePath ? files.find((item) => item.path === activePath) : undefined;
-  const activeUpdatedAt = activeDetail?.updated_at ?? activeSummary?.updated_at;
-
-  const copyActiveContent = async () => {
-    if (!activeDetail) return;
-    await navigator.clipboard.writeText(activeDetail.content);
-    setCopied(true);
-    clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1800);
-  };
-
-  if (status === 'loading') {
+  if (AsyncResult.isInitial(sessionResult)) {
     return <LoadingScreen />;
   }
 
-  if (status === 'unauthenticated' || status === 'error') {
+  const session = AsyncResult.isSuccess(sessionResult) ? sessionResult.value : null;
+  if (!session?.token || authExpired) {
     return (
       <main className="memories-page">
         <MemoriesTitleBar
-          email={status === 'error' ? email : ''}
+          email=""
           refreshing={false}
           showSidebarToggle={false}
           showMCPButton={false}
           sidebarOpen={false}
           onToggleSidebar={() => {}}
           onOpenMCP={() => {}}
-          onRefresh={() => setReloadCount((count) => count + 1)}
+          onRefresh={() => {
+            setAuthExpired(false);
+            refreshSession();
+          }}
         />
         <div className="memories-center-state">
-          <section className="memories-state-card" role={status === 'error' ? 'alert' : undefined}>
-            <h2>{status === 'unauthenticated' ? '请先登录' : '无法读取记忆'}</h2>
-            <p>
-              {status === 'unauthenticated'
-                ? '记忆文件属于你的个人账号，返回主页登录后即可查看。'
-                : pageError}
-            </p>
-            {status === 'unauthenticated' ? (
-              <Link to="/" className="memories-primary-action">
-                返回登录 / 对话
-              </Link>
-            ) : (
-              <button
-                type="button"
-                className="memories-primary-action"
-                onClick={() => {
-                  setStatus('loading');
-                  setReloadCount((count) => count + 1);
-                }}
-              >
-                重新加载
-              </button>
-            )}
+          <section className="memories-state-card">
+            <h2>请先登录</h2>
+            <p>记忆文件属于你的个人账号，返回主页登录后即可查看。</p>
+            <Link to="/" className="memories-primary-action">
+              返回登录 / 对话
+            </Link>
           </section>
         </div>
       </main>
@@ -184,16 +61,103 @@ export function MemoriesPage() {
   }
 
   return (
+    <MemoriesWorkbench
+      token={session.token}
+      email={session.email}
+      onAuthExpired={() => setAuthExpired(true)}
+    />
+  );
+}
+
+const emptyMemoryFiles: readonly MemoryFileSummary[] = [];
+
+// MemoriesWorkbench 承载已登录状态下的记忆文件筛选、正文预览与 MCP 接入弹窗。
+function MemoriesWorkbench({
+  token,
+  email,
+  onAuthExpired,
+}: {
+  token: string;
+  email: string;
+  onAuthExpired: () => void;
+}) {
+  const filesAtom = memoryFilesAtom(token);
+  const filesResult = useAtomValue(filesAtom);
+  const refreshFiles = useAtomRefresh(filesAtom);
+
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [filterText, setFilterText] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+
+  useEffect(() => {
+    if (AsyncResult.isFailure(filesResult) && isAuthFailure(filesResult.cause)) {
+      onAuthExpired();
+    }
+  }, [filesResult, onAuthExpired]);
+
+  const files = AsyncResult.isSuccess(filesResult) ? filesResult.value : emptyMemoryFiles;
+
+  // 列表更新后尽量停留在当前查看文件，否则优先落到根文档 /memories/memory.md。
+  useEffect(() => {
+    if (!AsyncResult.isSuccess(filesResult)) return;
+    const validPaths = new Set(filesResult.value.map((item) => item.path));
+    setActivePath((current) => {
+      if (current && validPaths.has(current)) return current;
+      if (validPaths.has('/memories/memory.md')) return '/memories/memory.md';
+      return filesResult.value[0]?.path ?? null;
+    });
+  }, [filesResult]);
+
+  const filteredFiles = useMemo(() => {
+    const query = filterText.trim().toLowerCase();
+    if (!query) return files;
+    return files.filter((item) => item.path.toLowerCase().includes(query));
+  }, [files, filterText]);
+
+  if (AsyncResult.isInitial(filesResult)) {
+    return <LoadingScreen />;
+  }
+
+  if (AsyncResult.isFailure(filesResult)) {
+    return (
+      <main className="memories-page">
+        <MemoriesTitleBar
+          email={email}
+          refreshing={filesResult.waiting}
+          showSidebarToggle={false}
+          showMCPButton={false}
+          sidebarOpen={false}
+          onToggleSidebar={() => {}}
+          onOpenMCP={() => {}}
+          onRefresh={refreshFiles}
+        />
+        <div className="memories-center-state">
+          <section className="memories-state-card" role="alert">
+            <h2>无法读取记忆</h2>
+            <p>{formatCauseError(filesResult.cause, '记忆加载失败，请稍后重试')}</p>
+            <button type="button" className="memories-primary-action" onClick={refreshFiles}>
+              重新加载
+            </button>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
+  const activeSummary = activePath ? files.find((item) => item.path === activePath) : undefined;
+
+  return (
     <main className="memories-page">
       <MemoriesTitleBar
         email={email}
-        refreshing={loadingPath !== null}
+        refreshing={filesResult.waiting}
         showSidebarToggle
-        showMCPButton={Boolean(token)}
+        showMCPButton
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         onOpenMCP={() => setMcpDialogOpen(true)}
-        onRefresh={() => setReloadCount((count) => count + 1)}
+        onRefresh={refreshFiles}
       />
       <div className="memories-workbench">
         <div
@@ -240,7 +204,6 @@ export function MemoriesPage() {
                     onClick={() => {
                       setActivePath(file.path);
                       setSidebarOpen(false);
-                      setCopied(false);
                     }}
                   >
                     <span className="memories-file-name">{displayPath}</span>
@@ -253,86 +216,138 @@ export function MemoriesPage() {
         </aside>
 
         <section className="memories-editor" aria-label="记忆内容预览">
-          {activePath && (
-            <div className="memories-toolbar">
-              <div className="memories-doc-meta">
-                <span className="memories-doc-path" title={activePath}>
-                  {activePath}
-                </span>
-                {activeUpdatedAt && (
-                  <span className="memories-doc-updated">更新于 {formatUpdatedAt(activeUpdatedAt)}</span>
-                )}
-              </div>
-              <button
-                type="button"
-                className="memories-copy-btn"
-                disabled={!activeDetail}
-                onClick={() => void copyActiveContent()}
-              >
-                {copied ? '已复制' : '复制原文'}
-              </button>
-            </div>
-          )}
-
-          <div className="memories-viewport">
-            {files.length === 0 ? (
+          {files.length === 0 ? (
+            <div className="memories-viewport">
               <div className="memories-center-state">
                 <section className="memories-state-card">
                   <h2>还没有记忆文件</h2>
                   <p>
-                    当你和 aether 沟通长期偏好、常用规范或项目背景时，aether 会自动整理并保存在这里。
+                    当你和 aether 沟通长期偏好、常用规范或项目背景时，aether
+                    会自动整理并保存在这里。
                   </p>
                   <Link to="/" className="memories-primary-action">
                     回到对话
                   </Link>
                 </section>
               </div>
-            ) : !activePath ? (
+            </div>
+          ) : !activePath ? (
+            <div className="memories-viewport">
               <div className="memories-center-state">
                 <p>从左侧选择一个记忆文件查看内容</p>
               </div>
-            ) : loadingPath === activePath && !activeDetail ? (
-              <div className="memories-center-state" role="status">
-                <p>正在读取 {activePath}…</p>
-              </div>
-            ) : fileError && !activeDetail ? (
-              <div className="memories-center-state" role="alert">
-                <section className="memories-state-card">
-                  <h2>读取失败</h2>
-                  <p>{fileError}</p>
-                  <button
-                    type="button"
-                    className="memories-primary-action"
-                    onClick={() => setFileRetry((count) => count + 1)}
-                  >
-                    重试
-                  </button>
-                </section>
-              </div>
-            ) : activeDetail ? (
-              <article className="memories-preview">
-                {activeDetail.content.trim() === '' ? (
-                  <p className="memories-empty-file">（空文件）</p>
-                ) : (
-                  <Markdown text={activeDetail.content} />
-                )}
-              </article>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <MemoryFilePreview
+              token={token}
+              path={activePath}
+              fallbackUpdatedAt={activeSummary?.updated_at}
+              onAuthExpired={onAuthExpired}
+            />
+          )}
         </section>
       </div>
-      {token && mcpDialogOpen && (
+      {mcpDialogOpen && (
         <MemoryMCPDialog
           token={token}
           onAuthExpired={() => {
             setMcpDialogOpen(false);
-            setToken(null);
-            setStatus('unauthenticated');
+            onAuthExpired();
           }}
           onClose={() => setMcpDialogOpen(false)}
         />
       )}
     </main>
+  );
+}
+
+// MemoryFilePreview 按文件路径订阅对应的内容 Atom，切换文件时旧请求由 AtomRegistry 自动取消。
+function MemoryFilePreview({
+  token,
+  path,
+  fallbackUpdatedAt,
+  onAuthExpired,
+}: {
+  token: string;
+  path: string;
+  fallbackUpdatedAt?: string;
+  onAuthExpired: () => void;
+}) {
+  const detailAtom = memoryFileContentAtom(`${token}\0${path}`);
+  const detailResult = useAtomValue(detailAtom);
+  const refreshDetail = useAtomRefresh(detailAtom);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    setCopied(false);
+    return () => clearTimeout(copyTimer.current);
+  }, [path]);
+
+  useEffect(() => {
+    if (AsyncResult.isFailure(detailResult) && isAuthFailure(detailResult.cause)) {
+      onAuthExpired();
+    }
+  }, [detailResult, onAuthExpired]);
+
+  const activeDetail = AsyncResult.isSuccess(detailResult) ? detailResult.value : undefined;
+  const activeUpdatedAt = activeDetail?.updated_at ?? fallbackUpdatedAt;
+
+  const copyActiveContent = async () => {
+    if (!activeDetail) return;
+    await navigator.clipboard.writeText(activeDetail.content);
+    setCopied(true);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 1800);
+  };
+
+  return (
+    <>
+      <div className="memories-toolbar">
+        <div className="memories-doc-meta">
+          <span className="memories-doc-path" title={path}>
+            {path}
+          </span>
+          {activeUpdatedAt && (
+            <span className="memories-doc-updated">更新于 {formatUpdatedAt(activeUpdatedAt)}</span>
+          )}
+        </div>
+        <button
+          type="button"
+          className="memories-copy-btn"
+          disabled={!activeDetail}
+          onClick={() => void copyActiveContent()}
+        >
+          {copied ? '已复制' : '复制原文'}
+        </button>
+      </div>
+
+      <div className="memories-viewport">
+        {AsyncResult.isInitial(detailResult) ? (
+          <div className="memories-center-state" role="status">
+            <p>正在读取 {path}…</p>
+          </div>
+        ) : AsyncResult.isFailure(detailResult) ? (
+          <div className="memories-center-state" role="alert">
+            <section className="memories-state-card">
+              <h2>读取失败</h2>
+              <p>{formatCauseError(detailResult.cause, '无法读取该记忆文件')}</p>
+              <button type="button" className="memories-primary-action" onClick={refreshDetail}>
+                重试
+              </button>
+            </section>
+          </div>
+        ) : (
+          <article className="memories-preview">
+            {detailResult.value.content.trim() === '' ? (
+              <p className="memories-empty-file">（空文件）</p>
+            ) : (
+              <Markdown text={detailResult.value.content} />
+            )}
+          </article>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -409,40 +424,33 @@ function MemoryMCPDialog({
   onAuthExpired: () => void;
   onClose: () => void;
 }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [mcpURL, setMcpURL] = useState('');
-  const [connections, setConnections] = useState<OAuthConnectionSummary[]>([]);
+  const connectionsAtom = oauthConnectionsAtom(token);
+  const connectionsResult = useAtomValue(connectionsAtom);
+  const refreshConnections = useAtomRefresh(connectionsAtom);
+  const revokeConnection = useAtomSet(revokeOAuthConnectionAtom, { mode: 'promiseExit' });
+
   const [revokingID, setRevokingID] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
   const [urlCopied, setUrlCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const onAuthExpiredRef = useRef(onAuthExpired);
-  onAuthExpiredRef.current = onAuthExpired;
 
   useEffect(() => () => clearTimeout(copyTimer.current), []);
 
   useEffect(() => {
-    const abortController = new AbortController();
-    setLoading(true);
-    setError('');
-    void fetchOAuthConnections(token, abortController.signal)
-      .then((payload) => {
-        if (abortController.signal.aborted) return;
-        setMcpURL(payload.mcp_url);
-        setConnections(payload.connections);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (abortController.signal.aborted) return;
-        if (err instanceof AuthError) {
-          onAuthExpiredRef.current();
-          return;
-        }
-        setError(err instanceof Error ? err.message : '无法读取 MCP 接入信息');
-        setLoading(false);
-      });
-    return () => abortController.abort();
-  }, [token]);
+    if (AsyncResult.isFailure(connectionsResult) && isAuthFailure(connectionsResult.cause)) {
+      onAuthExpired();
+    }
+  }, [connectionsResult, onAuthExpired]);
+
+  const mcpURL = AsyncResult.isSuccess(connectionsResult) ? connectionsResult.value.mcp_url : '';
+  const connections = AsyncResult.isSuccess(connectionsResult)
+    ? connectionsResult.value.connections
+    : [];
+  const error =
+    actionError ||
+    (AsyncResult.isFailure(connectionsResult)
+      ? formatCauseError(connectionsResult.cause, '无法读取 MCP 接入信息')
+      : '');
 
   const copyURL = async () => {
     if (!mcpURL) return;
@@ -455,16 +463,18 @@ function MemoryMCPDialog({
   const revoke = async (connectionID: string) => {
     if (revokingID) return;
     setRevokingID(connectionID);
-    setError('');
+    setActionError('');
     try {
-      await revokeOAuthConnection(token, connectionID);
-      setConnections((previous) => previous.filter((item) => item.id !== connectionID));
-    } catch (err: unknown) {
-      if (err instanceof AuthError) {
-        onAuthExpiredRef.current();
+      const exit = await revokeConnection({ token, connectionID });
+      if (Exit.isFailure(exit)) {
+        if (isAuthFailure(exit.cause)) {
+          onAuthExpired();
+          return;
+        }
+        setActionError(formatCauseError(exit.cause, '撤销授权失败'));
         return;
       }
-      setError(err instanceof Error ? err.message : '撤销授权失败');
+      refreshConnections();
     } finally {
       setRevokingID(null);
     }
@@ -480,12 +490,17 @@ function MemoryMCPDialog({
     >
       <div className="memories-mcp-header">
         <h2 id="memories-mcp-title">远程记忆 MCP</h2>
-        <button type="button" className="memories-mcp-close" disabled={revokingID !== null} onClick={onClose}>
+        <button
+          type="button"
+          className="memories-mcp-close"
+          disabled={revokingID !== null}
+          onClick={onClose}
+        >
           关闭
         </button>
       </div>
 
-      {loading ? (
+      {AsyncResult.isInitial(connectionsResult) ? (
         <p className="memories-mcp-hint">正在读取接入信息…</p>
       ) : (
         <div className="memories-mcp-body">
@@ -502,8 +517,8 @@ function MemoryMCPDialog({
               <p className="memories-mcp-hint">当前部署尚未配置 PUBLIC_ORIGIN，暂不可用。</p>
             )}
             <p className="memories-mcp-hint">
-              在 ChatGPT Developer Mode、Gemini Apps Developer Mode、Claude 或 Cursor 中填入此地址并选择 OAuth
-              授权，即可与 aether 双向共享同一份记忆。
+              在 ChatGPT Developer Mode、Gemini Apps Developer Mode、Claude 或 Cursor
+              中填入此地址并选择 OAuth 授权，即可与 aether 双向共享同一份记忆。
             </p>
           </section>
 
@@ -519,7 +534,9 @@ function MemoryMCPDialog({
                       <span className="memories-mcp-item-name">{item.client_name}</span>
                       <span className="memories-mcp-item-time">
                         授权于 {formatUpdatedAt(item.created_at)}
-                        {item.last_used_at ? ` · 最近使用 ${formatUpdatedAt(item.last_used_at)}` : ' · 尚未调用'}
+                        {item.last_used_at
+                          ? ` · 最近使用 ${formatUpdatedAt(item.last_used_at)}`
+                          : ' · 尚未调用'}
                       </span>
                     </div>
                     <button

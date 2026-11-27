@@ -1,9 +1,13 @@
-// 本文件提供聊天内的个人模型设置浮层，支持搜索各渠道模型并保存 Main 与 Subagent 各自的选择。
+// 本文件提供聊天内的个人模型设置浮层，通过 Effect Atom 拉取模型目录并提交 Main 与 Subagent 各自的选择。
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { getModelSettings, saveModelSettings } from '../../lib/modelSettings.js';
-import type { ModelSelection, ModelSettings } from '../../lib/modelSettings.js';
+import { useAtomRefresh, useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Exit } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { formatCauseError } from '../../lib/errors.js';
+import type { ModelSelection } from '../../lib/modelSettings.js';
+import { modelSettingsAtom, saveModelSettingsAtom } from '../../lib/runtime.js';
 import { ModalDialog } from '../ModalDialog.js';
 import './chatModels.css';
 
@@ -13,42 +17,33 @@ const modelRoles = [
   { field: 'subagent_model', label: 'Subagent', inherited: '跟随 Main' },
 ] as const;
 
-// ChatModelSettings 打开时读取当前配置，成功保存后返回聊天。
-export function ChatModelSettings({
-  token,
-  onClose,
-}: {
-  token: string;
-  onClose: () => void;
-}) {
-  const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [draft, setDraft] = useState<ModelSelection | null>(null);
-  const [search, setSearch] = useState('');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [reload, setReload] = useState(0);
+// ChatModelSettings 打开时通过 Atom 读取配置并在关闭时自动取消在途请求，保存成功后返回聊天。
+export function ChatModelSettings({ token, onClose }: { token: string; onClose: () => void }) {
+  const settingsAtom = modelSettingsAtom(token);
+  const result = useAtomValue(settingsAtom);
+  const refreshSettings = useAtomRefresh(settingsAtom);
+  const saveModelSettings = useAtomSet(saveModelSettingsAtom, { mode: 'promiseExit' });
 
-  // 每次打开或手动重载都读取服务端版本；关闭后取消未完成的读取。
-  useEffect(() => {
-    const request = new AbortController();
-    getModelSettings(token, request.signal)
-      .then((loaded) => {
-        if (request.signal.aborted) return;
-        setSettings(loaded);
-        setDraft(loaded.selection);
-      })
-      .catch(() => {
-        if (!request.signal.aborted) setError('暂时无法读取模型设置，请重新加载。');
-      });
-    return () => request.abort();
-  }, [token, reload]);
+  const settings = AsyncResult.isSuccess(result) ? result.value : null;
+  const [edited, setEdited] = useState<{
+    readonly base: ModelSelection;
+    readonly draft: ModelSelection;
+  } | null>(null);
+  const [search, setSearch] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const draft = settings
+    ? edited && edited.base === settings.selection
+      ? edited.draft
+      : settings.selection
+    : null;
 
   // 重新加载替换整份草稿，适用于另一台设备已经保存过新版本的情况。
   function reloadSettings() {
-    setError('');
-    setSettings(null);
-    setDraft(null);
-    setReload((value) => value + 1);
+    setSaveError('');
+    setEdited(null);
+    refreshSettings();
   }
 
   // 保存完成后才关闭，失败时保留当前输入供用户调整或重试。
@@ -56,17 +51,21 @@ export function ChatModelSettings({
     event.preventDefault();
     if (!draft || saving) return;
     setSaving(true);
-    setError('');
+    setSaveError('');
     try {
-      await saveModelSettings(token, draft);
+      const exit = await saveModelSettings({ token, selection: draft });
+      if (Exit.isFailure(exit)) {
+        setSaveError(formatCauseError(exit.cause, '暂时无法保存，请稍后重试。'));
+        return;
+      }
       onClose();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '暂时无法保存，请稍后重试。');
     } finally {
       setSaving(false);
     }
   }
 
+  const loadError = AsyncResult.isFailure(result) ? '暂时无法读取模型设置，请重新加载。' : '';
+  const error = saveError || loadError;
   const query = search.trim().toLowerCase();
   const changed =
     settings && draft && modelRoles.some(({ field }) => draft[field] !== settings.selection[field]);
@@ -110,7 +109,12 @@ export function ChatModelSettings({
                 <select
                   value={value}
                   disabled={saving}
-                  onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}
+                  onChange={(event) =>
+                    setEdited({
+                      base: settings.selection,
+                      draft: { ...draft, [field]: event.target.value },
+                    })
+                  }
                 >
                   {inherited && <option value="">{inherited}</option>}
                   {value && !listed && <option value={value}>{value}（当前不可选）</option>}

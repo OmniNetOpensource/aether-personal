@@ -1,10 +1,18 @@
-// 本文件用 TanStack Virtual 展示聊天历史，负责翻页、贴底跟随与回收旧历史、回底、长消息展开收起锚定和引用回看。
+// 本文件用 TanStack Virtual 展示聊天历史，通过 Effect Atom 订阅消息与连接态，负责翻页、回收旧历史、展开锚定和引用回看。
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Effect, Exit } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { latestMessageWindow } from '../../lib/ChatController.js';
-import type { ChatController, ChatMessage } from '../../lib/ChatController.js';
 import type { MessageQuote } from '../../lib/messageAttachments.js';
+import {
+  chatSessionAtom,
+  chatStateAtom,
+  loadHistoryAtom,
+  trimOlderMessagesAtom,
+} from '../../lib/runtime.js';
 import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
 
@@ -15,14 +23,23 @@ const pinnedBottomThreshold = 4;
 
 // ChatMessageList 由 TanStack Virtual 计算可见行与偏移，并按展开、收起与贴底场景显式控制尺寸变化的滚动补偿。
 export function ChatMessageList({
-  controller,
   onQuote,
   latestRequest,
 }: {
-  controller: ChatController;
   onQuote: (quote: MessageQuote) => void;
   latestRequest: number;
 }) {
+  const sessionResult = useAtomValue(chatSessionAtom);
+  const messages = useAtomValue(chatStateAtom, (state) => state.messages);
+  const connected = useAtomValue(chatStateAtom, (state) => state.connected);
+  const mainThinking = useAtomValue(chatStateAtom, (state) => state.mainThinking);
+  const mainFailed = useAtomValue(chatStateAtom, (state) => state.mainFailed);
+  const loadingHistory = useAtomValue(chatStateAtom, (state) => state.loadingHistory);
+  const hasMoreHistory = useAtomValue(chatStateAtom, (state) => state.hasMoreHistory);
+  const chatError = useAtomValue(chatStateAtom, (state) => state.error);
+  const loadHistory = useAtomSet(loadHistoryAtom, { mode: 'promiseExit' });
+  const trimOlderMessages = useAtomSet(trimOlderMessagesAtom, { mode: 'promiseExit' });
+
   const viewport = useRef<HTMLDivElement | null>(null);
   const viewportObserver = useRef<ResizeObserver | null>(null);
   const lastLatestRequest = useRef(latestRequest);
@@ -46,9 +63,10 @@ export function ChatMessageList({
   const [expandedMessages, setExpandedMessages] = useState(() => new Set<string>());
   const [atBottom, setAtBottom] = useState(true);
 
-  const messages = controller.messages;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const loadingHistoryRef = useRef(loadingHistory);
+  loadingHistoryRef.current = loadingHistory;
 
   // anchorTo: 'end' 自动按消息 key 保持头部翻页与头部回收的阅读位置；
   // directDomUpdates 在 ResizeObserver 同帧直接更新容器高度与各行 top，避免展开时和下一条消息重叠一帧；
@@ -176,27 +194,29 @@ export function ChatMessageList({
       !isScrollingRef.current &&
       !navigatingQuote &&
       !pinOlderHistory &&
-      !controller.loadingHistory &&
-      controller.messages.length > latestMessageWindow;
+      !loadingHistoryRef.current &&
+      messagesRef.current.length > latestMessageWindow;
     if (!canTrim()) return;
     trimTimer.current = setTimeout(() => {
       if (!canTrim()) return;
-      const removed = controller.trimOlderMessages(latestMessageWindow);
-      if (removed === 0) return;
-      lastStartReachedID.current = null;
-      const keptIDs = new Set(controller.messages.map((message) => message.id));
-      setExpandedMessages((current) => {
-        if (current.size === 0) return current;
-        let changed = false;
-        const next = new Set<string>();
-        for (const id of current) {
-          if (keptIDs.has(id)) next.add(id);
-          else changed = true;
-        }
-        return changed ? next : current;
+      void trimOlderMessages(latestMessageWindow).then((exit) => {
+        if (!Exit.isSuccess(exit) || exit.value === 0) return;
+        lastStartReachedID.current = null;
+        const kept = messagesRef.current.slice(-latestMessageWindow);
+        const keptIDs = new Set(kept.map((message) => message.id));
+        setExpandedMessages((current) => {
+          if (current.size === 0) return current;
+          let changed = false;
+          const next = new Set<string>();
+          for (const id of current) {
+            if (keptIDs.has(id)) next.add(id);
+            else changed = true;
+          }
+          return changed ? next : current;
+        });
       });
     }, 180);
-  }, [controller, controller.loadingHistory, navigatingQuote, pinOlderHistory]);
+  }, [navigatingQuote, pinOlderHistory, trimOlderMessages]);
   scheduleTrimRef.current = scheduleTrim;
 
   useEffect(() => {
@@ -212,15 +232,15 @@ export function ChatMessageList({
   // 屏幕足够高时点击翻页可能仍在底部阈值内，临时锁定避免刚拉回的历史被立即裁掉。
   const loadOlderHistory = useCallback(() => {
     if (atBottomRef.current) setPinOlderHistory(true);
-    void controller.loadHistory(true);
-  }, [controller]);
+    void loadHistory(true);
+  }, [loadHistory]);
   loadOlderRef.current = loadOlderHistory;
 
   // scrollToEnd 直接跳到最新消息底部，由虚拟列表在底部行测高收敛时保持贴底。
   const scrollToEnd = useCallback(() => {
-    if (controller.messages.length === 0) return;
+    if (messagesRef.current.length === 0) return;
     virtualizer.scrollToEnd({ behavior: 'auto' });
-  }, [controller, virtualizer]);
+  }, [virtualizer]);
   scrollToEndRef.current = scrollToEnd;
 
   // 回到底部按钮取消尚在翻页或等待高亮的引用，并立即跳到最新消息底部。
@@ -239,7 +259,7 @@ export function ChatMessageList({
 
   // 人已经贴在底部时，新消息插入或思考气泡出现立即跟到底部；正在看更早消息时保持原地不动。
   const tailMessageID = messages.at(-1)?.id;
-  const footerActive = (controller.connected && controller.mainThinking) || controller.mainFailed;
+  const footerActive = (connected && mainThinking) || mainFailed;
   const previousTailMessageID = useRef<string | undefined>(tailMessageID);
   const previousFooterActive = useRef(footerActive);
   useEffect(() => {
@@ -277,27 +297,32 @@ export function ChatMessageList({
   // 引用可能指向更早的一页；先取到消息并展开正文，再滚到被引用的文字。
   const navigateQuote = useCallback(
     async (quote: MessageQuote) => {
+      if (!AsyncResult.isSuccess(sessionResult)) return;
+      const session = sessionResult.value;
       const target = { ...quote };
       navigation.current = target;
       browsingHistory.current = false;
       setNavigatingQuote(true);
       clearHighlight.current();
       setQuoteError('');
-      while (!controller.messages.some((message) => message.id === quote.message_id)) {
-        const count = controller.messages.length;
-        if (controller.hasMoreHistory && !controller.loadingHistory)
-          await controller.loadHistory(true);
+      let current = Effect.runSync(session.getState);
+      while (!current.messages.some((message) => message.id === quote.message_id)) {
+        const count = current.messages.length;
+        if (current.hasMoreHistory && !current.loadingHistory) {
+          await Effect.runPromise(session.loadHistory(true));
+        }
         if (navigation.current !== target) return;
-        if (controller.messages.length === count) {
+        current = Effect.runSync(session.getState);
+        if (current.messages.length === count) {
           setNavigatingQuote(false);
           setQuoteError('暂时找不到引用原文，请加载历史后重试');
           return;
         }
       }
-      setExpandedMessages((current) => new Set(current).add(quote.message_id));
+      setExpandedMessages((set) => new Set(set).add(quote.message_id));
       setQuoteTarget(target);
     },
-    [controller],
+    [sessionResult],
   );
 
   const handleQuoteNavigate = useCallback(
@@ -310,7 +335,7 @@ export function ChatMessageList({
   // 先将引用所在消息滚进视口居中，再等待该行挂载并完成高亮定位。
   useEffect(() => {
     if (!quoteTarget) return;
-    const index = controller.messages.findIndex((message) => message.id === quoteTarget.message_id);
+    const index = messages.findIndex((message) => message.id === quoteTarget.message_id);
     if (index < 0) {
       setNavigatingQuote(false);
       setQuoteTarget(null);
@@ -318,7 +343,7 @@ export function ChatMessageList({
       return;
     }
     virtualizer.scrollToIndex(index, { align: 'center', behavior: 'auto' });
-  }, [controller, quoteTarget, virtualizer]);
+  }, [messages, quoteTarget, virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const quoteTargetMounted = Boolean(
@@ -354,7 +379,10 @@ export function ChatMessageList({
 
   // 记录用户主动切换展开或收起的目标消息，供 TanStack Virtual 同帧决定是否补偿 scrollTop。
   const handleExpandedChange = useCallback((messageID: string, expanded: boolean) => {
-    const toggle = { id: messageID, action: expanded ? ('expand' as const) : ('collapse' as const) };
+    const toggle = {
+      id: messageID,
+      action: expanded ? ('expand' as const) : ('collapse' as const),
+    };
     pendingToggle.current = toggle;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -390,23 +418,23 @@ export function ChatMessageList({
               {quoteError}
             </p>
           )}
-          {controller.error && (
+          {chatError && (
             <button
               type="button"
               className="history-error error"
-              onClick={() => void controller.loadHistory()}
+              onClick={() => void loadHistory(false)}
             >
-              {controller.error}
+              {chatError}
             </button>
           )}
-          {controller.hasMoreHistory && hasMessages && (
+          {hasMoreHistory && hasMessages && (
             <button
               type="button"
               className="load-older"
-              disabled={controller.loadingHistory}
+              disabled={loadingHistory}
               onClick={loadOlderHistory}
             >
-              {controller.loadingHistory ? '正在加载…' : '加载更早的消息'}
+              {loadingHistory ? '正在加载…' : '加载更早的消息'}
             </button>
           )}
         </div>
@@ -448,7 +476,7 @@ export function ChatMessageList({
           })}
         </div>
         <div className="chat-list-footer">
-          {controller.connected && controller.mainThinking ? (
+          {connected && mainThinking ? (
             <div className="thinking" role="status" aria-label="aether 正在处理">
               <div className="thinking-dots" aria-hidden="true">
                 <span className="dot" />
@@ -456,7 +484,7 @@ export function ChatMessageList({
                 <span className="dot" />
               </div>
             </div>
-          ) : controller.mainFailed ? (
+          ) : mainFailed ? (
             <p className="error" role="alert">
               回复失败，请再发一条消息重试。
             </p>

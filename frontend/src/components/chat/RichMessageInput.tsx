@@ -10,7 +10,7 @@ import { ImagePreview } from './ImagePreview.js';
 import type { MessagePart } from '../../lib/messageAttachments.js';
 
 // editorDocument 将结构化内容转换为编辑器节点，换行单独保留为 hardBreak。
-function editorDocument(parts: MessagePart[]): JSONContent {
+function editorDocument(parts: readonly MessagePart[]): JSONContent {
   return {
     type: 'doc',
     content: [
@@ -35,7 +35,7 @@ function messageParts(json: JSONContent): MessagePart[] {
   const parts: MessagePart[] = [];
   const append = (text: string) => {
     const last = parts[parts.length - 1];
-    if (last?.type === 'text') last.text += text;
+    if (last?.type === 'text') parts[parts.length - 1] = { type: 'text', text: last.text + text };
     else if (text) parts.push({ type: 'text', text });
   };
   for (const [index, paragraph] of (json.content ?? []).entries()) {
@@ -165,7 +165,7 @@ const ContentChip = Node.create({
 
 // RichMessageInputHandle 只暴露输入框需要的操作，父组件不直接操作编辑器 DOM。
 export interface RichMessageInputHandle {
-  insert: (parts: MessagePart[]) => void;
+  insert: (parts: readonly MessagePart[]) => void;
   clear: () => void;
   focus: () => void;
 }
@@ -173,8 +173,8 @@ export interface RichMessageInputHandle {
 // RichMessageInput 在同一个编辑区域内混排内容，保留 IME、Enter 换行、Ctrl+Enter 发送和粘贴图片行为。
 export function RichMessageInput(props: {
   inputRef: React.RefObject<RichMessageInputHandle | null>;
-  initialParts: MessagePart[];
-  onChange: (parts: MessagePart[]) => void;
+  initialParts: readonly MessagePart[];
+  onChange: (parts: readonly MessagePart[]) => void;
   onFiles: (files: File[]) => void;
   onSubmit: () => void;
 }) {

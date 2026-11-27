@@ -1,19 +1,25 @@
-// 本文件收集邮箱与验证码，生产发码前完成 Turnstile 安全验证；dev 保留一键登录。
+// 本文件收集邮箱与验证码，生产发码前完成 Turnstile 安全验证；dev 保留一键登录，全部登录命令走 Effect Atom。
 
 import { useEffect, useRef, useState } from 'react';
-import type { ChatController } from '../../lib/ChatController.js';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Exit } from 'effect';
+import { formatCauseError } from '../../lib/errors.js';
+import { chatStateAtom, devSignInAtom, requestCodeAtom, signInAtom } from '../../lib/runtime.js';
 
 // Turnstile 由 Cloudflare 官方脚本提供，页面只持有公开 site key 与一次性令牌。
 interface TurnstileAPI {
-  render(container: HTMLElement, options: {
-    sitekey: string;
-    action: string;
-    theme: 'auto';
-    size: 'flexible';
-    callback: (token: string) => void;
-    'expired-callback': () => void;
-    'error-callback': () => void;
-  }): string;
+  render(
+    container: HTMLElement,
+    options: {
+      sitekey: string;
+      action: string;
+      theme: 'auto';
+      size: 'flexible';
+      callback: (token: string) => void;
+      'expired-callback': () => void;
+      'error-callback': () => void;
+    },
+  ): string;
   remove(widgetID: string): void;
 }
 
@@ -24,8 +30,17 @@ declare global {
 }
 
 // LoginPage 管理本次登录表单与安全验证生命周期；令牌不写入浏览器存储。
-export function LoginPage({ controller }: { controller: ChatController }) {
-  const [email, setEmail] = useState(controller.email);
+export function LoginPage() {
+  const initialEmail = useAtomValue(chatStateAtom, (state) => state.email);
+  const iconURL = useAtomValue(chatStateAtom, (state) => state.iconURL);
+  const devLogin = useAtomValue(chatStateAtom, (state) => state.devLoginAvailable);
+  const siteKey = useAtomValue(chatStateAtom, (state) => state.turnstileSiteKey);
+  const sessionError = useAtomValue(chatStateAtom, (state) => state.error);
+  const requestCode = useAtomSet(requestCodeAtom, { mode: 'promiseExit' });
+  const signIn = useAtomSet(signInAtom, { mode: 'promiseExit' });
+  const devSignIn = useAtomSet(devSignInAtom, { mode: 'promiseExit' });
+
+  const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,8 +49,7 @@ export function LoginPage({ controller }: { controller: ChatController }) {
   const challengeContainer = useRef<HTMLDivElement>(null);
   const [challengeToken, setChallengeToken] = useState('');
   const [challengeVersion, setChallengeVersion] = useState(0);
-  const devLogin = controller.devLoginAvailable;
-  const siteKey = controller.turnstileSiteKey;
+
   // 显式渲染适配 React 挂载；重试时重建组件，避免重复提交已消费的令牌。
   useEffect(() => {
     setChallengeToken('');
@@ -55,8 +69,12 @@ export function LoginPage({ controller }: { controller: ChatController }) {
         action: 'request_code',
         theme: 'auto',
         size: 'flexible',
-        callback: (token) => { if (!disposed) setChallengeToken(token); },
-        'expired-callback': () => { if (!disposed) setChallengeToken(''); },
+        callback: (token) => {
+          if (!disposed) setChallengeToken(token);
+        },
+        'expired-callback': () => {
+          if (!disposed) setChallengeToken('');
+        },
         'error-callback': failed,
       });
     };
@@ -78,7 +96,9 @@ export function LoginPage({ controller }: { controller: ChatController }) {
       if (widgetID !== undefined) window.turnstile?.remove(widgetID);
     };
   }, [devLogin, sent, siteKey, challengeVersion]);
+
   const buttonLabel = devLogin ? '开发测试登录' : sent ? '登录' : '获取验证码';
+
   const submit = async () => {
     if (submitting.current) return;
     if (!devLogin && (!email.includes('@') || !email.includes('.'))) {
@@ -97,24 +117,32 @@ export function LoginPage({ controller }: { controller: ChatController }) {
     setBusy(true);
     setError('');
     try {
-      if (devLogin) await controller.devSignIn();
-      else if (sent) await controller.signIn(email, code);
-      else {
-        try {
-          await controller.requestCode(email, challengeToken);
+      if (devLogin) {
+        const exit = await devSignIn(undefined);
+        if (Exit.isFailure(exit)) {
+          setError(formatCauseError(exit.cause, '连接失败，请检查网络后重试'));
+        }
+      } else if (sent) {
+        const exit = await signIn({ email, code });
+        if (Exit.isFailure(exit)) {
+          setError(formatCauseError(exit.cause, '连接失败，请检查网络后重试'));
+        }
+      } else {
+        const exit = await requestCode({ email, turnstileToken: challengeToken });
+        setChallengeToken('');
+        setChallengeVersion((version) => version + 1);
+        if (Exit.isFailure(exit)) {
+          setError(formatCauseError(exit.cause, '连接失败，请检查网络后重试'));
+        } else {
           setSent(true);
-        } finally {
-          setChallengeToken('');
-          setChallengeVersion((version) => version + 1);
         }
       }
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '连接失败，请检查网络后重试');
     } finally {
       submitting.current = false;
       setBusy(false);
     }
   };
+
   return (
     <main className="login-page">
       <div className="login-center">
@@ -125,7 +153,7 @@ export function LoginPage({ controller }: { controller: ChatController }) {
             void submit();
           }}
         >
-          <img className="mark" src={controller.iconURL} alt="aether" width="56" height="56" />
+          <img className="mark" src={iconURL} alt="aether" width="56" height="56" />
           <h1 className="login-title">和 aether 聊聊</h1>
           <p className="login-subtitle">
             {devLogin
@@ -168,14 +196,20 @@ export function LoginPage({ controller }: { controller: ChatController }) {
           )}
           {!devLogin && !sent && siteKey && <div ref={challengeContainer} />}
           {!devLogin && !sent && !siteKey && (
-            <p className="error login-error" role="alert">登录服务暂不可用，请稍后再试</p>
-          )}
-          {(error || controller.error) && (
             <p className="error login-error" role="alert">
-              {error || controller.error}
+              登录服务暂不可用，请稍后再试
             </p>
           )}
-          <button className="login-button" type="submit" disabled={busy || (!devLogin && !sent && !challengeToken)}>
+          {(error || sessionError) && (
+            <p className="error login-error" role="alert">
+              {error || sessionError}
+            </p>
+          )}
+          <button
+            className="login-button"
+            type="submit"
+            disabled={busy || (!devLogin && !sent && !challengeToken)}
+          >
             {busy ? '请稍候…' : buttonLabel}
           </button>
           {!devLogin && sent && (

@@ -1,7 +1,10 @@
-// 本文件展示历史聊天搜索浮层：按关键词分页，保留结果位置，并打开独立的原文上下文窗口。
+// 本文件展示历史聊天搜索浮层：用 Effect Fiber 自动防抖与取消旧请求，分页浏览结果并打开原文上下文窗口。
 
 import { useEffect, useRef, useState } from 'react';
-import type { ChatController } from '../../lib/ChatController.js';
+import { useAtomSet } from '@effect/atom-react';
+import { Cause, Effect, Exit, Fiber } from 'effect';
+import { formatCauseError } from '../../lib/errors.js';
+import { searchMessagesAtom } from '../../lib/runtime.js';
 import type { ChatSearchHit } from '../../lib/serverEvents.js';
 import { ModalDialog } from '../ModalDialog.js';
 import { ChatHistoryContext } from './ChatHistoryContext.js';
@@ -9,47 +12,49 @@ import './chatSearch.css';
 
 // 搜索状态区分首次读取和已有结果的翻页，失败时保留已读的片段供继续查看。
 type SearchState =
-  | { status: 'idle' }
-  | { status: 'loading'; keyword: string }
-  | { status: 'error'; keyword: string; error: string }
+  | { readonly status: 'idle' }
+  | { readonly status: 'loading'; readonly keyword: string }
+  | { readonly status: 'error'; readonly keyword: string; readonly error: string }
   | {
-      status: 'ready';
-      keyword: string;
-      results: ChatSearchHit[];
-      nextBefore?: string;
-      loadingMore: boolean;
-      error: string | null;
+      readonly status: 'ready';
+      readonly keyword: string;
+      readonly results: readonly ChatSearchHit[];
+      readonly nextBefore?: string;
+      readonly loadingMore: boolean;
+      readonly error: string | null;
     };
 
 // ChatHistorySearch 使用模态对话框约束键盘焦点；搜索期间正常聊天继续收消息和保存草稿。
 export function ChatHistorySearch({
-  controller,
   onClose,
   onLatest,
 }: {
-  controller: ChatController;
   onClose: () => void;
   onLatest: () => void;
 }) {
+  const runSearch = useAtomSet(searchMessagesAtom, { mode: 'promiseExit' });
   const input = useRef<HTMLInputElement>(null);
   const resultButton = useRef<HTMLButtonElement | null>(null);
-  const version = useRef(0);
   const composing = useRef(false);
+  const activeKeyword = useRef('');
   const [text, setText] = useState('');
   const [keyword, setKeyword] = useState('');
   const [retry, setRetry] = useState(0);
   const [state, setState] = useState<SearchState>({ status: 'idle' });
-  const [selected, setSelected] = useState<{ id: string; keyword: string } | null>(null);
+  const [selected, setSelected] = useState<{
+    readonly id: string;
+    readonly keyword: string;
+  } | null>(null);
 
   // 模态框通过 useLayoutEffect 打开后聚焦搜索框；IME 组词期间不发起中间关键词请求。
   useEffect(() => {
     input.current?.focus();
   }, []);
 
-  // 每次词语变更使旧请求失效，迟到的回执不能覆盖较新的结果或追加到另一组分页。
+  // 关键词变更时中断上一次防抖与搜索 Fiber，迟到的回执无法覆盖新关键词结果。
   useEffect(() => {
-    const requestVersion = ++version.current;
     const trimmed = keyword.trim();
+    activeKeyword.current = trimmed;
     if (!trimmed) {
       setState({ status: 'idle' });
       return;
@@ -59,57 +64,68 @@ export function ChatHistorySearch({
       return;
     }
     setState({ status: 'loading', keyword: trimmed });
-    const timer = setTimeout(() => {
-      void controller.searchMessages(trimmed).then(
-        (page) => {
-          if (version.current !== requestVersion) return;
-          setState({
-            status: 'ready',
-            keyword: trimmed,
-            results: page.results,
-            nextBefore: page.next_before,
-            loadingMore: false,
-            error: null,
-          });
-        },
-        (error: unknown) => {
-          if (version.current !== requestVersion) return;
-          setState({
-            status: 'error',
-            keyword: trimmed,
-            error: error instanceof Error ? error.message : '搜索失败，请重试',
-          });
-        },
-      );
-    }, 300);
+
+    const fiber = Effect.runFork(
+      Effect.sleep('300 millis').pipe(
+        Effect.andThen(Effect.promise(() => runSearch({ keyword: trimmed }))),
+        Effect.tap((exit) =>
+          Effect.sync(() => {
+            if (activeKeyword.current !== trimmed) return;
+            if (Exit.isSuccess(exit)) {
+              setState({
+                status: 'ready',
+                keyword: trimmed,
+                results: exit.value.results,
+                nextBefore: exit.value.next_before,
+                loadingMore: false,
+                error: null,
+              });
+            } else if (!Cause.hasInterruptsOnly(exit.cause)) {
+              setState({
+                status: 'error',
+                keyword: trimmed,
+                error: formatCauseError(exit.cause, '搜索失败，请重试'),
+              });
+            }
+          }),
+        ),
+      ),
+    );
+
     return () => {
-      clearTimeout(timer);
-      version.current++;
+      Effect.runFork(Fiber.interrupt(fiber));
     };
-  }, [controller, keyword, retry]);
+  }, [runSearch, keyword, retry]);
 
   // 翻页只在同一关键词的结果后追加，使用服务端返回的消息 ID 游标。
   const loadMore = async () => {
     if (state.status !== 'ready' || state.loadingMore || !state.nextBefore) return;
-    const requestVersion = version.current;
+    const targetKeyword = state.keyword;
     setState({ ...state, loadingMore: true, error: null });
-    try {
-      const page = await controller.searchMessages(state.keyword, state.nextBefore);
-      if (version.current !== requestVersion) return;
-      setState({
-        ...state,
-        results: [...state.results, ...page.results],
-        nextBefore: page.next_before,
-        loadingMore: false,
-        error: null,
-      });
-    } catch (error) {
-      if (version.current !== requestVersion) return;
-      setState({
-        ...state,
-        loadingMore: false,
-        error: error instanceof Error ? error.message : '搜索失败，请重试',
-      });
+    const exit = await runSearch({ keyword: targetKeyword, before: state.nextBefore });
+    if (activeKeyword.current !== targetKeyword) return;
+    if (Exit.isSuccess(exit)) {
+      setState((current) =>
+        current.status === 'ready' && current.keyword === targetKeyword
+          ? {
+              ...current,
+              results: [...current.results, ...exit.value.results],
+              nextBefore: exit.value.next_before,
+              loadingMore: false,
+              error: null,
+            }
+          : current,
+      );
+    } else if (!Cause.hasInterruptsOnly(exit.cause)) {
+      setState((current) =>
+        current.status === 'ready' && current.keyword === targetKeyword
+          ? {
+              ...current,
+              loadingMore: false,
+              error: formatCauseError(exit.cause, '搜索失败，请重试'),
+            }
+          : current,
+      );
     }
   };
 
@@ -275,7 +291,6 @@ export function ChatHistorySearch({
       </section>
       {selected && (
         <ChatHistoryContext
-          controller={controller}
           messageID={selected.id}
           keyword={selected.keyword}
           onBack={() => {

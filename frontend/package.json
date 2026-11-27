@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
-  },
   "scripts": {
     "build": "vp build && pnpm run check && node scripts/build-pwa.mjs",
     "dev": "vp dev",
@@ -13,6 +10,7 @@
     "format": "vp fmt"
   },
   "dependencies": {
+    "@effect/atom-react": "^4.1.6",
     "@novnc/novnc": "1.7.0",
     "@shikijs/core": "3.23.0",
     "@shikijs/engine-javascript": "3.23.0",
@@ -23,6 +21,7 @@
     "@tiptap/core": "3.32.2",
     "@tiptap/pm": "3.32.2",
     "@tiptap/starter-kit": "3.32.2",
+    "effect": "^4.1.6",
     "hast-util-to-jsx-runtime": "2.3.6",
     "katex": "0.16.33",
     "react": "19.3.1",
@@ -48,6 +47,9 @@
     "typescript": "^5.9.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8001",
     "vite-plus": "^1.8.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
   },
   "pnpm": {
     "overrides": {
