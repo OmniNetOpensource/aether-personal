@@ -1,341 +1,164 @@
-// 本文件是管理看板应用组件：持有管理员登录、筛选与各页数据（支持切换查看 Main 与后台 Subagent 轨迹），编排自动刷新，并切换运行过程与配置页面。
+// 本文件是管理看板应用组件：消费 Effect Atom 维护的鉴权、筛选、自动刷新与各页数据，并切换运行过程与配置页面。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  api,
-  ApiError,
-  formatTime,
-  outcomeLabels,
-  setAdminToken,
-  type Snapshot,
-  type Timeline,
-  type TimelineItem,
-} from './api.js';
+  useAtom,
+  useAtomMount,
+  useAtomRefresh,
+  useAtomSet,
+  useAtomValue,
+} from '@effect/atom-react';
+import { Cause, Exit } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { formatAdminCause, outcomeLabels } from './api.js';
 import { ModelProvidersPage } from './ModelProviders.js';
 import { RuntimeSettingsPage } from './RuntimeSettings.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
+import {
+  accessStateAtom,
+  activeTabAtom,
+  bootstrapSessionAtom,
+  browsingPagesAtom,
+  defaultFilters,
+  draftFiltersAtom,
+  knownUsersAtom,
+  loadEarlierTimelineAtom,
+  loadTimelineMessageAtom,
+  loginAdminAtom,
+  logoutAdminAtom,
+  modelProvidersAtom,
+  notifyToastAtom,
+  refreshTimelineAtom,
+  runtimeSettingsAtom,
+  serviceSettingsAtom,
+  settingsBusyAtom,
+  snapshotDataAtom,
+  submittedFiltersAtom,
+  timelineAutoRefreshAtom,
+  timelineDataAtom,
+  timelineFullItemsAtom,
+  timelineLoadErrorAtom,
+  toastMessageAtom,
+  updatedTextAtom,
+} from './state.js';
+import type { AdminTab } from './state.js';
 import { TimelinePage } from './Timeline.js';
 import { Empty } from './ui.js';
 
-type Tab = 'timeline' | 'settings';
-
-// TimelineFilters 区分编辑中的条件与已经提交的查询，自动刷新和翻页只使用已提交值。
-interface TimelineFilters {
-  hours: number;
-  user: string;
-  subagent: string;
-}
-const defaultFilters: TimelineFilters = { hours: 24, user: '', subagent: '' };
-
-const tabs: Record<Tab, [string, string]> = {
+const tabs: Record<AdminTab, [string, string]> = {
   timeline: ['运行过程', '按时间查看 Main 与后台 Subagent 收到的输入、推理与工具调用。'],
   settings: ['配置', '管理主动压缩提醒线、热压缩触发线、模型供应商和服务凭证。'],
 };
-const tabGlyphs: Record<Tab, string> = { timeline: '⋮', settings: '⚙' };
+const tabGlyphs: Record<AdminTab, string> = { timeline: '⋮', settings: '⚙' };
 
-// AdminApp 是看板根组件：未登录时显示密码登录，登录后显示侧边栏外壳与当前页。
+// AdminApp 是看板根组件：启动时通过 Atom 校验管理员身份，按登录态切换登录页、无权页或工作空间。
 export function AdminApp() {
-  const [booting, setBooting] = useState(true);
-  const [me, setMe] = useState<{ name: string } | null>(null);
-  const [denied, setDenied] = useState('');
-  const [tab, setTab] = useState<Tab>('timeline');
-  const [filters, setFilters] = useState(defaultFilters);
-  const [query, setQuery] = useState(defaultFilters);
-  const [knownUsers, setKnownUsers] = useState(new Map<string, string>());
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [timeline, setTimeline] = useState<(Timeline & { key: string }) | null>(null);
-  const [updatedText, setUpdatedText] = useState('尚未刷新');
-  const [loadError, setLoadError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
-  const [browsingPages, setBrowsingPages] = useState(false);
-  const [toast, setToast] = useState('');
-  const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
-  const [runtimeLoading, setRuntimeLoading] = useState(false);
-  const [providersLoading, setProvidersLoading] = useState(false);
-  const [serviceLoading, setServiceLoading] = useState(false);
+  useAtomMount(bootstrapSessionAtom);
+  const access = useAtomValue(accessStateAtom);
+  const logout = useAtomSet(logoutAdminAtom, { mode: 'promiseExit' });
+  const notify = useAtomSet(notifyToastAtom);
 
-  const controller = useRef<AbortController | null>(null);
-  const generation = useRef(0);
-  const browsingRef = useRef(false);
-  const tabRef = useRef<Tab>('timeline');
-  // 时间线展开状态与已加载全文跨自动刷新保留，沿用改造前 Map 的行为。
-  const timelineOpen = useRef(new Map<string, boolean>());
-  const timelineFull = useRef(new Map<string, TimelineItem>());
-  const windowRef = useRef<{ from: string; to: string } | null>(null);
-  const filtersRef = useRef(query);
-  filtersRef.current = query;
-  tabRef.current = tab;
-  browsingRef.current = browsingPages;
-
-  // notify 显示右下角短提示，四秒后自动收起。
-  const notify = useCallback((message: string) => {
-    setToast(message);
-  }, []);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(''), 4000);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  // clearData 在退出或权限失效时清掉全部看板数据与未完成的请求。
-  const clearData = useCallback(() => {
-    controller.current?.abort();
-    generation.current++;
-    setMe(null);
-    setSnapshot(null);
-    setTimeline(null);
-    timelineOpen.current.clear();
-    timelineFull.current.clear();
-    setFilters(defaultFilters);
-    setQuery(defaultFilters);
-    setKnownUsers(new Map());
-    windowRef.current = null;
-    setUpdatedText('尚未刷新');
-    setBrowsingPages(false);
-  }, []);
-
-  // accessLost 处理令牌或权限失效：401 回登录页，403 显示无权页。
-  const accessLost = useCallback(
-    (error: ApiError) => {
-      clearData();
-      if (error.status === 401) {
-        setAdminToken(null);
-        sessionStorage.removeItem('aether_admin_token');
-        setDenied('');
-        setBooting(false);
-      } else {
-        setDenied(error.message);
-      }
-    },
-    [clearData],
-  );
-
-  // buildQuery 为查询与翻页共用同一时间窗口和已提交条件。
-  const buildQuery = useCallback((extra: Record<string, string | null> = {}) => {
-    const current = filtersRef.current;
-    const params = new URLSearchParams(windowRef.current ?? {});
-    if (current.user) params.set('user_id', current.user);
-    if (current.subagent) params.set('subagent_id', current.subagent);
-    for (const [key, value] of Object.entries(extra)) if (value != null) params.set(key, value);
-    return params.toString();
-  }, []);
-
-  // selectSubagent 在当前选中用户下立即切换到指定 Subagent（空字符串回到 Main）。
-  const selectSubagent = useCallback((subagentID: string) => {
-    setFilters((previous) => ({ ...previous, subagent: subagentID }));
-    setQuery((previous) => ({ ...previous, subagent: subagentID }));
-  }, []);
-
-  // refresh 重新读取当前页数据，并按已提交的小时数重算时间窗口。
-  const refresh = useCallback(async () => {
-    if (tabRef.current === 'settings') {
-      setSettingsRefreshKey((value) => value + 1);
-      return;
+  const handleLogout = useCallback(async () => {
+    const exit = await logout(undefined);
+    if (Exit.isFailure(exit)) {
+      notify('暂时无法退出，请稍后重试。');
     }
-    setBrowsingPages(false);
-    controller.current?.abort();
-    const abort = new AbortController();
-    controller.current = abort;
-    const current = ++generation.current;
-    const now = new Date();
-    windowRef.current = {
-      from: new Date(now.getTime() - filtersRef.current.hours * 3600000).toISOString(),
-      to: now.toISOString(),
-    };
-    setRefreshing(true);
-    try {
-      const user = filtersRef.current.user;
-      const subagent = filtersRef.current.subagent;
-      const timelineQuery = buildQuery();
-      const snapshotQuery = new URLSearchParams(windowRef.current ?? {});
-      if (user) snapshotQuery.set('user_id', user);
-      if (user && subagent) snapshotQuery.set('subagent_id', subagent);
-      const [loadedSnapshot, list] = await Promise.all([
-        api<Snapshot>(`/admin/snapshot?${snapshotQuery}`, { signal: abort.signal }),
-        user ? api<Timeline>(`/admin/timeline?${timelineQuery}`, { signal: abort.signal }) : null,
-      ]);
-      if (current !== generation.current) return;
-      setSnapshot(loadedSnapshot);
-      setKnownUsers((previous) => {
-        const users = new Map(previous);
-        for (const item of loadedSnapshot.users.items) users.set(item.id, item.email);
-        return users;
-      });
-      setTimeline(list ? { ...list, key: `${user}:${subagent}` } : null);
-      setUpdatedText(`${formatTime(loadedSnapshot.generated_at)} 已更新`);
-      setLoadError('');
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        accessLost(error);
-        return;
-      }
-      const message = error instanceof Error ? error.message : '加载失败，请稍后重试。';
-      setLoadError(message);
-    } finally {
-      if (current === generation.current) setRefreshing(false);
-    }
-  }, [accessLost, buildQuery]);
+  }, [logout, notify]);
 
-  // 启动时若已有标签页令牌，先验证管理员身份再进看板，失效则回登录页。
-  useEffect(() => {
-    const token = sessionStorage.getItem('aether_admin_token');
-    if (!token) {
-      setBooting(false);
-      return;
-    }
-    setAdminToken(token);
-    api<{ name: string }>('/admin/me')
-      .then((loaded) => {
-        setMe(loaded);
-        setBooting(false);
-      })
-      .catch(() => {
-        setAdminToken(null);
-        sessionStorage.removeItem('aether_admin_token');
-        setBooting(false);
-      });
-  }, []);
-
-  // 登录成功后首次加载，以及筛选或页签变化时重新读取（设置页自行加载）。
-  useEffect(() => {
-    if (!me || tab !== 'timeline') return;
-    void refresh();
-  }, [me, tab, query, refresh]);
-
-  // 每 15 秒自动刷新；翻页浏览、设置页与输入聚焦时暂停，页面切回前台时补一次。
-  useEffect(() => {
-    if (!me) return;
-    const timer = setInterval(() => {
-      if (
-        document.hidden ||
-        tabRef.current === 'settings' ||
-        browsingRef.current ||
-        document.querySelector('input:focus')
-      )
-        return;
-      void refresh();
-    }, 15000);
-    const visibility = () => {
-      if (!document.hidden && tabRef.current === 'timeline' && !browsingRef.current)
-        void refresh();
-    };
-    document.addEventListener('visibilitychange', visibility);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', visibility);
-    };
-  }, [me, refresh]);
-
-  // loadTimelineMessage 按条读取时间线全文与截图，存入保留 Map 后重绘。
-  async function loadTimelineMessage(id: string, button: HTMLButtonElement) {
-    const current = generation.current;
-    button.disabled = true;
-    try {
-      const full = await api<TimelineItem>(`/admin/timeline/messages/${id}`, {
-        signal: controller.current?.signal,
-      });
-      if (current !== generation.current || !me) return;
-      timelineFull.current.set(id, full);
-      setTimeline((value) => (value ? { ...value } : value));
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        accessLost(error);
-        return;
-      }
-      notify(error instanceof Error ? error.message : '加载失败，请稍后重试。');
-      button.disabled = false;
-    }
-  }
-
-  // loadEarlierTimeline 向前翻一页时间线并暂停自动刷新，避免刷新把已加载的更早记录替换掉。
-  async function loadEarlierTimeline(button: HTMLButtonElement) {
-    if (!timeline?.next_cursor || !controller.current) return;
-    const current = generation.current;
-    const signal = controller.current.signal;
-    button.disabled = true;
-    try {
-      const pageData = await api<Timeline>(
-        `/admin/timeline?${buildQuery({ before: timeline.next_cursor })}`,
-        { signal },
-      );
-      if (current !== generation.current || signal.aborted || !me) return;
-      setTimeline({
-        ...timeline,
-        items: [...pageData.items, ...timeline.items],
-        next_cursor: pageData.next_cursor,
-      });
-      setBrowsingPages(true);
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        accessLost(error);
-        return;
-      }
-      notify(error instanceof Error ? error.message : '加载失败，请稍后重试。');
-      button.disabled = false;
-    }
-  }
-
-  // logout 撤销当前管理会话并回登录页；撤销失败（除已过期外）留在原页提示。
-  async function logout() {
-    try {
-      await api<null>('/admin/logout', { method: 'POST' });
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 401) {
-        notify('暂时无法退出，请稍后重试。');
-        return;
-      }
-    }
-    clearData();
-    setDenied('');
-    setAdminToken(null);
-    sessionStorage.removeItem('aether_admin_token');
-    setBooting(false);
-  }
-
-  const onSettingsUpdated = useCallback((text: string) => setUpdatedText(text), []);
-  // 运行参数、模型供应商与服务凭证各自报告加载；刷新按钮等到全部结束再恢复。
-  const onRuntimeLoading = useCallback((loading: boolean) => {
-    setRuntimeLoading(loading);
-    if (!loading) setLoadError('');
-  }, []);
-  const onProvidersLoading = useCallback((loading: boolean) => {
-    setProvidersLoading(loading);
-    if (!loading) setLoadError('');
-  }, []);
-  const onServiceLoading = useCallback((loading: boolean) => {
-    setServiceLoading(loading);
-    if (!loading) setLoadError('');
-  }, []);
-
-  if (booting) return <div className="boot">正在验证管理员身份…</div>;
-  if (denied)
+  if (access.kind === 'booting') return <div className="boot">正在验证管理员身份…</div>;
+  if (access.kind === 'denied') {
     return (
       <main className="access-denied">
         <div className="eyebrow teal">ACCESS RESTRICTED</div>
         <h1>管理权限已不可用</h1>
-        <p>{denied}</p>
-        <button type="button" className="button primary" onClick={() => void logout()}>
+        <p>{access.message}</p>
+        <button type="button" className="button primary" onClick={() => void handleLogout()}>
           重新登录
         </button>
       </main>
     );
-  if (!me)
-    return (
-      <LoginPage
-        onLoggedIn={(name) => {
-          setMe({ name });
-        }}
-      />
-    );
+  }
+  if (access.kind === 'logged_out') {
+    return <LoginPage />;
+  }
+
+  return <AuthenticatedConsole adminName={access.name} onLogout={handleLogout} />;
+}
+
+// AuthenticatedConsole 承载已登录管理员的侧边栏外壳、15 秒自动刷新与运行过程/配置页切换。
+function AuthenticatedConsole({
+  adminName,
+  onLogout,
+}: {
+  adminName: string;
+  onLogout: () => Promise<void>;
+}) {
+  useAtomMount(timelineAutoRefreshAtom);
+
+  const [tab, setTab] = useAtom(activeTabAtom);
+  const [filters, setFilters] = useAtom(draftFiltersAtom);
+  const [query, setQuery] = useAtom(submittedFiltersAtom);
+  const knownUsers = useAtomValue(knownUsersAtom);
+  const snapshot = useAtomValue(snapshotDataAtom);
+  const timeline = useAtomValue(timelineDataAtom);
+  const fullItems = useAtomValue(timelineFullItemsAtom);
+  const loadError = useAtomValue(timelineLoadErrorAtom);
+  const browsingPages = useAtomValue(browsingPagesAtom);
+  const updatedText = useAtomValue(updatedTextAtom);
+  const toast = useAtomValue(toastMessageAtom);
+
+  const refreshTimelineResult = useAtomValue(refreshTimelineAtom);
+  const triggerRefreshTimeline = useAtomSet(refreshTimelineAtom);
+  const loadEarlier = useAtomSet(loadEarlierTimelineAtom, { mode: 'promiseExit' });
+  const loadFullMessage = useAtomSet(loadTimelineMessageAtom, { mode: 'promiseExit' });
+  const notify = useAtomSet(notifyToastAtom);
+
+  // 时间线折叠展开状态属于纯界面记忆，跨自动刷新保留。
+  const timelineOpen = useRef(new Map<string, boolean>());
+
+  // 切回运行过程页或提交新筛选条件时自动拉取最新数据。
+  useEffect(() => {
+    if (tab !== 'timeline') return;
+    triggerRefreshTimeline(undefined);
+  }, [tab, query, triggerRefreshTimeline]);
+
+  // selectSubagent 在当前选中用户下立即切换到指定 Subagent（空字符串回到 Main）。
+  const selectSubagent = useCallback(
+    (subagentID: string) => {
+      setFilters((previous) => ({ ...previous, subagent: subagentID }));
+      setQuery((previous) => ({ ...previous, subagent: subagentID }));
+    },
+    [setFilters, setQuery],
+  );
+
+  // loadTimelineMessage 按条读取时间线全文与截图，成功后按钮自动消失，失败时恢复按钮。
+  const handleLoadFull = useCallback(
+    async (id: string, button: HTMLButtonElement) => {
+      button.disabled = true;
+      const exit = await loadFullMessage(id);
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        notify(formatAdminCause(exit.cause));
+        button.disabled = false;
+      }
+    },
+    [loadFullMessage, notify],
+  );
+
+  // loadEarlierTimeline 向前翻一页时间线，失败时提示并恢复按钮。
+  const handleLoadEarlier = useCallback(
+    async (button: HTMLButtonElement) => {
+      button.disabled = true;
+      const exit = await loadEarlier(undefined);
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        notify(formatAdminCause(exit.cause));
+        button.disabled = false;
+      }
+    },
+    [loadEarlier, notify],
+  );
 
   const settingsPage = tab === 'settings';
-  const pageBusy = settingsPage ? runtimeLoading || providersLoading || serviceLoading : refreshing;
+  const timelineBusy = AsyncResult.isWaiting(refreshTimelineResult);
   const subagentOptions = filters.user === query.user ? (snapshot?.subagents?.items ?? []) : [];
 
   return (
@@ -349,7 +172,7 @@ export function AdminApp() {
         </a>
         <div className="nav-label">工作空间</div>
         <nav aria-label="管理导航">
-          {(Object.keys(tabs) as Tab[]).map((key) => (
+          {(Object.keys(tabs) as AdminTab[]).map((key) => (
             <button
               key={key}
               type="button"
@@ -365,12 +188,17 @@ export function AdminApp() {
           <span className="live-dot" /> 管理员工作空间<p>运行过程与配置</p>
         </div>
         <div className="account">
-          <div className="avatar">{me.name.charAt(0).toUpperCase()}</div>
+          <div className="avatar">{adminName.charAt(0).toUpperCase()}</div>
           <div>
-            <strong>{me.name}</strong>
+            <strong>{adminName}</strong>
             <span>管理员</span>
           </div>
-          <button type="button" title="退出登录" aria-label="退出登录" onClick={() => void logout()}>
+          <button
+            type="button"
+            title="退出登录"
+            aria-label="退出登录"
+            onClick={() => void onLogout()}
+          >
             ↗
           </button>
         </div>
@@ -392,12 +220,13 @@ export function AdminApp() {
               <h1>{tabs[tab][0]}</h1>
               <p>{tabs[tab][1]}</p>
             </div>
-            <div className="refresh-group">
-              <span id="updated">{browsingPages ? '分页浏览中 / 手动刷新' : `${updatedText}`}</span>
-              <button type="button" className="button" disabled={pageBusy} onClick={() => void refresh()}>
-                {pageBusy ? '↻ 更新中' : '↻ 刷新'}
-              </button>
-            </div>
+            <RefreshControls
+              settingsPage={settingsPage}
+              browsingPages={browsingPages}
+              updatedText={updatedText}
+              timelineBusy={timelineBusy}
+              onRefreshTimeline={() => triggerRefreshTimeline(undefined)}
+            />
           </div>
           {!settingsPage ? (
             <form
@@ -444,14 +273,16 @@ export function AdminApp() {
                 时间范围
                 <select
                   value={filters.hours}
-                  onChange={(event) => setFilters({ ...filters, hours: Number(event.target.value) })}
+                  onChange={(event) =>
+                    setFilters({ ...filters, hours: Number(event.target.value) })
+                  }
                 >
                   <option value={24}>最近 24 小时</option>
                   <option value={168}>最近 7 天</option>
                   <option value={720}>最近 30 天</option>
                 </select>
               </label>
-              <button className="button primary" type="submit" disabled={pageBusy}>
+              <button className="button primary" type="submit" disabled={timelineBusy}>
                 查询
               </button>
               <button
@@ -474,30 +305,12 @@ export function AdminApp() {
           <div aria-live="polite">
             {tab === 'settings' ? (
               <>
-                <RuntimeSettingsPage
-                  refreshKey={settingsRefreshKey}
-                  onUpdated={onSettingsUpdated}
-                  onAccessLost={accessLost}
-                  onLoadingChange={onRuntimeLoading}
-                  notify={notify}
-                />
+                <RuntimeSettingsPage />
                 <div className="settings-services">
-                  <ModelProvidersPage
-                    refreshKey={settingsRefreshKey}
-                    onUpdated={onSettingsUpdated}
-                    onAccessLost={accessLost}
-                    onLoadingChange={onProvidersLoading}
-                    notify={notify}
-                  />
+                  <ModelProvidersPage />
                 </div>
                 <div className="settings-services">
-                  <ServiceSettingsPage
-                    refreshKey={settingsRefreshKey}
-                    onUpdated={onSettingsUpdated}
-                    onAccessLost={accessLost}
-                    onLoadingChange={onServiceLoading}
-                    notify={notify}
-                  />
+                  <ServiceSettingsPage />
                 </div>
               </>
             ) : !snapshot ? (
@@ -513,10 +326,10 @@ export function AdminApp() {
                 snapshot={snapshot}
                 timeline={timeline}
                 openState={timelineOpen.current}
-                fullItems={timelineFull.current}
+                fullItems={fullItems}
                 onSelectSubagent={selectSubagent}
-                onLoadFull={(id, button) => void loadTimelineMessage(id, button)}
-                onLoadEarlier={(button) => void loadEarlierTimeline(button)}
+                onLoadFull={(id, button) => void handleLoadFull(id, button)}
+                onLoadEarlier={(button) => void handleLoadEarlier(button)}
                 notify={notify}
               />
             )}
@@ -544,29 +357,77 @@ export function AdminApp() {
   );
 }
 
-// LoginPage 是管理员密码登录页：密码正确后换管理令牌进看板，令牌只存当前标签页。
-function LoginPage({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
+// RefreshControls 按当前页签触发运行过程或配置页三组 Atom 的刷新，避免在运行过程页提前挂载配置 Atom。
+function RefreshControls({
+  settingsPage,
+  browsingPages,
+  updatedText,
+  timelineBusy,
+  onRefreshTimeline,
+}: {
+  settingsPage: boolean;
+  browsingPages: boolean;
+  updatedText: string;
+  timelineBusy: boolean;
+  onRefreshTimeline: () => void;
+}) {
+  if (settingsPage) {
+    return <SettingsRefreshControls updatedText={updatedText} />;
+  }
+  return (
+    <div className="refresh-group">
+      <span id="updated">{browsingPages ? '分页浏览中 / 手动刷新' : updatedText}</span>
+      <button type="button" className="button" disabled={timelineBusy} onClick={onRefreshTimeline}>
+        {timelineBusy ? '↻ 更新中' : '↻ 刷新'}
+      </button>
+    </div>
+  );
+}
+
+// SettingsRefreshControls 只在配置页挂载时订阅三组配置 Atom 的加载状态与刷新句柄。
+function SettingsRefreshControls({ updatedText }: { updatedText: string }) {
+  const settingsBusy = useAtomValue(settingsBusyAtom);
+  const refreshRuntime = useAtomRefresh(runtimeSettingsAtom);
+  const refreshProviders = useAtomRefresh(modelProvidersAtom);
+  const refreshServices = useAtomRefresh(serviceSettingsAtom);
+
+  return (
+    <div className="refresh-group">
+      <span id="updated">{updatedText}</span>
+      <button
+        type="button"
+        className="button"
+        disabled={settingsBusy}
+        onClick={() => {
+          refreshRuntime();
+          refreshProviders();
+          refreshServices();
+        }}
+      >
+        {settingsBusy ? '↻ 更新中' : '↻ 刷新'}
+      </button>
+    </div>
+  );
+}
+
+// LoginPage 是管理员密码登录页：通过 loginAdminAtom 换取管理令牌并验证会话。
+function LoginPage() {
+  const login = useAtomSet(loginAdminAtom, { mode: 'promiseExit' });
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // 提交密码换取管理令牌，再读一次管理员身份确认会话可用。
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setSubmitting(true);
     setError('');
     try {
-      const verified = await api<{ token: string }>('/admin/login', {
-        method: 'POST',
-        body: JSON.stringify({ password }),
-      });
+      const exit = await login(password);
+      if (Exit.isFailure(exit)) {
+        setError(formatAdminCause(exit.cause, '登录失败，请重试。'));
+        return;
+      }
       setPassword('');
-      setAdminToken(verified.token);
-      sessionStorage.setItem('aether_admin_token', verified.token);
-      const me = await api<{ name: string }>('/admin/me');
-      onLoggedIn(me.name);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '登录失败，请重试。');
     } finally {
       setSubmitting(false);
     }

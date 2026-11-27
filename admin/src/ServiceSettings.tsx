@@ -1,14 +1,12 @@
-// 本文件是管理看板配置页的服务凭证部分：OpenRouter 只显示环境变量配置状态，其余服务凭证可独立保存。
+// 本文件是管理看板配置页的服务凭证部分：通过 Effect Atom 并发拉取脱敏状态与实时额度，并独立提交各服务凭证。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  api,
-  ApiError,
-  formatTime,
-  quotaHeadline,
-  type QuotaItem,
-  type ServiceItem,
-} from './api.js';
+import { useState } from 'react';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Exit, Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { extractAdminHttpError, formatTime, quotaHeadline } from './api.js';
+import type { QuotaItem, ServiceItem } from './api.js';
+import { notifyToastAtom, saveServiceSettingAtom, serviceSettingsAtom } from './state.js';
 import { Empty } from './ui.js';
 
 const descriptions: Record<string, string> = {
@@ -20,61 +18,19 @@ const descriptions: Record<string, string> = {
   aliyun_fc: '保存 FC 沙箱 API Key。电脑的地域与模板由部署配置指定，长期工作区由维护者按用户绑定。',
 };
 
-// ServiceSettingsPage 自己负责读取；页面不自动刷新，避免覆盖正在输入的新 Key。上层用 refreshKey 触发手动刷新。
-export function ServiceSettingsPage({
-  refreshKey,
-  onUpdated,
-  onAccessLost,
-  onLoadingChange,
-  notify,
-}: {
-  refreshKey: number;
-  onUpdated: (text: string) => void;
-  onAccessLost: (error: ApiError) => void;
-  onLoadingChange: (loading: boolean) => void;
-  notify: (message: string) => void;
-}) {
-  const [items, setItems] = useState<ServiceItem[] | null>(null);
-  const [quotas, setQuotas] = useState<{ items: QuotaItem[] } | null>(null);
-  const [loadError, setLoadError] = useState(false);
-  const generation = useRef(0);
+// ServiceSettingsPage 订阅服务配置与额度 Atom；刷新失败时保留上次成功加载的表单状态。
+export function ServiceSettingsPage() {
+  const result = useAtomValue(serviceSettingsAtom);
+  const data = AsyncResult.isSuccess(result)
+    ? result.value
+    : AsyncResult.isFailure(result) && Option.isSome(result.previousSuccess)
+      ? result.previousSuccess.value.value
+      : null;
+  const loadError = AsyncResult.isFailure(result);
 
-  // 服务配置与额度明细一起加载；额度查询失败不阻断凭证管理。
-  const load = useCallback(async () => {
-    const current = ++generation.current;
-    onLoadingChange(true);
-    try {
-      const [config, loadedQuotas] = await Promise.all([
-        api<{ items: ServiceItem[] }>('/admin/services'),
-        api<{ items: QuotaItem[] }>('/admin/quotas').catch((error: unknown) => {
-          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw error;
-          return null;
-        }),
-      ]);
-      if (current !== generation.current) return;
-      setItems(config.items);
-      if (loadedQuotas) setQuotas(loadedQuotas);
-      setLoadError(false);
-      onUpdated(`${formatTime(new Date().toISOString())} 已更新`);
-    } catch (error) {
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        onAccessLost(error);
-        return;
-      }
-      setLoadError(true);
-    } finally {
-      if (current === generation.current) onLoadingChange(false);
-    }
-  }, [onAccessLost, onLoadingChange, onUpdated]);
-
-  useEffect(() => {
-    void load();
-  }, [load, refreshKey]);
-
-  if (loadError && !items)
+  if (loadError && !data)
     return <Empty title="无法读取服务配置" description="连接恢复后可重新加载。" />;
-  if (!items) return <div className="loading-card">正在读取服务配置…</div>;
+  if (!data) return <div className="loading-card">正在读取服务配置…</div>;
 
   return (
     <>
@@ -86,17 +42,17 @@ export function ServiceSettingsPage({
       <section className="model-intro">
         <div className="eyebrow teal">SERVICE SETTINGS</div>
         <h2>统一管理服务凭证</h2>
-        <p>这些配置供所有用户共用。保存后从下一次请求生效；已保存的 Key 不回显完整内容，留空表示保留当前 Key。</p>
+        <p>
+          这些配置供所有用户共用。保存后从下一次请求生效；已保存的 Key
+          不回显完整内容，留空表示保留当前 Key。
+        </p>
       </section>
       <div className="model-role-grid service-settings-grid">
-        {items.map((service) => (
+        {data.items.map((service) => (
           <ServiceCard
             key={service.id}
             service={service}
-            quota={quotas?.items?.find((item) => item.id === service.id)}
-            onSaved={(next) => setItems(next)}
-            onAccessLost={onAccessLost}
-            notify={notify}
+            quota={data.quotas?.find((item) => item.id === service.id)}
           />
         ))}
       </div>
@@ -108,19 +64,10 @@ export function ServiceSettingsPage({
 }
 
 // ServiceCard 是一个服务的独立保存表单：新 Key 只存在输入框和本次请求中，提交结束后清空。
-function ServiceCard({
-  service,
-  quota,
-  onSaved,
-  onAccessLost,
-  notify,
-}: {
-  service: ServiceItem;
-  quota?: QuotaItem;
-  onSaved: (items: ServiceItem[]) => void;
-  onAccessLost: (error: ApiError) => void;
-  notify: (message: string) => void;
-}) {
+function ServiceCard({ service, quota }: { service: ServiceItem; quota?: QuotaItem }) {
+  const saveService = useAtomSet(saveServiceSettingAtom, { mode: 'promiseExit' });
+  const notify = useAtomSet(notifyToastAtom);
+
   const [key, setKey] = useState('');
   const [accessKeyId, setAccessKeyId] = useState('');
   const [bucket, setBucket] = useState(service.oss?.bucket || '');
@@ -154,7 +101,7 @@ function ServiceCard({
     );
   }
 
-  // 保存或清除单个服务；成功后重新读取脱敏状态回显，失败时只在本卡片提示。
+  // 保存或清除单个服务；成功后由 Atom 自动重拉脱敏状态回显，失败时只在本卡片提示。
   async function submit(clearKey: boolean) {
     if (saving) return;
     setError('');
@@ -182,23 +129,20 @@ function ServiceCard({
     }
     setSaving(true);
     try {
-      await api<null>(`/admin/services/${service.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      const config = await api<{ items: ServiceItem[] }>('/admin/services');
-      onSaved(config.items);
+      const exit = await saveService({ serviceID: service.id, body });
+      if (Exit.isFailure(exit)) {
+        const httpError = extractAdminHttpError(exit.cause);
+        setError(
+          httpError?.status === 400
+            ? '配置未保存。请检查凭证、Bucket、地域和发件人格式。'
+            : '未能确认保存结果，请刷新查看当前配置后重试。',
+        );
+        return;
+      }
       notify(
         clearKey
           ? `${service.name} Key 已清除，后续请求将停止使用此服务。`
           : `${service.name} 配置已保存，下次请求生效；尚未验证供应商可用性。`,
-      );
-    } catch (loadError) {
-      if (loadError instanceof ApiError && (loadError.status === 401 || loadError.status === 403)) {
-        onAccessLost(loadError);
-        return;
-      }
-      setError(
-        loadError instanceof ApiError && loadError.status === 400
-          ? '配置未保存。请检查凭证、Bucket、地域和发件人格式。'
-          : '未能确认保存结果，请刷新查看当前配置后重试。',
       );
     } finally {
       setKey('');
@@ -227,9 +171,13 @@ function ServiceCard({
             ? `当前 Key · •••• ${service.key_suffix}`
             : '当前 Key 已隐藏'}
       </p>
-      <p className="service-updated">{service.updated_at ? `最近修改 ${formatTime(service.updated_at)}` : '尚未保存'}</p>
+      <p className="service-updated">
+        {service.updated_at ? `最近修改 ${formatTime(service.updated_at)}` : '尚未保存'}
+      </p>
       <p className="service-quota">
-        {quota ? `剩余额度：${quotaHeadline(quota)}${quota.detail ? ` · ${quota.detail}` : ''}` : '剩余额度：暂时无法读取'}
+        {quota
+          ? `剩余额度：${quotaHeadline(quota)}${quota.detail ? ` · ${quota.detail}` : ''}`
+          : '剩余额度：暂时无法读取'}
       </p>
       {service.status === 'unreadable' ? (
         <p className="form-error">无法读取当前凭证。请核对部署加密主密钥，或重新输入 Key 替换。</p>

@@ -1,7 +1,8 @@
-// 本文件是管理看板浏览器端入口：加载全局样式、创建 TanStack Router 实例并挂载根组件。
+// 本文件是管理看板浏览器端入口：加载全局样式、挂载 Effect Atom RegistryProvider 与 TanStack Router 实例。
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { RegistryProvider } from '@effect/atom-react';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
 import './style.css';
@@ -15,7 +16,7 @@ function LoadingPage() {
   );
 }
 
-// 看板路由实例挂载文件路由树，页签状态仍由 AdminApp 组件内部管理。
+// 看板路由实例挂载文件路由树，页签状态由 Effect Atom 全局维护。
 const router = createRouter({
   routeTree,
   defaultPendingComponent: LoadingPage,
@@ -33,6 +34,8 @@ if (!rootElement) throw new Error('缺少应用挂载节点 #root');
 
 createRoot(rootElement).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <RegistryProvider>
+      <RouterProvider router={router} />
+    </RegistryProvider>
   </StrictMode>,
 );

@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
-  },
   "scripts": {
     "build": "vp build && pnpm run check",
     "dev": "vp dev",
@@ -14,7 +11,9 @@
     "start": "node --env-file-if-exists=.env server.mjs"
   },
   "dependencies": {
+    "@effect/atom-react": "^4.1.6",
     "@tanstack/react-router": "1.170.46",
+    "effect": "^4.1.6",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -27,6 +26,9 @@
     "typescript": "^5.9.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8001",
     "vite-plus": "^1.8.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
   },
   "pnpm": {
     "overrides": {

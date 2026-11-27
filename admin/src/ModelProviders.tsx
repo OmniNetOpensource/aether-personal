@@ -1,16 +1,26 @@
-// 本文件是管理看板配置页的自定义模型供应商管理：支持新增、编辑与删除按协议配置的外部模型供应商，完整 Key 不回显。
+// 本文件是管理看板配置页的自定义模型供应商管理：通过 Effect Atom 读取、新增、编辑与删除外部模型供应商，完整 Key 不回显。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Exit, Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { extractAdminHttpError, formatTime } from './api.js';
+import type { ModelProvider, ModelProviderProtocol } from './api.js';
 import {
-  api,
-  ApiError,
-  formatTime,
-  type ModelProvider,
-  type ModelProviderProtocol,
-} from './api.js';
+  createModelProviderAtom,
+  deleteModelProviderAtom,
+  modelProvidersAtom,
+  notifyToastAtom,
+  updateModelProviderAtom,
+} from './state.js';
 import { Empty } from './ui.js';
 
-const protocolOptions: { value: ModelProviderProtocol; label: string; placeholder: string; hint: string }[] = [
+const protocolOptions: {
+  readonly value: ModelProviderProtocol;
+  readonly label: string;
+  readonly placeholder: string;
+  readonly hint: string;
+}[] = [
   {
     value: 'openai',
     label: 'OpenAI 兼容（Chat Completions）',
@@ -35,49 +45,15 @@ function protocolMeta(protocol: ModelProviderProtocol) {
   return protocolOptions.find((item) => item.value === protocol) ?? protocolOptions[0];
 }
 
-// ModelProvidersPage 读取并管理自定义模型供应商；不自动刷新，避免覆盖编辑中的表单输入。
-export function ModelProvidersPage({
-  refreshKey,
-  onUpdated,
-  onAccessLost,
-  onLoadingChange,
-  notify,
-}: {
-  refreshKey: number;
-  onUpdated: (text: string) => void;
-  onAccessLost: (error: ApiError) => void;
-  onLoadingChange: (loading: boolean) => void;
-  notify: (message: string) => void;
-}) {
-  const [items, setItems] = useState<ModelProvider[] | null>(null);
-  const [loadError, setLoadError] = useState(false);
-  const generation = useRef(0);
-
-  // 加载脱敏后的自定义模型供应商列表；权限失效时交由上层退出登录。
-  const load = useCallback(async () => {
-    const current = ++generation.current;
-    onLoadingChange(true);
-    try {
-      const response = await api<{ items: ModelProvider[] }>('/admin/model-providers');
-      if (current !== generation.current) return;
-      setItems(response.items);
-      setLoadError(false);
-      onUpdated(`${formatTime(new Date().toISOString())} 已更新`);
-    } catch (error) {
-      if (current !== generation.current) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        onAccessLost(error);
-        return;
-      }
-      setLoadError(true);
-    } finally {
-      if (current === generation.current) onLoadingChange(false);
-    }
-  }, [onAccessLost, onLoadingChange, onUpdated]);
-
-  useEffect(() => {
-    void load();
-  }, [load, refreshKey]);
+// ModelProvidersPage 通过 Atom 读取自定义模型供应商列表；刷新失败时保留上次成功结果。
+export function ModelProvidersPage() {
+  const result = useAtomValue(modelProvidersAtom);
+  const items = AsyncResult.isSuccess(result)
+    ? result.value
+    : AsyncResult.isFailure(result) && Option.isSome(result.previousSuccess)
+      ? result.previousSuccess.value.value
+      : null;
+  const loadError = AsyncResult.isFailure(result);
 
   if (loadError && !items)
     return <Empty title="无法读取模型供应商" description="连接恢复后可重新加载。" />;
@@ -94,49 +70,27 @@ export function ModelProvidersPage({
         <div className="eyebrow teal">MODEL PROVIDERS</div>
         <h2>自定义模型供应商</h2>
         <p>
-          按协议配置任意官方或兼容模型端点（OpenAI 兼容、Gemini 原生、Claude 原生）。所有渠道共用同一套模型协议层，与内置
-          OpenRouter 并存；保存后立即出现在 App 的模型目录中。
+          按协议配置任意官方或兼容模型端点（OpenAI 兼容、Gemini 原生、Claude
+          原生）。所有渠道共用同一套模型协议层，与内置 OpenRouter 并存；保存后立即出现在 App
+          的模型目录中。
         </p>
       </section>
       <div className="model-role-grid service-settings-grid">
         {items.map((provider) => (
-          <ModelProviderCard
-            key={provider.id}
-            provider={provider}
-            onChanged={(next) =>
-              setItems((previous) => (previous ? previous.map((item) => (item.id === next.id ? next : item)) : previous))
-            }
-            onDeleted={(id) =>
-              setItems((previous) => (previous ? previous.filter((item) => item.id !== id) : previous))
-            }
-            onAccessLost={onAccessLost}
-            notify={notify}
-          />
+          <ModelProviderCard key={`${provider.id}:${provider.updated_at}`} provider={provider} />
         ))}
-        <CreateModelProviderCard
-          onCreated={(created) => setItems((previous) => (previous ? [...previous, created] : [created]))}
-          onAccessLost={onAccessLost}
-          notify={notify}
-        />
+        <CreateModelProviderCard />
       </div>
     </>
   );
 }
 
 // ModelProviderCard 编辑或删除单个已保存的模型供应商；新 Key 留空则沿用原加密凭证。
-function ModelProviderCard({
-  provider,
-  onChanged,
-  onDeleted,
-  onAccessLost,
-  notify,
-}: {
-  provider: ModelProvider;
-  onChanged: (provider: ModelProvider) => void;
-  onDeleted: (id: string) => void;
-  onAccessLost: (error: ApiError) => void;
-  notify: (message: string) => void;
-}) {
+function ModelProviderCard({ provider }: { provider: ModelProvider }) {
+  const updateProvider = useAtomSet(updateModelProviderAtom, { mode: 'promiseExit' });
+  const deleteProvider = useAtomSet(deleteModelProviderAtom, { mode: 'promiseExit' });
+  const notify = useAtomSet(notifyToastAtom);
+
   const [name, setName] = useState(provider.name);
   const [protocol, setProtocol] = useState<ModelProviderProtocol>(provider.protocol);
   const [baseURL, setBaseURL] = useState(provider.base_url);
@@ -145,47 +99,35 @@ function ModelProviderCard({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // 刷新列表拿到新数据时同步表单初始值，不保留旧错误。
-  useEffect(() => {
-    setName(provider.name);
-    setProtocol(provider.protocol);
-    setBaseURL(provider.base_url);
-    setConfirmDelete(false);
-  }, [provider]);
-
   const meta = protocolMeta(protocol);
 
-  // 提交单条供应商修改；成功后清空密码框并更新卡片状态。
+  // 提交单条供应商修改；成功后清空密码框并由 Atom 自动刷新列表。
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
     setError('');
     setBusy(true);
     try {
-      const updated = await api<ModelProvider>(`/admin/model-providers/${provider.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          name,
-          protocol,
-          base_url: baseURL,
-          api_key: apiKey || null,
-        }),
+      const exit = await updateProvider({
+        id: provider.id,
+        name,
+        protocol,
+        base_url: baseURL,
+        api_key: apiKey || null,
       });
-      onChanged(updated);
-      setApiKey('');
-      notify(`${updated.name} 配置已保存，下次请求生效。`);
-    } catch (failure) {
-      if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
-        onAccessLost(failure);
+      if (Exit.isFailure(exit)) {
+        const httpError = extractAdminHttpError(exit.cause);
+        setError(
+          httpError?.status === 409
+            ? '已存在同名的模型供应商，请更换名称。'
+            : httpError?.status === 400
+              ? '配置未保存。请检查名称、协议、HTTPS 地址与 API Key 格式。'
+              : '未能确认保存结果，请刷新后重试。',
+        );
         return;
       }
-      setError(
-        failure instanceof ApiError && failure.status === 409
-          ? '已存在同名的模型供应商，请更换名称。'
-          : failure instanceof ApiError && failure.status === 400
-            ? '配置未保存。请检查名称、协议、HTTPS 地址与 API Key 格式。'
-            : '未能确认保存结果，请刷新后重试。',
-      );
+      setApiKey('');
+      notify(`${exit.value.name} 配置已保存，下次请求生效。`);
     } finally {
       setBusy(false);
     }
@@ -197,19 +139,15 @@ function ModelProviderCard({
     setError('');
     setBusy(true);
     try {
-      await api<null>(`/admin/model-providers/${provider.id}`, { method: 'DELETE' });
-      onDeleted(provider.id);
-      notify(`${provider.name} 已删除。`);
-    } catch (failure) {
-      if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
-        onAccessLost(failure);
+      const exit = await deleteProvider(provider.id);
+      if (Exit.isFailure(exit)) {
+        const httpError = extractAdminHttpError(exit.cause);
+        setError(
+          httpError?.status === 404 ? '该供应商已不存在，请刷新页面。' : '删除失败，请刷新后重试。',
+        );
         return;
       }
-      setError(
-        failure instanceof ApiError && failure.status === 404
-          ? '该供应商已不存在，请刷新页面。'
-          : '删除失败，请刷新后重试。',
-      );
+      notify(`${provider.name} 已删除。`);
     } finally {
       setBusy(false);
       setConfirmDelete(false);
@@ -230,7 +168,9 @@ function ModelProviderCard({
       </p>
       <p className="service-updated">最近修改 {formatTime(provider.updated_at)}</p>
       {provider.status === 'unreadable' ? (
-        <p className="form-error">无法读取当前凭证。请核对部署加密主密钥，或输入新的 API Key 替换。</p>
+        <p className="form-error">
+          无法读取当前凭证。请核对部署加密主密钥，或输入新的 API Key 替换。
+        </p>
       ) : null}
       <label className="model-picker">
         显示名称
@@ -292,15 +232,30 @@ function ModelProviderCard({
         </button>
         {confirmDelete ? (
           <>
-            <button type="button" className="button danger" disabled={busy} onClick={() => void remove()}>
+            <button
+              type="button"
+              className="button danger"
+              disabled={busy}
+              onClick={() => void remove()}
+            >
               确认删除
             </button>
-            <button type="button" className="button" disabled={busy} onClick={() => setConfirmDelete(false)}>
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
               取消
             </button>
           </>
         ) : (
-          <button type="button" className="button" disabled={busy} onClick={() => setConfirmDelete(true)}>
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={() => setConfirmDelete(true)}
+          >
             删除
           </button>
         )}
@@ -310,15 +265,10 @@ function ModelProviderCard({
 }
 
 // CreateModelProviderCard 提供新增自定义模型供应商的表单卡片，提交后清空明文 Key。
-function CreateModelProviderCard({
-  onCreated,
-  onAccessLost,
-  notify,
-}: {
-  onCreated: (provider: ModelProvider) => void;
-  onAccessLost: (error: ApiError) => void;
-  notify: (message: string) => void;
-}) {
+function CreateModelProviderCard() {
+  const createProvider = useAtomSet(createModelProviderAtom, { mode: 'promiseExit' });
+  const notify = useAtomSet(notifyToastAtom);
+
   const [name, setName] = useState('');
   const [protocol, setProtocol] = useState<ModelProviderProtocol>('openai');
   const [baseURL, setBaseURL] = useState('');
@@ -334,32 +284,27 @@ function CreateModelProviderCard({
     setError('');
     setSaving(true);
     try {
-      const created = await api<ModelProvider>('/admin/model-providers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          protocol,
-          base_url: baseURL,
-          api_key: apiKey,
-        }),
+      const exit = await createProvider({
+        name,
+        protocol,
+        base_url: baseURL,
+        api_key: apiKey,
       });
-      onCreated(created);
+      if (Exit.isFailure(exit)) {
+        const httpError = extractAdminHttpError(exit.cause);
+        setError(
+          httpError?.status === 409
+            ? '已存在同名的模型供应商，请更换名称。'
+            : httpError?.status === 400
+              ? '未能添加。请检查名称、协议、HTTPS 地址与 API Key 格式。'
+              : '未能确认添加结果，请刷新后重试。',
+        );
+        return;
+      }
       setName('');
       setBaseURL('');
       setApiKey('');
-      notify(`已添加模型供应商 ${created.name}。`);
-    } catch (failure) {
-      if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
-        onAccessLost(failure);
-        return;
-      }
-      setError(
-        failure instanceof ApiError && failure.status === 409
-          ? '已存在同名的模型供应商，请更换名称。'
-          : failure instanceof ApiError && failure.status === 400
-            ? '未能添加。请检查名称、协议、HTTPS 地址与 API Key 格式。'
-            : '未能确认添加结果，请刷新后重试。',
-      );
+      notify(`已添加模型供应商 ${exit.value.name}。`);
     } finally {
       setSaving(false);
     }

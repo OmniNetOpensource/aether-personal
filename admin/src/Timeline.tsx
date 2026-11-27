@@ -21,7 +21,7 @@ export interface TimelineViewProps {
   snapshot: Snapshot;
   timeline: (Timeline & { key: string }) | null;
   openState: Map<string, boolean>;
-  fullItems: Map<string, TimelineItem>;
+  fullItems: ReadonlyMap<string, TimelineItem>;
   onSelectSubagent: (subagentID: string) => void;
   onLoadFull: (id: string, button: HTMLButtonElement) => void;
   onLoadEarlier: (button: HTMLButtonElement) => void;
@@ -88,7 +88,10 @@ export function TimelinePage(props: TimelineViewProps) {
     return (
       <>
         <UsageSummary usage={snapshot.usage} />
-        <Empty title="选择一个用户" description="在上方选择用户并点击查询，查看该用户 Main 与后台 Subagent 的运行过程。" />
+        <Empty
+          title="选择一个用户"
+          description="在上方选择用户并点击查询，查看该用户 Main 与后台 Subagent 的运行过程。"
+        />
       </>
     );
   const expectedKey = `${user}:${subagent}`;
@@ -108,7 +111,9 @@ export function TimelinePage(props: TimelineViewProps) {
     timeline.items.filter((item) => item.role === 'tool').map((item) => [item.tool_call_id, item]),
   );
   const paired = new Set(
-    timeline.items.flatMap((item) => (item.tool_calls ?? []).map((call) => call.id)).filter((id) => results.has(id)),
+    timeline.items
+      .flatMap((item) => (item.tool_calls ?? []).map((call) => call.id))
+      .filter((id) => results.has(id)),
   );
 
   const panelTitle = subagent
@@ -139,7 +144,11 @@ export function TimelinePage(props: TimelineViewProps) {
       >
         <ol className="timeline">
           {timeline.system_prompt ? (
-            <TimelineNode kind="runtime" title={subagent ? 'Subagent 不可见指令' : '不可见指令'} at={null}>
+            <TimelineNode
+              kind="runtime"
+              title={subagent ? 'Subagent 不可见指令' : '不可见指令'}
+              at={null}
+            >
               <span className="timeline-meta">每次请求的第一条 user 消息，不落库，随部署生效</span>
               <Foldable
                 storageKey={`${subagent || 'main'}:instructions`}
@@ -151,17 +160,25 @@ export function TimelinePage(props: TimelineViewProps) {
           ) : null}
           {[...timeline.items].reverse().map((item, index) => {
             if (item.role === 'assistant')
-              return <AssistantNode key={item.id ?? index} item={item} results={results} {...props} />;
+              return (
+                <AssistantNode key={item.id ?? index} item={item} results={results} {...props} />
+              );
             if (item.role === 'tool') {
               if (item.tool_call_id && paired.has(item.tool_call_id)) return null;
               return <ToolResultNode key={item.id ?? index} item={item} {...props} />;
             }
             return <InputNode key={item.id ?? index} item={item} {...props} />;
           })}
-          {!timeline.items.length ? <li className="timeline-empty">没有符合查询条件的运行记录。</li> : null}
+          {!timeline.items.length ? (
+            <li className="timeline-empty">没有符合查询条件的运行记录。</li>
+          ) : null}
           {timeline.next_cursor ? (
             <li className="timeline-more">
-              <button type="button" className="button" onClick={(event) => props.onLoadEarlier(event.currentTarget)}>
+              <button
+                type="button"
+                className="button"
+                onClick={(event) => props.onLoadEarlier(event.currentTarget)}
+              >
                 加载更早的记录
               </button>
             </li>
@@ -199,7 +216,7 @@ function TimelineNode({
 }
 
 // fullView 优先使用已加载的全文版本。
-function fullView(item: TimelineItem, fullItems: Map<string, TimelineItem>): TimelineItem {
+function fullView(item: TimelineItem, fullItems: ReadonlyMap<string, TimelineItem>): TimelineItem {
   return (item.id ? fullItems.get(item.id) : undefined) ?? item;
 }
 
@@ -241,10 +258,7 @@ const triggerTitles: Record<string, string> = {
 };
 
 // InputNode 是用户输入、Subagent 指派/回报、定时触发、历史后台触发与压缩摘要节点的渲染。
-function InputNode({
-  item,
-  ...props
-}: { item: TimelineItem } & TimelineViewProps) {
+function InputNode({ item, ...props }: { item: TimelineItem } & TimelineViewProps) {
   const view = fullView(item, props.fullItems);
   const senders: Record<string, [string, string]> = {
     user: ['input', '用户输入'],
@@ -269,7 +283,9 @@ function InputNode({
       extras={
         summaryUsage || linkedSubagentID ? (
           <>
-            {summaryUsage ? <span className="timeline-meta">{stepUsageMeta(summaryUsage)}</span> : null}
+            {summaryUsage ? (
+              <span className="timeline-meta">{stepUsageMeta(summaryUsage)}</span>
+            ) : null}
             {linkedSubagentID ? (
               <button
                 type="button"
@@ -312,7 +328,9 @@ function AssistantNode({
       kind="assistant"
       title="模型回复"
       at={item.at}
-      extras={item.usage ? <span className="timeline-meta">{stepUsageMeta(item.usage)}</span> : undefined}
+      extras={
+        item.usage ? <span className="timeline-meta">{stepUsageMeta(item.usage)}</span> : undefined
+      }
     >
       {view.reasoning?.state === 'text' ? (
         <Foldable
@@ -324,7 +342,9 @@ function AssistantNode({
         />
       ) : (
         <p className="timeline-muted">
-          {view.reasoning?.state === 'encrypted' ? '推理已加密，供应商未返回原文' : '模型未返回推理'}
+          {view.reasoning?.state === 'encrypted'
+            ? '推理已加密，供应商未返回原文'
+            : '模型未返回推理'}
         </p>
       )}
       {view.text ? (
@@ -336,7 +356,14 @@ function AssistantNode({
         />
       ) : null}
       {(view.tool_calls ?? []).map((toolCall) => (
-        <ToolCard key={toolCall.id} toolCallId={toolCall.id} name={toolCall.name} args={toolCall.arguments} result={results.get(toolCall.id)} {...props} />
+        <ToolCard
+          key={toolCall.id}
+          toolCallId={toolCall.id}
+          name={toolCall.name}
+          args={toolCall.arguments}
+          result={results.get(toolCall.id)}
+          {...props}
+        />
       ))}
       <LoadFullButton item={item} {...props} />
     </TimelineNode>
@@ -367,8 +394,9 @@ function ToolCard({
 } & TimelineViewProps) {
   const view = result ? fullView(result, props.fullItems) : null;
   const linkedSubagentID =
-    !props.subagent && (name === 'spawn_subagent' || name === 'forward_subagent' || name === 'cancel_subagent')
-      ? extractSubagentID(view?.text) ?? extractSubagentID(args)
+    !props.subagent &&
+    (name === 'spawn_subagent' || name === 'forward_subagent' || name === 'cancel_subagent')
+      ? (extractSubagentID(view?.text) ?? extractSubagentID(args))
       : null;
 
   return (
@@ -392,11 +420,23 @@ function ToolCard({
           )}
         </div>
       </div>
-      {toolCallId ? <CopyChip label="工具调用 ID" value={toolCallId} notify={props.notify} /> : null}
-      <Foldable storageKey={`${toolCallId}:args`} label="参数" text={prettyArguments(args)} openState={props.openState} />
+      {toolCallId ? (
+        <CopyChip label="工具调用 ID" value={toolCallId} notify={props.notify} />
+      ) : null}
+      <Foldable
+        storageKey={`${toolCallId}:args`}
+        label="参数"
+        text={prettyArguments(args)}
+        openState={props.openState}
+      />
       {result && view ? (
         <>
-          <Foldable storageKey={`${toolCallId}:result`} label="结果" text={view.text ?? ''} openState={props.openState} />
+          <Foldable
+            storageKey={`${toolCallId}:result`}
+            label="结果"
+            text={view.text ?? ''}
+            openState={props.openState}
+          />
           <TimelineImages item={view} />
           <LoadFullButton item={result} {...props} />
         </>
@@ -415,8 +455,15 @@ function ToolResultNode({ item, ...props }: { item: TimelineItem } & TimelineVie
       at={item.at}
       extras={<span className="timeline-meta">对应的调用在更早的记录中</span>}
     >
-      {item.tool_call_id ? <CopyChip label="工具调用 ID" value={item.tool_call_id} notify={props.notify} /> : null}
-      <Foldable storageKey={`${item.id}:text`} label="结果" text={view.text ?? ''} openState={props.openState} />
+      {item.tool_call_id ? (
+        <CopyChip label="工具调用 ID" value={item.tool_call_id} notify={props.notify} />
+      ) : null}
+      <Foldable
+        storageKey={`${item.id}:text`}
+        label="结果"
+        text={view.text ?? ''}
+        openState={props.openState}
+      />
       <TimelineImages item={view} />
       <LoadFullButton item={item} {...props} />
     </TimelineNode>
