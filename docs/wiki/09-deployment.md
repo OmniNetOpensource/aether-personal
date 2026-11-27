@@ -28,7 +28,7 @@ make edge-dry-run
 
 `infra/cloudflare/pnpm-lock.yaml` 与 `infra/cloudflare/pnpm-workspace.yaml` 固定部署工具依赖与构建白名单。`infra/cloudflare/wrangler.jsonc` 配置域名和源站地址。其他人自行部署时修改这些公开配置，不能使用维护者的域名。
 
-PWA 的 `sw.js`、清单与图标包含在同一产物中，无需额外服务。站点需要 HTTPS。Service Worker 使用当前构建的静态资源清单，不缓存 API 或认证数据；缓存入口为 `/`。联网打开页面优先读取当前部署。活跃页面会定期检查更新，回到前台或重新联网时也会检查。新版静态资源下载完成后自动刷新受控页面，文本草稿从当前标签页的会话存储恢复。iOS 在 Safari 分享菜单中安装，Android 使用浏览器安装入口。反向代理不能把缺失的 `sw.js` 或清单回退为 HTML，也不能对 `sw.js` 配置长期不可变缓存。
+PWA 的 `manifest.webmanifest` 与静态图标（`public/icons/`）包含在同一产物中，无需额外服务。站点需要 HTTPS，iOS 在 Safari 分享菜单中「添加到主屏幕」，Android 使用浏览器安装入口以独立窗口打开。2026-11-27 起不再生成或注册 Service Worker（`sw.js`），入口 `/` 与 `/index.html` 通过 `_headers` 配置 `Cache-Control: no-cache` 确保联网打开获取最新部署；反向代理对缺失的 `/sw.js` 保持返回 404，使此前已安装旧版 Service Worker 的客户端自动卸载。
 
 ## 准备应用主机
 

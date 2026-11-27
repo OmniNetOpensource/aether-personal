@@ -57,7 +57,7 @@ flowchart LR
 | React 界面 | 邮箱登录、Main 消息、Markdown、输入框内的发送中与发送失败提示、失败重发与真实思考动态 | 本地实现 |
 | TypeScript 连接管理 | 主页打开即连 WebSocket、收到 `ready` 前显示 loading、`hello` 携带令牌、重连按 position 补消息、历史翻页与登录命令走同一连接、发送等待 `delivered`、重发沿用 client_message_id；服务器事件在 `serverEvents.ts` 定义、由 `ServerEventRelay.ts` 统一中转 | 本地实现 |
 | 浏览器存储 | localStorage 保存登录（`aether_session` / `aether_email`）；sessionStorage 按账号保存当前标签页草稿 | 本地实现 |
-| PWA | 安装清单、多尺寸图标、离线应用外壳、显式版本更新 | 本地实现，移动真机待验收 |
+| PWA | 安装清单与静态多尺寸图标（支持添加到主屏幕独立窗口打开；2026-11-27 移除 Service Worker 与离线外壳） | 本地实现 |
 
 保留 Poke 式 IM 布局：全屏消息列表、底部胶囊输入框，无联系人栏、头像、菜单和常驻侧边栏；存在未完成任务时在输入框上方浮现轻量进度胶囊，点击可展开任务进展浮层（等待回复项可直接附带任务上下文发送补充）。工具过程留在后台，Main 的实际消息进入聊天。连续消息按发送方和两分钟间隔分组，三十分钟间隔或跨日显示时间；消息列表不显示回执，发送中与发送失败只在输入框提示，失败时内容留在输入框、再按发送即重发（2026-11-02，见 [04](04-messaging.md#消息状态)）。上翻阅读不自动回底，加载旧消息保留阅读位置。
 
@@ -71,11 +71,11 @@ flowchart LR
 
 2026-11-02，用户要求 Markdown 渲染对齐 Aether Start。Main 正文改用同款 unified / remark 管线，支持中文紧邻标点的加粗与删除线、GFM 表格与任务列表、KaTeX 行内和块级公式，以及带语言标签、行号和复制反馈的 Shiki 高亮代码块；排版对齐其标题层级、列表缩进和块间距，配色与 18px 正文沿用当前主题。选择相同解析管线是为了统一语法和阅读体验，替代手工遍历 marked token。整条消息一次解析，保留跨段列表与引用式链接；当前后端整条推送，不引入 Start 的流式 DOM 动画。代码高亮器和常用语言包按需加载，未知语言或高亮加载失败显示原文。原始 HTML 不执行，也不转成 DOM；解析结果先清洗，再生成公式。图片与 Start 一样展示，仅允许无账号密码的 HTTP(S)，不发送页面来源；链接同样只允许这些地址，新窗口使用 `noopener noreferrer`。表格、代码块与块级公式在各自区域横向滚动。用户消息显示原文。Enter 换行、Ctrl+Enter 发送，中文输入法确认候选字不触发发送。通过 Visual Viewport 与安全区域适配移动键盘。
 
-2026-10-28，用户要求删除整个顶部栏，让聊天内容直接占满页面顶部；同时删除页面的「安装应用」按钮和安装说明弹窗，安装继续使用浏览器自带入口。Service Worker 注册与显式更新继续保留，更新提示仅在有待更新版本时出现。
+2026-10-28，用户要求删除整个顶部栏，让聊天内容直接占满页面顶部；同时删除页面的「安装应用」按钮和安装说明弹窗，安装继续使用浏览器自带入口。
 
-PWA 的清单位于 `frontend/public/manifest.webmanifest`。`frontend/scripts/build-pwa.mjs` 从现有图标生成普通图标、Apple 图标与带安全边距的 maskable 图标，随后按构建内容生成 Service Worker。缓存只包含本次构建的公开静态资源，不缓存认证响应、消息 API 或 WebSocket。入口缓存 `/`，避免 Go 对 `/index.html` 的重定向影响离线导航。
+PWA 的清单位于 `frontend/public/manifest.webmanifest`，多尺寸图标（192px、512px、Apple 180px 与带安全边距的 maskable 512px）作为静态 PNG 保存在 `frontend/public/icons/`。2026-11-27，用户确认移除构建期 `sharp` 切图与 Service Worker 脚本（原 `frontend/scripts/build-pwa.mjs` 与 `src/components/PwaControls.tsx`）：理由是聊天本身强依赖联网，无需离线应用外壳与每分钟 SW 更新轮询，保留清单与静态图标即可满足 iOS/Android 添加到主屏幕独立窗口打开，同时省去原生二进制依赖与全量静态资源预缓存开销。入口 `/` 与 `/index.html` 通过 `frontend/public/_headers` 配置 `Cache-Control: no-cache`，刷新或重开即加载最新构建版本。
 
-PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起草消息。2026-11-11 修复了离线冷启动一直停在 loading 的问题：已缓存登录令牌的用户离线打开页面时直接进入聊天页起草消息（草稿保存在 `sessionStorage`），输入框上方显示离线状态提示；网络恢复后自动连上 WebSocket 并补齐最新一页历史。右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱、「模型设置」、「查看记忆」（跳转 `/memories` 只读记忆浏览器）与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。新版 Service Worker 下载后等待用户点击「更新应用」，切换前不会自动刷新；当前标签页的草稿在刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
+右上角悬浮圆形入口统一排列，依次为按工作区绑定条件显示的「查看电脑」、「搜索历史聊天」以及点击展开邮箱、「模型设置」、「查看记忆」（跳转 `/memories` 只读记忆浏览器）与「退出登录」的账号浮层（2026-11-13 已移除「任务进展」入口与胶囊）。草稿按账号保存在 `sessionStorage`，刷新后恢复。Android 可使用浏览器安装入口，iPhone 与 iPad 在 Safari 的分享菜单中选择「添加到主屏幕」。PWA 安装依赖 HTTPS，本地 localhost 为开发例外。系统推送通知尚未实现。
 
 2026-11-27，用户确认将 `frontend/` 与 `admin/` 一并从 Rsbuild 迁移至 **Vite+（`vite-plus`）+ TanStack Router（`@tanstack/react-router` + `@tanstack/router-plugin/vite`）** 纯静态 SPA，统一工具链与路由方式（此前的 2026-11-25 纯 Rsbuild 方案与 `admin/` 的 TanStack Start 预渲染方案由本条取代）。理由是两个前端的全部接口都在 Go 后端、没有 SSR 或 Server Functions 需求，只用 TanStack Router 即可在保持纯静态单一 `build/web` 产物（无 `build/server`、无构建期预渲染 preview server）的同时获得类型安全的文件路由与按路由自动代码分割，并收紧 `admin/server.mjs` 的 CSP（去除 `script-src 'unsafe-inline'`）；同时借助 Vite+ 统一打包（Rolldown）、静态检查（Oxlint + `tsrs` 类型检查）与代码格式化（Oxfmt）。
 
@@ -85,9 +85,9 @@ PWA 的设计目标是在完成在线缓存后，断网仍可打开应用并起�
 
 - `src/lib/errors.ts` 与 `src/lib/serverEvents.ts` / `messageAttachments.ts` / `memories.ts` / `modelSettings.ts` / `oauth.ts`：全部网络与 WebSocket 边界使用 `Schema` 解码并消除 `as T` 强转，错误统一建模为 `Data.TaggedError`。
 - `src/lib/api.ts` 与 `src/lib/platform.ts`：基于 `effect/http`（`FetchHttpClient`，关闭 trace 传播头以避免浏览器多余预检）提供 `ApiClient` Service，基于浏览器存储提供 `SessionStorage` Service；附件上传使用 `Effect.all(..., { concurrency: 4 })`，任一失败自动中断其余在途上传。
-- `src/lib/ServerEventRelay.ts` 与 `src/lib/ChatController.ts`：保持单文件事件中转定位，通过 `Scope`、`Queue`、`FiberHandle`、`Deferred` 与 `SubscriptionRef` 统一管理 WebSocket 连接循环、10 秒 `ready` 握手超时、指数退避重连与命令回执配对；`src/lib/runtime.ts` 通过 `Atom.runtime(AppLive)` 将会话与浏览器前后台生命周期桥接为细粒度 Atom，卸载自动释放 `Scope`；只读桌面与 PWA 更新轮询同样收口到 Effect `Scope` 与 `Schedule`。
+- `src/lib/ServerEventRelay.ts` 与 `src/lib/ChatController.ts`：保持单文件事件中转定位，通过 `Scope`、`Queue`、`FiberHandle`、`Deferred` 与 `SubscriptionRef` 统一管理 WebSocket 连接循环、10 秒 `ready` 握手超时、指数退避重连与命令回执配对；`src/lib/runtime.ts` 通过 `Atom.runtime(AppLive)` 将会话与浏览器前后台生命周期桥接为细粒度 Atom，卸载自动释放 `Scope`；只读桌面生命周期同样收口到 Effect `Scope`。
 
-依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`。`pnpm run build` 先由 `vp build` 打包静态资源，再执行 `vp check --no-fmt`（Oxlint 与 TypeScript 类型检查）并生成 PWA 图标与 Service Worker；`pnpm run format` 由 `vp fmt`（Oxfmt）执行，替代原有 Prettier。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。具体命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
+依赖固定在 `frontend/pnpm-lock.yaml`（2026-11-25 起全仓 JS 工程由 npm 切换为 pnpm 10，仍使用 Node.js 运行时），Node.js 最低版本随 `vite-plus` 对齐为 `^22.18.0 || ^24.11.0 || >=26.0.0`。`pnpm run build` 先由 `vp build` 打包静态资源，再执行 `vp check --no-fmt`（Oxlint 与 TypeScript 类型检查）；`pnpm run format` 由 `vp fmt`（Oxfmt）执行，替代原有 Prettier。唯一部署目录仍是 `frontend/build/web`，Go 同源服务和 Cloudflare Static Assets 继续读取该目录。具体命令见 [`frontend/README.md`](../../frontend/README.md)。旧框架的历史验收不作为当前 Web/PWA 的验收证据。
 
 ### 第二层：Go 后端
 

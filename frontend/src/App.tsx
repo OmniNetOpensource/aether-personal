@@ -5,7 +5,6 @@ import { chatBrowserLifecycleAtom, chatSessionAtom, chatStateAtom } from './lib/
 import { ChatPage } from './components/chat/ChatPage.js';
 import { LoadingScreen } from './components/LoadingScreen.js';
 import { LoginPage } from './components/login/LoginPage.js';
-import { PwaControls } from './components/PwaControls.js';
 
 // App 通过挂载 scoped Atom 持有聊天连接和浏览器前后台监听，组件卸载时自动释放 Scope。
 export function App() {
@@ -14,10 +13,5 @@ export function App() {
   const initializing = useAtomValue(chatStateAtom, (state) => state.initializing);
   const hasToken = useAtomValue(chatStateAtom, (state) => Boolean(state.token));
 
-  return (
-    <>
-      {initializing ? <LoadingScreen /> : hasToken ? <ChatPage /> : <LoginPage />}
-      <PwaControls />
-    </>
-  );
+  return initializing ? <LoadingScreen /> : hasToken ? <ChatPage /> : <LoginPage />;
 }

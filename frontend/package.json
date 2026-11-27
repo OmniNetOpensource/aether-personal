@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vp build && pnpm run check && node scripts/build-pwa.mjs",
+    "build": "vp build && pnpm run check",
     "dev": "vp dev",
     "check": "vp check --no-fmt",
     "format": "vp fmt"
@@ -43,7 +43,6 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.3.0",
-    "sharp": "0.35.5",
     "typescript": "^5.9.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8001",
     "vite-plus": "^1.8.0"

@@ -877,12 +877,6 @@ button.link {
   padding: 0;
 }
 
-/* 离线启动不可用时显示轻量状态提示。 */
-.connection-status {
-  font-size: 14px;
-  color: var(--on-forest-muted);
-}
-
 /* 图片缩略图用于草稿与消息，原生 dialog 负责完整图片与焦点返回。 */
 .image-thumbnail {
   display: block;
