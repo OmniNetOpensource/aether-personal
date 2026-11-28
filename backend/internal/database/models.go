@@ -24,6 +24,28 @@ type AdminSession struct {
 	ExpiresAt      time.Time
 }
 
+type ChatgptOauth struct {
+	ID                     int32
+	HostID                 string
+	ClientID               string
+	AccountSub             string
+	AccountEmail           string
+	AccessTokenCiphertext  []byte
+	RefreshTokenCiphertext []byte
+	AccessExpiresAt        *time.Time
+	UpdatedAt              time.Time
+}
+
+type ChatgptOauthFlow struct {
+	StateHash              []byte
+	CodeVerifierCiphertext []byte
+	Nonce                  string
+	RedirectUri            string
+	InitialClientID        string
+	ExpiresAt              time.Time
+	CreatedAt              time.Time
+}
+
 type LoginCode struct {
 	Email     string
 	CodeHash  []byte

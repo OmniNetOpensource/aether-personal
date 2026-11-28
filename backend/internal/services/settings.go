@@ -8,6 +8,7 @@ import (
 	"crypto/cipher"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/mail"
 	"net/url"
 	"strings"
@@ -53,6 +54,7 @@ var (
 	ErrInvalid       = errors.New("invalid service settings")
 	ErrNotFound      = errors.New("resource not found")
 	ErrConflict      = errors.New("resource already exists")
+	ErrUpstream      = errors.New("upstream service request failed")
 )
 
 // Settings 仅供后端发出请求使用，不提供 JSON 序列化出口。
@@ -74,15 +76,17 @@ type Info struct {
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 
-// Store 保存部署注入的 OpenRouter Key，并为每次调用读取数据库中的服务凭证与自定义模型供应商配置。
+// Store 保存部署注入的 OpenRouter Key，并为每次调用读取数据库中的服务凭证、ChatGPT 订阅凭证与自定义模型供应商配置。
 type Store struct {
 	openRouterAPIKey string
+	pool             *pgxpool.Pool
 	queries          *database.Queries
 	cipher           cipher.AEAD
+	httpClient       *http.Client
 	appEnv           string
 }
 
-// New 只组装本地密码算法，不依赖启动时数据库已就绪。
+// New 只组装本地密码算法与 HTTP 客户端，不依赖启动时数据库已就绪。
 func New(pool *pgxpool.Pool, key []byte, appEnv, openRouterAPIKey string) (*Store, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -92,7 +96,14 @@ func New(pool *pgxpool.Pool, key []byte, appEnv, openRouterAPIKey string) (*Stor
 	if err != nil {
 		return nil, err
 	}
-	return &Store{queries: database.New(pool), cipher: aead, appEnv: appEnv, openRouterAPIKey: openRouterAPIKey}, nil
+	return &Store{
+		pool:             pool,
+		queries:          database.New(pool),
+		cipher:           aead,
+		httpClient:       &http.Client{Timeout: 15 * time.Second},
+		appEnv:           appEnv,
+		openRouterAPIKey: openRouterAPIKey,
+	}, nil
 }
 
 // Load 取出请求使用的凭证。OpenRouter 固定使用启动时读取的环境变量，其他服务按需从数据库解密。

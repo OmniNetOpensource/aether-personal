@@ -27,11 +27,12 @@ type userModel struct {
 	ContextLength *int64 `json:"-"`
 }
 
-// catalogSource 描述一次目录拉取任务：内置 OpenRouter 与每个自定义供应商都统一表达为一份 llm.Config。
+// catalogSource 描述一次目录拉取任务：内置 OpenRouter、ChatGPT 订阅与每个自定义供应商都统一表达为一份 llm.Config。
 type catalogSource struct {
 	id         string
 	name       string
 	providerID *uuid.UUID
+	isChatGPT  bool
 	config     llm.Config
 	err        error
 }
@@ -55,7 +56,7 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 		internalError(w, "load model providers for catalog", err)
 		return
 	}
-	sources := make([]catalogSource, 0, 1+len(customProviders))
+	sources := make([]catalogSource, 0, 2+len(customProviders))
 	openRouterCfg, openRouterErr := s.services.OpenRouterConfig()
 	sources = append(sources, catalogSource{
 		id:     services.OpenRouter,
@@ -63,6 +64,16 @@ func (s *server) getUserModels(w http.ResponseWriter, r *http.Request, userID uu
 		config: openRouterCfg,
 		err:    openRouterErr,
 	})
+	chatGPTCfg, chatGPTErr := s.services.ChatGPTConfig(r.Context())
+	if !errors.Is(chatGPTErr, services.ErrNotConfigured) {
+		sources = append(sources, catalogSource{
+			id:        services.ChatGPT,
+			name:      "ChatGPT",
+			isChatGPT: true,
+			config:    chatGPTCfg,
+			err:       chatGPTErr,
+		})
+	}
 	for _, provider := range customProviders {
 		id := provider.ID
 		sources = append(sources, catalogSource{
@@ -108,9 +119,10 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 		return
 	}
 
-	// 默认路由和跟随选项始终可保存；具体型号按它指向的 OpenRouter 或自定义供应商实时校验。
+	// 默认路由和跟随选项始终可保存；具体型号按它指向的 OpenRouter、ChatGPT 订阅或自定义供应商实时校验。
 	selectedModels := []string{selection.MainModel, selection.SubagentModel}
 	needOpenRouter := false
+	needChatGPT := false
 	neededProviders := map[uuid.UUID]bool{}
 	for _, id := range selectedModels {
 		if id == "" || id == modelsettings.DefaultModel {
@@ -119,6 +131,14 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 		if len(id) > 256 {
 			http.Error(w, "模型 ID 过长", http.StatusBadRequest)
 			return
+		}
+		if strings.HasPrefix(id, "chatgpt:") {
+			if _, ok := modelsettings.ParseChatGPTModel(id); !ok {
+				http.Error(w, "所选模型已不可用，请重新选择", http.StatusBadRequest)
+				return
+			}
+			needChatGPT = true
+			continue
 		}
 		if strings.HasPrefix(id, "provider:") {
 			providerID, _, ok := modelsettings.ParseProviderModel(id)
@@ -136,6 +156,10 @@ func (s *server) saveUserModels(w http.ResponseWriter, r *http.Request, userID u
 	if needOpenRouter {
 		cfg, err := s.services.OpenRouterConfig()
 		sources = append(sources, catalogSource{id: services.OpenRouter, name: "OpenRouter", config: cfg, err: err})
+	}
+	if needChatGPT {
+		cfg, err := s.services.ChatGPTConfig(r.Context())
+		sources = append(sources, catalogSource{id: services.ChatGPT, name: "ChatGPT", isChatGPT: true, config: cfg, err: err})
 	}
 	for providerID := range neededProviders {
 		name, cfg, err := s.services.LoadModelProviderConfig(r.Context(), providerID)
@@ -210,6 +234,18 @@ func (s *server) fetchModelCatalogs(ctx context.Context, sources []catalogSource
 			}
 			items := make([]userModel, 0, len(catalog))
 			for _, entry := range catalog {
+				if source.isChatGPT {
+					encodedID := modelsettings.EncodeChatGPTModel(entry.ID)
+					if len(encodedID) > 256 {
+						continue
+					}
+					items = append(items, userModel{
+						ID:            encodedID,
+						Name:          entry.Name + " · ChatGPT",
+						ContextLength: entry.ContextLength,
+					})
+					continue
+				}
 				if source.providerID == nil {
 					if entry.ID == modelsettings.DefaultModel {
 						continue

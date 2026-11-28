@@ -18,6 +18,23 @@ const DefaultModel = "openrouter/free"
 // providerModelPrefix 标识绑定到看板自定义模型供应商的模型引用，格式为 provider:<uuid>:<upstream_model>。
 const providerModelPrefix = "provider:"
 
+// chatGPTModelPrefix 标识绑定到看板 ChatGPT 订阅渠道的模型引用，格式为 chatgpt:<upstream_model>。
+const chatGPTModelPrefix = "chatgpt:"
+
+// EncodeChatGPTModel 将 ChatGPT 订阅渠道的上游模型名编码为稳定的选择标识。
+func EncodeChatGPTModel(upstreamModel string) string {
+	return chatGPTModelPrefix + upstreamModel
+}
+
+// ParseChatGPTModel 解析 ChatGPT 订阅渠道的模型引用；未带 chatgpt: 前缀或缺少模型名时返回 ok=false。
+func ParseChatGPTModel(model string) (string, bool) {
+	upstreamModel, found := strings.CutPrefix(model, chatGPTModelPrefix)
+	if !found || upstreamModel == "" {
+		return "", false
+	}
+	return upstreamModel, true
+}
+
 // EncodeProviderModel 将自定义供应商 ID 与上游真实模型名编码为稳定的选择标识，重命名供应商不影响已保存选择。
 func EncodeProviderModel(providerID uuid.UUID, upstreamModel string) string {
 	return providerModelPrefix + providerID.String() + ":" + upstreamModel

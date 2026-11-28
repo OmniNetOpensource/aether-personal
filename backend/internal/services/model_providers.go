@@ -75,6 +75,13 @@ func (s *Store) OpenRouterConfig() (llm.Config, error) {
 
 // ResolveModelConfig 将用户保存的模型标识解析为协议配置与上游真实模型名。
 func (s *Store) ResolveModelConfig(ctx context.Context, selectedModel string) (llm.Config, string, error) {
+	if upstreamModel, ok := modelsettings.ParseChatGPTModel(selectedModel); ok {
+		config, err := s.ChatGPTConfig(ctx)
+		if err != nil {
+			return llm.Config{}, "", err
+		}
+		return config, upstreamModel, nil
+	}
 	if providerID, upstreamModel, ok := modelsettings.ParseProviderModel(selectedModel); ok {
 		_, config, err := s.LoadModelProviderConfig(ctx, providerID)
 		if err != nil {
