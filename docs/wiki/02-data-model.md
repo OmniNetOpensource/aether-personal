@@ -44,6 +44,9 @@ erDiagram
 | `oauth_tokens` | 外部 MCP 客户端访问 `/mcp/memory` 的访问/刷新令牌哈希与最近使用时间（`00067`） | `已实现` |
 | `user_model_settings` | 每个账号的 Main、Subagent 和压缩模型、已知输入容量与保存版本（`00057`） | `已实现` |
 | `model_settings` | 全局主动压缩提醒线与热压缩触发线。旧版全局模型列保留供回滚 | `已实现` |
+| `model_providers` | 管理看板配置的自定义模型供应商名称、协议（`openai` / `openai_responses` / `gemini` / `claude`）、Base URL 与加密 API Key（`00071`、`00072`） | `已实现` |
+| `chatgpt_oauth` | 单行部署级 Sign in with ChatGPT 凭据：持久化 `host_id`、动态签发 `client_id`、账号展示信息与 AES-GCM 加密的访问/刷新令牌（`00072`） | `已实现` |
+| `chatgpt_oauth_flows` | 15 分钟有效、单次原子消费的 ChatGPT OAuth 临时授权流（`state` 哈希、加密 PKCE `code_verifier`、`nonce`），供多容器跨实例完成回环回调（`00072`） | `已实现` |
 | `service_settings` | 看板管理的服务凭证密文、Key 后缀、渠道地址、邮件发件人、OSS 配置与更新时间；清除 Key 保留记录 | `开发中` |
 
 ## 通用规则
@@ -293,6 +296,8 @@ compact 保留普通 Main 的固定指令和待压历史原顺序，包括曾主
 | `00068_allow_oauth_register_rate_limits.sql` | 扩充 `login_rate_limits.scope` 约束，允许写入 OAuth 动态客户端注册的按 IP 与全站限流计数 | `已实现` |
 | `00069_drop_reflection_idle_minutes.sql` | 删除 `model_settings.reflection_idle_minutes` 列，整体移除闲置后台反思（历史反思消息行保留） | `已实现` |
 | `00070_drop_hot_compact_delay_seconds.sql` | 删除 `model_settings.hot_compact_delay_seconds` 列，热压缩改为在最终回答落库后立即于当前 Main 租约内执行 | `已实现` |
+| `00071_model_providers.sql` | 新增 `model_providers` 自定义模型供应商表，移除 `service_settings` 的 `ikun` 渠道并扩充 `user_model_settings` 模型 ID 长度上限至 256 | `已实现` |
+| `00072_chatgpt_oauth.sql` | 新增部署级 `chatgpt_oauth` 与 `chatgpt_oauth_flows` 表，并扩充 `model_providers.protocol` 约束加入 `openai_responses` | `已实现` |
 
 - 迁移工具使用 goose `v3.29.0`，以 `go tool` 方式固定在 `go.mod` 中，clone 后无需另外安装；命令行工具附带的其他数据库驱动只进入 `go.mod` / `go.sum`，不编入后端程序。
 - 迁移作为单独命令执行，不在后端启动时自动执行：本地为 `make migrate`，部署时在启动新版本前执行。迁移失败不影响正在运行的旧版本。

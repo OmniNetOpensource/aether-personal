@@ -154,6 +154,15 @@ OpenRouter 可选模型实时读取 [OpenRouter 模型目录](https://openrouter
 - **保留内置 OpenRouter + 看板自由增删自定义供应商**：内置 OpenRouter 继续使用部署环境变量 `OPENROUTER_API_KEY` 与 `openrouter/free` 默认路由（保留其状态与额度卡片），底层同样构造为一份 `llm.Config` 交由 `internal/llm` 处理。管理看板「配置」页新增「自定义模型供应商」管理区，经 `GET/POST /admin/model-providers` 与 `PUT/DELETE /admin/model-providers/{id}` 读写新表 `model_providers`（迁移 `00071_model_providers.sql`），自由增删改名称、协议类型、Base URL 与加密 API Key（以 `"model_provider:" + id` 作为 AES-256-GCM AAD 加密存储，完整 Key 不回显）。
 - **模型选择与清理**：自定义供应商模型在 `user_model_settings` 和 `steps.model` 中编码为 `provider:<uuid>:<upstream_model>`，以不可变 UUID 隔离重名与改名影响；迁移 `00071` 删除 `service_settings` 中的 `ikun_gemini` / `ikun_claude` 记录并收紧 `CHECK` 约束，将旧的 `ikun:%` 选择重置为 `openrouter/free`（Subagent 置空跟随 Main），同步移除 `ikunQuota()` 与 `GEMINI_*_IKUNCODE` 导入配置。
 
+### Sign in with ChatGPT 订阅渠道（2026-11-28）
+
+2026-11-28，维护者确认通过 OpenAI **Sign in with ChatGPT**（OAuth 2.0 + PKCE `S256` + 免审批开源动态客户端 `dynamic_agent_client`）将个人 ChatGPT 订阅作为管理看板中的部署级模型渠道接入，与内置 OpenRouter 和自定义模型供应商并存，不改 agent loop 三阶段与聊天前端：
+
+- **免审批回环授权与跨实例状态**：OpenAI 开源动态注册通道要求 `client_id=dynamic_agent_client`、`ext_agent_host_id=urn:uuid:<uuid>`、`agent_name_hint=aether` 与本机回环 `redirect_uri=http://127.0.0.1:1455/auth/callback`（拒绝公网域名回调）。管理员在看板「配置」页点击「开始连接」后，后端在 `chatgpt_oauth_flows`（迁移 `00072_chatgpt_oauth.sql`）持久化 15 分钟有效的 `state` 哈希、AES-GCM 加密 PKCE `code_verifier` 与 `nonce` 并返回 `https://auth.openai.com/api/accounts/authorize?...`；管理员在浏览器同意授权后将跳往 `127.0.0.1:1455` 的完整地址栏 URL 粘贴回看板提交，后端原子消费 flow 并用回调签发的 `oaiapp_...` 向 `https://auth.openai.com/api/accounts/oauth/token` 换票，校验 `id_token` `nonce` 后将访问与刷新令牌分别以独立 AAD 加密写入单行表 `chatgpt_oauth`（跨 `api-1`/`api-2` 均无进程内存依赖）。
+- **并发安全令牌轮换**：`services.Store.ChatGPTConfig` 在访问令牌距过期不足 2 分钟时进入 PostgreSQL 事务执行 `SELECT ... FOR UPDATE` 锁住 `chatgpt_oauth` 唯一行并二次核对过期时间，确保多容器并发请求中仅首个抢到锁的请求拿 `refresh_token` 轮换新票并原子写回，避免 OpenAI 刷新令牌轮换机制因并发重复使用旧票而作废整条授权。
+- **OpenAI 原生 Responses API 协议**：`backend/internal/llm/openai_responses.go` 新增 `openai_responses` 协议族，请求 `POST {BaseURL}/responses`（`store: false`、`stream: true`、`include: ["reasoning.encrypted_content"]`），同时兼容 ChatGPT OAuth 的 `{ models: [...] }` 与标准 OpenAI API Key 的 `{ data: [...] }` 两种 `/models` 目录格式；`model_providers.protocol` 同步扩充允许自定义供应商选用 `openai_responses`，时间线解析 `openai_responses_output` 中的推理摘要或加密推理状态。
+- **管理接口与风险边界**：新增 `GET /admin/chatgpt`、`POST /admin/chatgpt/start`、`POST /admin/chatgpt/complete` 与 `DELETE /admin/chatgpt`（同步加入 `admin/server.mjs` 代理白名单）。维护者已知悉当前实例对公众开放注册时挂载个人订阅存在额度消耗与 OpenAI 多用户代理条款风险，现阶段仅维护者自用，后续可随时在看板断开连接。
+
 ## ikun Gemini（2026-10-30，已于 2026-11-27 移除，历史记录）
 
 用户要求把 Aether 的 ikun 接入模型配置，随后明确选择 Gemini。实现采用 Aether 的 Gemini 原生协议与环境变量命名，保留 OpenRouter。选择理由是让 Main 在同一个配置页选择渠道，无需把 Gemini 强行转换为 Chat Completions 服务。

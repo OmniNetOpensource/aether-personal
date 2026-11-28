@@ -249,6 +249,7 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 2026-10-30，用户要求改为：供应商到后端流式、后端到前端一次性。两个渠道都逐块读 SSE 事件流，在内存里把正文增量与工具调用参数分片拼成一条完整回复，拼完才落库、发 NOTIFY，前端仍整条收到（本节即上文链接目标）：
 
 - OpenRouter 请求带 `stream: true`、`stream_options.include_usage` 与 `session_id`；用量在末尾分片，拿不到就记空、照常继续，不视为失败。2026-11-19 起按「Agent 身份 + 上下文世代（最新摘要 `sequence`，未压缩为 `0`）」在请求前阶段生成 `session_id`（`main:<user_id>:<摘要序号>` / `subagent:<subagent_id>:<摘要序号>`），普通请求与复用旧前缀的压缩请求共用同一世代 ID，压缩产生新摘要后自动切换，使 OpenRouter 从首轮成功请求起启用粘性路由并按世代汇总账单。
+- OpenAI 原生 Responses 协议（`openai_responses`，2026-11-28 新增，服务于 ChatGPT 订阅渠道与自定义 Responses 供应商）发往 `POST {BaseURL}/responses`，显式设置 `store: false`、`stream: true`、`include: ["reasoning.encrypted_content"]`，并在启用会话键时复用 `session_id` 作为 `prompt_cache_key`；原生 `output` 项随助手消息存入 `openai_responses_output`（附 `openai_responses_model`），同模型续接时原样回放以保留无状态加密推理连续性，切回 Chat Completions 时自动剥离。出站敏感词过滤同步覆盖 `openai_responses_output` 的正文块，不触碰 `encrypted_content`。
 - Gemini 原生协议改用 `:streamGenerateContent?alt=sse`，分片合并成与非流式相同的响应形状后走原有解析；流式特有的「只有 thoughtSignature、正文为空」分片并入前一段，不独立存档（详见 [08](08-admin-observability.md#通用模型协议包与自定义供应商2026-11-27)）。
 - 失败约定（2026-10-30 用户确认）：流中途断开、或流结束却没有完成标记，按可重试的传输失败处理（沿用最多重试 3 次）；分片不是合法 JSON、工具调用缺名称等拼不出完整消息的情况按无效响应处理，不落库半成品。非 200 错误体仍整段读回取错误信息；分片累计沿用 8 MiB 上限。模型调用日志存档的是实际收到的原始分片。
 
@@ -256,7 +257,7 @@ Main 不做正文内容的交付检查。正文在助手消息落库时成为用
 
 2026-11-12，用户要求将模型切换移到 App，由每个用户选择自己的模型。打开「账号 → 模型设置」即可选择 Main 和 Subagent 模型。账号各自保存选择，避免一次切换影响其他用户。Subagent 留空时跟随 Main，压缩始终沿用发起步骤的模型。
 
-未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。2026-11-13，用户明确免费仅是默认值。2026-11-27 起移除 `ikun` 专属配置，App 并行拉取内置 OpenRouter 与管理看板「自定义模型供应商」列表中所有已配置端点的模型目录（统一经 `backend/internal/llm/` 拉取与调用）。OpenRouter 的目录和请求共用环境变量 `OPENROUTER_API_KEY`，自定义模型供应商使用部署者在看板加密保存的配置（`model_providers` 表），详见 [08 通用模型协议包与自定义供应商](08-admin-observability.md#通用模型协议包与自定义供应商2026-11-27)。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
+未保存个人选择的账号默认使用 `openrouter/free`。OpenRouter 会根据请求需要的工具调用或图片输入能力选择免费模型。2026-11-13，用户明确免费仅是默认值。2026-11-27 起移除 `ikun` 专属配置，App 并行拉取内置 OpenRouter、管理看板已连接的 ChatGPT 订阅渠道（2026-11-28 新增，未连接时静默跳过，模型以 `chatgpt:<slug>` 编码并展示为 `模型名 · ChatGPT`）与「自定义模型供应商」列表中所有已配置端点的模型目录（统一经 `backend/internal/llm/` 拉取与调用）。OpenRouter 的目录和请求共用环境变量 `OPENROUTER_API_KEY`，ChatGPT 订阅使用看板 OAuth 连接的加密令牌（`chatgpt_oauth` 表，到期前跨实例串行刷新），自定义模型供应商使用部署者在看板加密保存的配置（`model_providers` 表），详见 [08 通用模型协议包与自定义供应商](08-admin-observability.md#通用模型协议包与自定义供应商2026-11-27)。[OpenRouter 免费模型路由](https://openrouter.ai/docs/guides/routing/routers/free-router)
 
 请求前阶段按账号读一次模型设置，用同一份选择创建执行步骤、准备压缩和组装请求。保存后下一次准备模型请求时生效。已开始的请求继续使用当时选定的模型。升级后，已有账号也从免费路由开始。管理看板保存主动压缩提醒线和热压缩触发线。见[运行参数与服务凭证](08-admin-observability.md#全局运行参数)。
 
