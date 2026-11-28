@@ -4,9 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Exit } from 'effect';
-import { formatCauseError } from '../../lib/errors.js';
-import type { MessagePart, MessageQuote } from '../../lib/messageAttachments.js';
-import { chatStateAtom, sendMessageAtom, uploadAttachmentsAtom } from '../../lib/runtime.js';
+import { formatCauseError } from '../../../lib/errors.js';
+import type { MessagePart, MessageQuote } from '../../../lib/messageAttachments.js';
+import { chatStateAtom, sendMessageAtom, uploadAttachmentsAtom } from '../../../lib/runtime.js';
 import { RichMessageInput } from './RichMessageInput.js';
 import type { RichMessageInputHandle } from './RichMessageInput.js';
 

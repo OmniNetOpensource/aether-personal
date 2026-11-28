@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAtomSet } from '@effect/atom-react';
 import { Cause, Effect, Exit, Fiber } from 'effect';
-import { formatCauseError } from '../../lib/errors.js';
-import { searchMessagesAtom } from '../../lib/runtime.js';
-import type { ChatSearchHit } from '../../lib/serverEvents.js';
-import { ModalDialog } from '../ModalDialog.js';
+import { formatCauseError } from '../../../lib/errors.js';
+import { searchMessagesAtom } from '../../../lib/runtime.js';
+import type { ChatSearchHit } from '../../../lib/serverEvents.js';
+import { ModalDialog } from '../../ModalDialog.js';
 import { ChatHistoryContext } from './ChatHistoryContext.js';
 import './chatSearch.css';
 

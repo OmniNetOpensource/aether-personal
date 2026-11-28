@@ -1,7 +1,7 @@
 // 本文件展示聊天消息与输入框中的可下载文件卡片：标明文件名与体积，链接直达后端签名的私有 OSS 下载地址。
 
-import { formatFileSize } from '../../lib/messageAttachments.js';
-import type { MessageFile } from '../../lib/messageAttachments.js';
+import { formatFileSize } from '../../../lib/messageAttachments.js';
+import type { MessageFile } from '../../../lib/messageAttachments.js';
 
 // FileAttachmentCard 渲染单个文件附件；紧凑模式用于输入框芯片，完整卡片用于消息气泡。
 export function FileAttachmentCard({

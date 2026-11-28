@@ -5,9 +5,9 @@ import type { JSONContent, NodeViewRendererProps } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { FileAttachmentCard } from './FileAttachmentCard.js';
-import { ImagePreview } from './ImagePreview.js';
-import type { MessagePart } from '../../lib/messageAttachments.js';
+import { FileAttachmentCard } from '../attachments/FileAttachmentCard.js';
+import { ImagePreview } from '../attachments/ImagePreview.js';
+import type { MessagePart } from '../../../lib/messageAttachments.js';
 
 // editorDocument 将结构化内容转换为编辑器节点，换行单独保留为 hardBreak。
 function editorDocument(parts: readonly MessagePart[]): JSONContent {

@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAtomSet } from '@effect/atom-react';
 import { Cause, Exit } from 'effect';
-import { chatMessageFromRow } from '../../lib/ChatController.js';
-import type { ChatMessage } from '../../lib/ChatController.js';
-import { formatCauseError } from '../../lib/errors.js';
-import type { MessageQuote } from '../../lib/messageAttachments.js';
-import { loadMessageContextAtom } from '../../lib/runtime.js';
-import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
-import { highlightQuote } from './QuoteSelection.js';
+import { chatMessageFromRow } from '../../../lib/ChatController.js';
+import type { ChatMessage } from '../../../lib/ChatController.js';
+import { formatCauseError } from '../../../lib/errors.js';
+import type { MessageQuote } from '../../../lib/messageAttachments.js';
+import { loadMessageContextAtom } from '../../../lib/runtime.js';
+import { ChatMessageEntry, getMessageGroupState } from '../messages/ChatMessageEntry.js';
+import { highlightQuote } from '../messages/QuoteSelection.js';
 
 // 已加载的历史与正常聊天分开保存，单侧翻页失败时仍保留当前内容。
 type ContextState =

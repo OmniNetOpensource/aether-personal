@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { RefObject } from 'react';
-import type { MessageQuote } from '../../lib/messageAttachments.js';
+import type { MessageQuote } from '../../../lib/messageAttachments.js';
 
 // quoteTextNodes 只收集 data-quote-text 里的可见文字。用户消息里的引用卡片、图片、文件名和展开按钮没有这个标记，不能插进字符位置；代码工具栏和公式隐藏文本同样排除。
 function quoteTextNodes(root: Element): Text[] {

@@ -1,8 +1,8 @@
 // 本文件共用聊天消息的时间分隔、说话人分组和气泡渲染，供实时列表、历史上下文窗口与公开分享页使用。
 
 import { memo, useCallback } from 'react';
-import type { ChatMessage } from '../../lib/ChatController.js';
-import type { MessageQuote } from '../../lib/messageAttachments.js';
+import type { ChatMessage } from '../../../lib/ChatController.js';
+import type { MessageQuote } from '../../../lib/messageAttachments.js';
 import { AssistantMessageBubble } from './AssistantMessageBubble.js';
 import { UserMessageBubble } from './UserMessageBubble.js';
 import { MessageTimeSeparator, sameDay } from './MessageTimeSeparator.js';

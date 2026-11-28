@@ -5,10 +5,10 @@ import type { FormEvent } from 'react';
 import { useAtomRefresh, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Exit } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
-import { formatCauseError } from '../../lib/errors.js';
-import type { ModelSelection } from '../../lib/modelSettings.js';
-import { modelSettingsAtom, saveModelSettingsAtom } from '../../lib/runtime.js';
-import { ModalDialog } from '../ModalDialog.js';
+import { formatCauseError } from '../../../lib/errors.js';
+import type { ModelSelection } from '../../../lib/modelSettings.js';
+import { modelSettingsAtom, saveModelSettingsAtom } from '../../../lib/runtime.js';
+import { ModalDialog } from '../../ModalDialog.js';
 import './chatModels.css';
 
 // modelRoles 定义两个选择器的顺序与各角色的跟随规则。

@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
 import { chatStateAtom, signOutAtom } from '../../lib/runtime.js';
-import type { MessageComposerHandle } from './MessageComposer.js';
-import { ChatMessageList } from './ChatMessageList.js';
-import { MessageComposer } from './MessageComposer.js';
-import { ChatHistorySearch } from './ChatHistorySearch.js';
-import { DesktopViewer } from './DesktopViewer.js';
-import { ChatModelSettings } from './ChatModelSettings.js';
+import type { MessageComposerHandle } from './composer/MessageComposer.js';
+import { ChatMessageList } from './messages/ChatMessageList.js';
+import { MessageComposer } from './composer/MessageComposer.js';
+import { ChatHistorySearch } from './history/ChatHistorySearch.js';
+import { DesktopViewer } from './desktop/DesktopViewer.js';
+import { ChatModelSettings } from './models/ChatModelSettings.js';
 
 // ChatPage 承载登录后的全屏对话界面与右上角悬浮操作入口。
 export function ChatPage() {

@@ -5,14 +5,14 @@ import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Effect, Exit } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
-import { latestMessageWindow } from '../../lib/ChatController.js';
-import type { MessageQuote } from '../../lib/messageAttachments.js';
+import { latestMessageWindow } from '../../../lib/ChatController.js';
+import type { MessageQuote } from '../../../lib/messageAttachments.js';
 import {
   chatSessionAtom,
   chatStateAtom,
   loadHistoryAtom,
   trimOlderMessagesAtom,
-} from '../../lib/runtime.js';
+} from '../../../lib/runtime.js';
 import { ChatMessageEntry, getMessageGroupState } from './ChatMessageEntry.js';
 import { QuoteSelection, highlightQuote } from './QuoteSelection.js';
 

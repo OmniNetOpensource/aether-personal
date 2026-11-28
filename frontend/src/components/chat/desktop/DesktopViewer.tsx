@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Deferred, Effect, Fiber, FiberHandle, Result, Schema } from 'effect';
 import type RFB from '@novnc/novnc';
-import { ModalDialog } from '../ModalDialog.js';
+import { ModalDialog } from '../../ModalDialog.js';
 import './desktopViewer.css';
 
 // 观察状态来自后端边界；运行中的连接在 ready 后切换为二进制 RFB，不与聊天消息混用。

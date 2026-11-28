@@ -1,10 +1,10 @@
 // 本文件是助手消息气泡组件：渲染可折叠的 Markdown 正文，或展示 aether 从工作区发回的独立图片与可下载文件气泡。
 
-import type { ChatMessage } from '../../lib/ChatController.js';
-import { Markdown } from '../markdown/Markdown.js';
+import type { ChatMessage } from '../../../lib/ChatController.js';
+import { Markdown } from '../../markdown/Markdown.js';
 import { CollapsibleMessage } from './CollapsibleMessage.js';
-import { FileAttachmentCard } from './FileAttachmentCard.js';
-import { ImagePreview } from './ImagePreview.js';
+import { FileAttachmentCard } from '../attachments/FileAttachmentCard.js';
+import { ImagePreview } from '../attachments/ImagePreview.js';
 
 // AssistantMessageBubble 把折叠按钮放在引用正文之外，Markdown 标成可引用正文，确保引用位置只计算原文；文件与图片附件独立渲染。
 export function AssistantMessageBubble({
