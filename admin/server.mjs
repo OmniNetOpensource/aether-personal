@@ -42,6 +42,9 @@ const apiMethods = new Map([
   ['/admin/me', 'GET'], ['/admin/snapshot', 'GET'], ['/admin/timeline', 'GET'],
   ['/admin/runtime-settings', 'GET PUT'],
   ['/admin/model-providers', 'GET POST'],
+  ['/admin/chatgpt', 'GET DELETE'],
+  ['/admin/chatgpt/start', 'POST'],
+  ['/admin/chatgpt/complete', 'POST'],
   ['/admin/services', 'GET'], ['/admin/quotas', 'GET'],
 ].map(([path, methods]) => [path, new Set(methods.split(' '))]));
 function fail(response, status, message) {

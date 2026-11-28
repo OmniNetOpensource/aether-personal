@@ -11,6 +11,8 @@ import {
   AdminMeSchema,
   AdminTokenStorage,
   AdminTokenStorageLive,
+  ChatGPTAuthStartSchema,
+  ChatGPTStatusSchema,
   ModelProviderSchema,
   ModelProvidersPayloadSchema,
   QuotasPayloadSchema,
@@ -321,7 +323,72 @@ export const timelineAutoRefreshAtom = adminRuntime.atom((get) =>
   }),
 );
 
-// ---- 配置页：全局运行参数、自定义模型供应商、服务凭证与额度 ----
+// ---- 配置页：全局运行参数、ChatGPT 订阅、自定义模型供应商、服务凭证与额度 ----
+
+export const chatGPTStatusAtom = adminRuntime.atom((get) =>
+  Effect.gen(function* () {
+    const api = yield* AdminApi;
+    const loaded = yield* api
+      .getJson('/admin/chatgpt', ChatGPTStatusSchema)
+      .pipe(
+        Effect.tapError((error) =>
+          error._tag === 'AdminAuthError' || error._tag === 'AdminForbiddenError'
+            ? applyAccessLost(get.registry, error)
+            : Effect.void,
+        ),
+      );
+    get.set(updatedTextAtom, `${formatTime(new Date().toISOString())} 已更新`);
+    return loaded;
+  }),
+);
+
+export const startChatGPTAuthAtom = adminRuntime.fn((_arg: void, get) =>
+  Effect.gen(function* () {
+    const api = yield* AdminApi;
+    return yield* api
+      .postJson('/admin/chatgpt/start', {}, ChatGPTAuthStartSchema)
+      .pipe(
+        Effect.tapError((error) =>
+          error._tag === 'AdminAuthError' || error._tag === 'AdminForbiddenError'
+            ? applyAccessLost(get.registry, error)
+            : Effect.void,
+        ),
+      );
+  }),
+);
+
+export const completeChatGPTAuthAtom = adminRuntime.fn<string>()((callbackURL, get) =>
+  Effect.gen(function* () {
+    const api = yield* AdminApi;
+    const connected = yield* api
+      .postJson('/admin/chatgpt/complete', { callback_url: callbackURL }, ChatGPTStatusSchema)
+      .pipe(
+        Effect.tapError((error) =>
+          error._tag === 'AdminAuthError' || error._tag === 'AdminForbiddenError'
+            ? applyAccessLost(get.registry, error)
+            : Effect.void,
+        ),
+      );
+    get.refresh(chatGPTStatusAtom);
+    return connected;
+  }),
+);
+
+export const disconnectChatGPTAtom = adminRuntime.fn((_arg: void, get) =>
+  Effect.gen(function* () {
+    const api = yield* AdminApi;
+    yield* api
+      .deleteVoid('/admin/chatgpt')
+      .pipe(
+        Effect.tapError((error) =>
+          error._tag === 'AdminAuthError' || error._tag === 'AdminForbiddenError'
+            ? applyAccessLost(get.registry, error)
+            : Effect.void,
+        ),
+      );
+    get.refresh(chatGPTStatusAtom);
+  }),
+);
 
 export const runtimeSettingsAtom = adminRuntime.atom((get) =>
   Effect.gen(function* () {
@@ -496,14 +563,16 @@ export const saveServiceSettingAtom = adminRuntime.fn<{
   }),
 );
 
-// settingsBusyAtom 聚合配置页三组异步任务的加载态，驱动顶部统一刷新按钮的禁用状态。
+// settingsBusyAtom 聚合配置页各组异步任务的加载态，驱动顶部统一刷新按钮的禁用状态。
 export const settingsBusyAtom = Atom.make((get) => {
   const runtime = get(runtimeSettingsAtom);
+  const chatGPT = get(chatGPTStatusAtom);
   const providers = get(modelProvidersAtom);
   const services = get(serviceSettingsAtom);
   const savingRuntime = get(saveRuntimeSettingsAtom);
   return (
     AsyncResult.isWaiting(runtime) ||
+    AsyncResult.isWaiting(chatGPT) ||
     AsyncResult.isWaiting(providers) ||
     AsyncResult.isWaiting(services) ||
     AsyncResult.isWaiting(savingRuntime)

@@ -28,6 +28,12 @@ const protocolOptions: {
     hint: '后端将请求 {Base URL}/chat/completions 与 {Base URL}/models。',
   },
   {
+    value: 'openai_responses',
+    label: 'OpenAI 原生（Responses）',
+    placeholder: 'https://api.openai.com/v1',
+    hint: '后端将请求 {Base URL}/responses 与 {Base URL}/models。',
+  },
+  {
     value: 'gemini',
     label: 'Gemini 原生（generateContent）',
     placeholder: 'https://generativelanguage.googleapis.com',
@@ -70,7 +76,7 @@ export function ModelProvidersPage() {
         <div className="eyebrow teal">MODEL PROVIDERS</div>
         <h2>自定义模型供应商</h2>
         <p>
-          按协议配置任意官方或兼容模型端点（OpenAI 兼容、Gemini 原生、Claude
+          按协议配置任意官方或兼容模型端点（OpenAI 兼容、OpenAI 原生 Responses、Gemini 原生、Claude
           原生）。所有渠道共用同一套模型协议层，与内置 OpenRouter 并存；保存后立即出现在 App
           的模型目录中。
         </p>

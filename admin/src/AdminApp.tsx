@@ -11,6 +11,7 @@ import {
 import { Cause, Exit } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { formatAdminCause, outcomeLabels } from './api.js';
+import { ChatGPTSubscriptionPage } from './ChatGPTSubscription.js';
 import { ModelProvidersPage } from './ModelProviders.js';
 import { RuntimeSettingsPage } from './RuntimeSettings.js';
 import { ServiceSettingsPage } from './ServiceSettings.js';
@@ -19,6 +20,7 @@ import {
   activeTabAtom,
   bootstrapSessionAtom,
   browsingPagesAtom,
+  chatGPTStatusAtom,
   defaultFilters,
   draftFiltersAtom,
   knownUsersAtom,
@@ -307,6 +309,9 @@ function AuthenticatedConsole({
               <>
                 <RuntimeSettingsPage />
                 <div className="settings-services">
+                  <ChatGPTSubscriptionPage />
+                </div>
+                <div className="settings-services">
                   <ModelProvidersPage />
                 </div>
                 <div className="settings-services">
@@ -384,10 +389,11 @@ function RefreshControls({
   );
 }
 
-// SettingsRefreshControls 只在配置页挂载时订阅三组配置 Atom 的加载状态与刷新句柄。
+// SettingsRefreshControls 只在配置页挂载时订阅各组配置 Atom 的加载状态与刷新句柄。
 function SettingsRefreshControls({ updatedText }: { updatedText: string }) {
   const settingsBusy = useAtomValue(settingsBusyAtom);
   const refreshRuntime = useAtomRefresh(runtimeSettingsAtom);
+  const refreshChatGPT = useAtomRefresh(chatGPTStatusAtom);
   const refreshProviders = useAtomRefresh(modelProvidersAtom);
   const refreshServices = useAtomRefresh(serviceSettingsAtom);
 
@@ -400,6 +406,7 @@ function SettingsRefreshControls({ updatedText }: { updatedText: string }) {
         disabled={settingsBusy}
         onClick={() => {
           refreshRuntime();
+          refreshChatGPT();
           refreshProviders();
           refreshServices();
         }}

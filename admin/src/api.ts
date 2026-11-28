@@ -205,8 +205,28 @@ export const RuntimeSettingsSchema = Schema.Struct({
 });
 export type RuntimeSettings = typeof RuntimeSettingsSchema.Type;
 
-export const ModelProviderProtocolSchema = Schema.Literals(['openai', 'gemini', 'claude']);
+export const ModelProviderProtocolSchema = Schema.Literals([
+  'openai',
+  'openai_responses',
+  'gemini',
+  'claude',
+]);
 export type ModelProviderProtocol = typeof ModelProviderProtocolSchema.Type;
+
+export const ChatGPTStatusSchema = Schema.Struct({
+  status: Schema.Literals(['not_configured', 'connected', 'unreadable']),
+  account_email: Schema.String,
+  account_sub: Schema.String,
+  access_expires_at: Schema.NullOr(Schema.String),
+  updated_at: Schema.NullOr(Schema.String),
+});
+export type ChatGPTStatus = typeof ChatGPTStatusSchema.Type;
+
+export const ChatGPTAuthStartSchema = Schema.Struct({
+  authorize_url: Schema.String,
+  redirect_uri: Schema.String,
+});
+export type ChatGPTAuthStart = typeof ChatGPTAuthStartSchema.Type;
 
 export const ModelProviderSchema = Schema.Struct({
   id: Schema.String,
@@ -441,7 +461,7 @@ export const formatMoney = (value: string | number | null | undefined, compact =
 };
 export const shortModel = (value: string | null | undefined) => {
   if (!value) return '未知';
-  const withoutProvider = value.replace(/^provider:[0-9a-f-]+:/i, '');
+  const withoutProvider = value.replace(/^(?:provider:[0-9a-f-]+:|chatgpt:)/i, '');
   return withoutProvider.split('/').slice(1).join('/') || withoutProvider;
 };
 
