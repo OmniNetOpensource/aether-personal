@@ -32,11 +32,13 @@ func prepareOpenAIRequest(ctx context.Context, config Config, prepared Request) 
 	} else {
 		prepared.Reasoning = nil
 	}
-	// 从原生 Gemini / Claude 切到 OpenAI 兼容协议时不泄漏原生元数据字段。
+	// 从原生 Gemini / Claude / OpenAI Responses 切到 OpenAI Chat Completions 时不泄漏原生元数据字段。
 	messages := make([]json.RawMessage, len(prepared.Messages))
 	copy(messages, prepared.Messages)
 	for index, raw := range messages {
-		if !bytes.Contains(raw, []byte(`"gemini_content"`)) && !bytes.Contains(raw, []byte(`"claude_content"`)) {
+		if !bytes.Contains(raw, []byte(`"gemini_content"`)) &&
+			!bytes.Contains(raw, []byte(`"claude_content"`)) &&
+			!bytes.Contains(raw, []byte(`"openai_responses_output"`)) {
 			continue
 		}
 		var message map[string]json.RawMessage
@@ -45,6 +47,8 @@ func prepareOpenAIRequest(ctx context.Context, config Config, prepared Request) 
 		delete(message, "gemini_model")
 		delete(message, "claude_content")
 		delete(message, "claude_model")
+		delete(message, "openai_responses_output")
+		delete(message, "openai_responses_model")
 		messages[index], _ = json.Marshal(message)
 	}
 	prepared.Messages = messages

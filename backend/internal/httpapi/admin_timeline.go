@@ -92,6 +92,13 @@ type storedMessage struct {
 	ClaudeContent []struct {
 		Type string `json:"type"`
 	} `json:"claude_content"`
+	OpenAIResponsesOutput []struct {
+		Type             string `json:"type"`
+		EncryptedContent string `json:"encrypted_content"`
+		Summary          []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
+	} `json:"openai_responses_output"`
 	ToolCalls []struct {
 		ID       string `json:"id"`
 		Function struct {
@@ -168,6 +175,19 @@ func timelineMessage(role string, content []byte, limit int) timelineItem {
 			}
 			for _, block := range message.ClaudeContent {
 				if block.Type == "redacted_thinking" {
+					encrypted = true
+				}
+			}
+			for _, outputItem := range message.OpenAIResponsesOutput {
+				if outputItem.Type != "reasoning" {
+					continue
+				}
+				for _, summary := range outputItem.Summary {
+					if summary.Text != "" {
+						texts = append(texts, summary.Text)
+					}
+				}
+				if outputItem.EncryptedContent != "" {
 					encrypted = true
 				}
 			}

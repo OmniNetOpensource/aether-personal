@@ -29,9 +29,14 @@ func newModelTextReplacer() *strings.Replacer {
 	return strings.NewReplacer(replacements...)
 }
 
-// filterModelMessages 只改请求副本。Gemini 和 Claude 可能直接回放原生正文，因此两种正文都要处理。
+// filterModelMessages 只改请求副本。Gemini、Claude 与 OpenAI Responses 可能直接回放原生正文，因此这些正文路径都要处理。
 func filterModelMessages(messages []json.RawMessage) ([]json.RawMessage, error) {
-	textPaths := [][]string{{"content"}, {"claude_content", "text"}, {"gemini_content", "parts", "text"}}
+	textPaths := [][]string{
+		{"content"},
+		{"claude_content", "text"},
+		{"gemini_content", "parts", "text"},
+		{"openai_responses_output", "content", "text"},
+	}
 	filtered := make([]json.RawMessage, len(messages))
 	for index, raw := range messages {
 		var fields map[string]json.RawMessage

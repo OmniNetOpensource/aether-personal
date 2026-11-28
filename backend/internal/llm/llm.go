@@ -15,15 +15,16 @@ import (
 type Protocol string
 
 const (
-	ProtocolOpenAI Protocol = "openai"
-	ProtocolGemini Protocol = "gemini"
-	ProtocolClaude Protocol = "claude"
+	ProtocolOpenAI          Protocol = "openai"
+	ProtocolOpenAIResponses Protocol = "openai_responses"
+	ProtocolGemini          Protocol = "gemini"
+	ProtocolClaude          Protocol = "claude"
 )
 
 // ValidProtocol 检查协议名是否属于已实现的协议族。
 func ValidProtocol(protocol Protocol) bool {
 	switch protocol {
-	case ProtocolOpenAI, ProtocolGemini, ProtocolClaude:
+	case ProtocolOpenAI, ProtocolOpenAIResponses, ProtocolGemini, ProtocolClaude:
 		return true
 	default:
 		return false
@@ -98,6 +99,8 @@ func PrepareRequest(ctx context.Context, config Config, request Request) (Outgoi
 	switch config.Protocol {
 	case ProtocolOpenAI:
 		return prepareOpenAIRequest(ctx, config, request)
+	case ProtocolOpenAIResponses:
+		return prepareOpenAIResponsesRequest(ctx, config, request)
 	case ProtocolGemini:
 		return prepareGeminiRequest(ctx, config, request)
 	case ProtocolClaude:
@@ -112,6 +115,8 @@ func DecodeStream(protocol Protocol, payloads [][]byte, request Request) (Respon
 	switch protocol {
 	case ProtocolOpenAI:
 		return decodeOpenAIStream(payloads)
+	case ProtocolOpenAIResponses:
+		return decodeOpenAIResponsesStream(payloads, request)
 	case ProtocolGemini:
 		return decodeGeminiStream(payloads, request)
 	case ProtocolClaude:
@@ -126,6 +131,8 @@ func ListModels(ctx context.Context, client *http.Client, config Config) ([]Cata
 	switch config.Protocol {
 	case ProtocolOpenAI:
 		return listOpenAIModels(ctx, client, config)
+	case ProtocolOpenAIResponses:
+		return listOpenAIResponsesModels(ctx, client, config)
 	case ProtocolGemini:
 		return listGeminiModels(ctx, client, config)
 	case ProtocolClaude:
