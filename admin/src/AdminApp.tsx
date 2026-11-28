@@ -383,7 +383,13 @@ function RefreshControls({
     <div className="refresh-group">
       <span id="updated">{browsingPages ? '分页浏览中 / 手动刷新' : updatedText}</span>
       <button type="button" className="button" disabled={timelineBusy} onClick={onRefreshTimeline}>
-        {timelineBusy ? '↻ 更新中' : '↻ 刷新'}
+        <span
+          className={timelineBusy ? 'refresh-icon is-spinning' : 'refresh-icon'}
+          aria-hidden="true"
+        >
+          ↻
+        </span>
+        {timelineBusy ? '更新中' : '刷新'}
       </button>
     </div>
   );
@@ -411,7 +417,13 @@ function SettingsRefreshControls({ updatedText }: { updatedText: string }) {
           refreshServices();
         }}
       >
-        {settingsBusy ? '↻ 更新中' : '↻ 刷新'}
+        <span
+          className={settingsBusy ? 'refresh-icon is-spinning' : 'refresh-icon'}
+          aria-hidden="true"
+        >
+          ↻
+        </span>
+        {settingsBusy ? '更新中' : '刷新'}
       </button>
     </div>
   );

@@ -224,6 +224,7 @@ h1,h2,h3,p {
   border-radius:50%;
   background:var(--gold);
   margin-right:4px;
+  animation:admin-pulse 2.4s ease-in-out infinite;
 }
 .account {
   display:flex;
@@ -344,6 +345,14 @@ h1,h2,h3,p {
 .refresh-group .button {
   font-size:11px;
   min-width:76px;
+}
+.refresh-icon {
+  display:inline-block;
+  margin-right:4px;
+  line-height:1;
+}
+.refresh-icon.is-spinning {
+  animation:admin-spin 0.85s linear infinite;
 }
 .filters {
   display:flex;
@@ -621,6 +630,9 @@ tbody tr:hover {
 .pill.in_flight,.pill.processing,.pill.running {
   color:var(--accent-text);
   background:var(--gold-soft);
+}
+.pill.in_flight:before,.pill.processing:before,.pill.running:before {
+  animation:admin-pulse 1.5s ease-in-out infinite;
 }
 .pill.failed,.pill.http_error,.pill.transport_error,.pill.invalid_response {
   color:var(--error);
@@ -1450,11 +1462,11 @@ dialog::backdrop {
 .timeline-node.assistant:before { background:var(--accent-text); }
 .timeline-node.summary:before { background:var(--forest-border); }
 .timeline-node.call:before { background:var(--error-chart); }
-.timeline-node.call.in_flight:before { background:var(--gold); }
+.timeline-node.call.in_flight:before { background:var(--gold); animation:admin-ring-pulse 1.8s ease-out infinite; }
 .timeline-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin-bottom:8px; }
 .timeline-title { font-size:13px; font-weight:650; color:var(--text); }
 .timeline-time,.timeline-meta { font-size:11px; color:var(--text-muted); }
-.timeline-meta.pending { color:var(--warning); }
+.timeline-meta.pending { color:var(--warning); animation:admin-breathe 1.8s ease-in-out infinite; }
 .timeline-head .text-button { margin-left:auto; padding:2px; }
 .timeline-bubble { max-width:760px; padding:10px 13px; border-radius:9px; background:var(--gold-soft); color:var(--text); font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
 .timeline-node.runtime .timeline-bubble { background:var(--surface-muted); color:var(--text-secondary); font-size:12px; }
@@ -1507,5 +1519,54 @@ dialog::backdrop {
   }
   .avatar {
     background: var(--forest-hover);
+  }
+}
+
+/* 运行中与刷新中的轻量状态反馈动画，遵循系统减弱动态效果偏好。 */
+@keyframes admin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes admin-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+@keyframes admin-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes admin-ring-pulse {
+  0% {
+    box-shadow: 0 0 0 3px var(--surface), 0 0 0 3px var(--gold);
+  }
+  70% {
+    box-shadow: 0 0 0 3px var(--surface), 0 0 0 9px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 3px var(--surface), 0 0 0 9px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .refresh-icon.is-spinning,
+  .pill.in_flight:before,
+  .pill.processing:before,
+  .pill.running:before,
+  .timeline-node.call.in_flight:before,
+  .timeline-meta.pending {
+    animation: none;
   }
 }

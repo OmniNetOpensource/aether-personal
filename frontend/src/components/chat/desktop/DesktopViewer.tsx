@@ -255,6 +255,7 @@ export function DesktopViewer({ token, onClose }: { token: string; onClose: () =
         <div ref={screen} className="desktop-screen" aria-label="Agent 的只读桌面画面" />
         {state.kind !== 'live' && (
           <div className="desktop-viewer-status" role="status">
+            {state.kind === 'connecting' && <span className="desktop-spinner" aria-hidden="true" />}
             <p>
               {state.kind === 'waiting'
                 ? desktopStateLabels[state.state]

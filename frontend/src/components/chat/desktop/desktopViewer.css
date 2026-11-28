@@ -84,6 +84,24 @@
   margin: 0;
   line-height: 1.7;
 }
+.desktop-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2.5px solid rgb(246 207 131 / 25%);
+  border-top-color: var(--gold);
+  animation: desktop-spin 0.8s linear infinite;
+}
+@keyframes desktop-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-spinner {
+    animation: none;
+  }
+}
 .desktop-viewer-footer {
   padding: 10px 20px;
   color: var(--text-muted);
